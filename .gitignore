@@ -1,3 +1,6 @@
 .venv
 .claude
 case*
+testCase*
+__pycache__/
+*.pyc

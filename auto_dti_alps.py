@@ -507,9 +507,16 @@ class DTIALPSDetector:
 
         return self.selected_rois
 
-    def create_roi_masks(self) -> Dict[str, np.ndarray]:
+    def create_roi_masks(self, filter_by_criteria: bool = True) -> Dict[str, np.ndarray]:
         """
         Create 3D binary spherical masks for each ROI.
+
+        Parameters
+        ----------
+        filter_by_criteria : bool
+            If True, exclude voxels that don't meet fiber classification criteria
+            (FA > fa_thresh AND appropriate orientation > orient_thresh).
+            Default is True.
 
         Returns
         -------
@@ -519,17 +526,49 @@ class DTIALPSDetector:
         if not self.selected_rois:
             raise ValueError("No ROIs selected. Call select_optimal_rois() first.")
 
+        v1_abs = np.abs(self.v1)
         masks = {}
 
         for roi_name, center in self.selected_rois.items():
             mask = np.zeros(self.fa.shape, dtype=np.uint8)
 
+            # Determine fiber type from ROI name
+            is_projection = 'proj' in roi_name
+            is_association = 'assoc' in roi_name
+
             # Get spherical ROI voxels
             voxels = self._get_spherical_roi_voxels(center)
+            included_count = 0
+            excluded_count = 0
+
             for x, y, z in voxels:
+                if filter_by_criteria:
+                    # Check FA threshold
+                    if self.fa[x, y, z] < self.fa_thresh:
+                        excluded_count += 1
+                        continue
+
+                    # Check orientation threshold based on fiber type
+                    if is_projection:
+                        # Projection fibers: Z-dominant (superior-inferior)
+                        if v1_abs[x, y, z, 2] < self.orient_thresh:
+                            excluded_count += 1
+                            continue
+                    elif is_association:
+                        # Association fibers: Y-dominant (anterior-posterior)
+                        if v1_abs[x, y, z, 1] < self.orient_thresh:
+                            excluded_count += 1
+                            continue
+
                 mask[x, y, z] = 1
+                included_count += 1
 
             masks[roi_name] = mask
+
+            if filter_by_criteria:
+                total = included_count + excluded_count
+                pct = (included_count / total * 100) if total > 0 else 0
+                print(f"  {roi_name}: {included_count}/{total} voxels passed criteria ({pct:.1f}%)")
 
         return masks
 
