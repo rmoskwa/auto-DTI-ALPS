@@ -32,7 +32,7 @@ DEFAULT_RPE_SCHEME = "none"
 DEFAULT_FA_THRESH = 0.25
 DEFAULT_ORIENT_THRESH = 0.7
 DEFAULT_MIN_ZONE_WIDTH = 5
-DEFAULT_ROI_RADIUS_MM = 4.0
+DEFAULT_ROI_RADIUS_MM = 3.0  # Fixed: was 4.0, should match detector default
 DEFAULT_Z_TOLERANCE = 2
 
 # Parameter ranges for validation

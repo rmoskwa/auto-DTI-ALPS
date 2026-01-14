@@ -9,8 +9,8 @@ import threading
 from pathlib import Path
 
 from . import config
-from .processing.pipeline import PipelineState, PipelineRunner, PipelineWorker
-from .processing import validators
+from ..processing.pipeline import PipelineState, PipelineRunner, PipelineWorker
+from ..processing import validators
 
 
 class DTIALPSApplication(tk.Tk):

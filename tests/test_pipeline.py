@@ -3,10 +3,11 @@
 Test script to run DTI-ALPS pipeline components individually.
 
 Usage:
-    python test_pipeline.py --step preproc   # Test preprocessing only
-    python test_pipeline.py --step dti       # Test DTI fitting only
-    python test_pipeline.py --step roi       # Test ROI detection only
-    python test_pipeline.py --step all       # Run full pipeline
+    python -m pytest tests/test_pipeline.py
+    python tests/test_pipeline.py --step preproc   # Test preprocessing only
+    python tests/test_pipeline.py --step dti       # Test DTI fitting only
+    python tests/test_pipeline.py --step roi       # Test ROI detection only
+    python tests/test_pipeline.py --step all       # Run full pipeline
 """
 
 import argparse
@@ -138,13 +139,13 @@ def test_roi_detection():
     print(f"{'='*60}")
 
     try:
-        from auto_dti_alps import DTIALPSDetector
+        from dti_alps import DTIALPSDetector
 
         detector = DTIALPSDetector(
             fa_thresh=0.25,
             orient_thresh=0.7,
             min_zone_width=5,
-            roi_radius_mm=4.0,
+            roi_radius_mm=3.0,
             z_tolerance=2
         )
 

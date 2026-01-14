@@ -10,7 +10,7 @@ import numpy as np
 if TYPE_CHECKING:
     from .pipeline import PipelineState
 
-from .. import config
+from ..gui import config
 
 
 def validate_file_exists(path: str, file_type: str) -> Tuple[bool, str]:

@@ -1,0 +1,56 @@
+[project]
+name = "dti-alps"
+version = "0.1.0"
+description = "Automatic DTI-ALPS ROI detection and analysis"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "DTI-ALPS Team"}
+]
+keywords = ["dti", "alps", "neuroimaging", "mri", "diffusion"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+dependencies = [
+    "numpy",
+    "nibabel",
+    "scipy",
+]
+
+[project.optional-dependencies]
+gui = [
+    "matplotlib",
+]
+dev = [
+    "pytest",
+    "pytest-cov",
+]
+
+[project.scripts]
+dti-alps = "dti_alps.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/autoDTI-ALPS"
+Documentation = "https://github.com/yourusername/autoDTI-ALPS#readme"
+Repository = "https://github.com/yourusername/autoDTI-ALPS"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["dti_alps*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]

@@ -11,7 +11,7 @@ from typing import Optional, Dict, List, Callable, Any
 from pathlib import Path
 
 from . import commands
-from .. import config
+from ..gui import config
 
 
 @dataclass
@@ -266,12 +266,8 @@ class PipelineRunner:
         self._log("Starting automatic ROI detection...")
 
         try:
-            # Import here to avoid circular imports
-            import sys
-            parent_dir = Path(__file__).parent.parent.parent
-            if str(parent_dir) not in sys.path:
-                sys.path.insert(0, str(parent_dir))
-            from auto_dti_alps import DTIALPSDetector
+            # Clean import from the package
+            from ..detector import DTIALPSDetector
 
             # Create detector with current parameters
             detector = DTIALPSDetector(

@@ -1,5 +1,7 @@
 """
-Entry point for DTI-ALPS GUI application.
+DTI-ALPS Processing GUI
+
+A tkinter-based graphical interface for end-to-end DTI-ALPS analysis.
 """
 
 import sys
@@ -29,7 +31,3 @@ def main():
 
     app = DTIALPSApplication()
     app.mainloop()
-
-
-if __name__ == "__main__":
-    main()
