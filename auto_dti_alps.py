@@ -97,7 +97,7 @@ class DTIALPSDetector:
     min_zone_width : int
         Minimum zone width in voxels for ROI placement (default: 5)
     roi_radius_mm : float
-        Radius of the spherical ROI in millimeters (default: 4.0)
+        Radius of the spherical ROI in millimeters (default: 3.0)
     z_tolerance : int
         Maximum Z-difference allowed between left and right ROIs (default: 2)
         Accounts for head tilt where left/right ROIs may be on slightly different axial slices.
@@ -108,7 +108,7 @@ class DTIALPSDetector:
         fa_thresh: float = 0.25,
         orient_thresh: float = 0.7,
         min_zone_width: int = 5,
-        roi_radius_mm: float = 4.0,
+        roi_radius_mm: float = 3.0,
         z_tolerance: int = 2
     ):
         self.fa_thresh = fa_thresh
@@ -893,7 +893,7 @@ Example usage:
     parser.add_argument('--fa-thresh', type=float, default=0.25, help='FA threshold (default: 0.25)')
     parser.add_argument('--orient-thresh', type=float, default=0.7, help='Orientation threshold (default: 0.7)')
     parser.add_argument('--min-width', type=int, default=5, help='Minimum zone width (default: 5)')
-    parser.add_argument('--roi-radius', type=float, default=4.0, help='Spherical ROI radius in millimeters (default: 4.0)')
+    parser.add_argument('--roi-radius', type=float, default=3.0, help='Spherical ROI radius in millimeters (default: 3.0)')
     parser.add_argument('--z-tolerance', type=int, default=2, help='Z-alignment tolerance in voxels for head tilt (default: 2)')
 
     args = parser.parse_args()
