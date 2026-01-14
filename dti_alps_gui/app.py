@@ -18,7 +18,6 @@ class DTIALPSApplication(tk.Tk):
     Main application window for DTI-ALPS processing.
 
     Features:
-    - Simple/Advanced mode toggle
     - Pipeline stage navigation
     - Progress tracking and logging
     - Background processing
@@ -32,7 +31,6 @@ class DTIALPSApplication(tk.Tk):
         self.minsize(config.WINDOW_MIN_WIDTH, config.WINDOW_MIN_HEIGHT)
 
         # State
-        self.mode = tk.StringVar(value="simple")
         self.current_stage = 0
         self.pipeline_state = PipelineState()
         self.worker = None
@@ -66,23 +64,9 @@ class DTIALPSApplication(tk.Tk):
         help_menu.add_command(label="About", command=self._show_about)
 
     def _create_toolbar(self):
-        """Create toolbar with mode toggle and action buttons."""
+        """Create toolbar with action buttons."""
         toolbar = ttk.Frame(self, padding=5)
         toolbar.pack(fill=tk.X, padx=5, pady=5)
-
-        # Mode toggle
-        mode_frame = ttk.LabelFrame(toolbar, text="Mode", padding=5)
-        mode_frame.pack(side=tk.LEFT, padx=5)
-
-        ttk.Radiobutton(
-            mode_frame, text="Simple", variable=self.mode,
-            value="simple", command=self._on_mode_change
-        ).pack(side=tk.LEFT, padx=5)
-
-        ttk.Radiobutton(
-            mode_frame, text="Advanced", variable=self.mode,
-            value="advanced", command=self._on_mode_change
-        ).pack(side=tk.LEFT, padx=5)
 
         # Spacer
         ttk.Frame(toolbar).pack(side=tk.LEFT, expand=True, fill=tk.X)
@@ -235,8 +219,8 @@ class DTIALPSApplication(tk.Tk):
 
         self._on_rpe_change()  # Set initial state
 
-        # Optional files (advanced only)
-        self.json_frame = ttk.LabelFrame(frame, text="Optional Files (Advanced)", padding=10)
+        # Optional files
+        self.json_frame = ttk.LabelFrame(frame, text="Optional Files", padding=10)
         self.json_frame.pack(fill=tk.X, pady=5)
 
         self._create_file_row(self.json_frame, "JSON Sidecar:", "json",
@@ -425,20 +409,6 @@ class DTIALPSApplication(tk.Tk):
         if path:
             self.output_dir_var.set(path)
 
-    def _on_mode_change(self):
-        """Handle mode toggle."""
-        mode = self.mode.get()
-
-        # Show/hide advanced-only elements
-        if hasattr(self, 'json_frame'):
-            if mode == "advanced":
-                self.json_frame.pack(fill=tk.X, pady=5)
-            else:
-                self.json_frame.pack_forget()
-
-        # Refresh current stage
-        self._show_stage(self.current_stage)
-
     def _on_rpe_change(self):
         """Handle RPE scheme change."""
         scheme = self.rpe_var.get()
@@ -478,18 +448,6 @@ class DTIALPSApplication(tk.Tk):
         stage_name = config.PIPELINE_STAGES[stage_idx][1]
         self.content_frame.config(text=f"Stage {stage_idx + 1}: {stage_name}")
 
-        # Handle mode-specific visibility
-        if stage_id == "preproc" and self.mode.get() == "simple":
-            # Show message that advanced mode is needed
-            for child in frame.winfo_children():
-                child.pack_forget()
-            ttk.Label(
-                frame,
-                text="Preprocessing options are available in Advanced mode.\n\n"
-                     "Default settings will be used in Simple mode.",
-                justify=tk.LEFT
-            ).pack(anchor=tk.W, pady=20)
-
     def _collect_state(self):
         """Collect all UI values into pipeline state."""
         state = self.pipeline_state
@@ -508,16 +466,15 @@ class DTIALPSApplication(tk.Tk):
             state.readout_time = config.DEFAULT_READOUT_TIME
         state.rpe_scheme = self.rpe_var.get()
 
-        # Advanced options
-        if self.mode.get() == "advanced":
-            state.json_sidecar_path = getattr(self, 'json_var', tk.StringVar()).get() or None
-            state.eddy_mask_path = getattr(self, 'eddy_mask_var', tk.StringVar()).get() or None
-            state.eddy_slspec_path = getattr(self, 'eddy_slspec_var', tk.StringVar()).get() or None
-            state.eddy_options = self.eddy_options_var.get()
-            state.topup_options = self.topup_options_var.get()
-            state.generate_qc = self.generate_qc_var.get()
-            state.keep_intermediates = self.keep_intermediate_var.get()
-            state.dti_mask_path = getattr(self, 'dti_mask_var', tk.StringVar()).get() or None
+        # Optional files and preprocessing options
+        state.json_sidecar_path = getattr(self, 'json_var', tk.StringVar()).get() or None
+        state.eddy_mask_path = getattr(self, 'eddy_mask_var', tk.StringVar()).get() or None
+        state.eddy_slspec_path = getattr(self, 'eddy_slspec_var', tk.StringVar()).get() or None
+        state.eddy_options = self.eddy_options_var.get()
+        state.topup_options = self.topup_options_var.get()
+        state.generate_qc = self.generate_qc_var.get()
+        state.keep_intermediates = self.keep_intermediate_var.get()
+        state.dti_mask_path = getattr(self, 'dti_mask_var', tk.StringVar()).get() or None
 
         # ROI detection parameters
         state.fa_thresh = self.fa_thresh_var.get()
