@@ -7,4 +7,6 @@ for DTI-ALPS (Diffusion Tensor Imaging Along the Perivascular Space) analysis.
 
 __version__ = "0.1.0"
 
-from .detector import DTIALPSDetector, FiberZone, ROICandidate
+from .detector import DTIALPSDetector as DTIALPSDetector
+from .detector import FiberZone as FiberZone
+from .detector import ROICandidate as ROICandidate

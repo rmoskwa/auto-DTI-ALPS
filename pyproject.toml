@@ -4,15 +4,12 @@ version = "0.1.0"
 description = "Automatic DTI-ALPS ROI detection and analysis"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
 authors = [
     {name = "DTI-ALPS Team"}
 ]
 keywords = ["dti", "alps", "neuroimaging", "mri", "diffusion"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -33,15 +30,15 @@ gui = [
 dev = [
     "pytest",
     "pytest-cov",
+    "pre-commit",
+    "ruff",
 ]
 
 [project.scripts]
 dti-alps = "dti_alps.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/autoDTI-ALPS"
-Documentation = "https://github.com/yourusername/autoDTI-ALPS#readme"
-Repository = "https://github.com/yourusername/autoDTI-ALPS"
+Repository = "https://github.com/rmoskwa/auto-DTI-ALPS"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
@@ -54,3 +51,31 @@ include = ["dti_alps*"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # do not perform function calls in argument defaults
+    "B905",   # zip without strict= (requires 3.10+)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["dti_alps"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false

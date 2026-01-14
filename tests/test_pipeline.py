@@ -12,41 +12,35 @@ Usage:
 
 import argparse
 import os
-import sys
 import subprocess
 import time
 
 # Test case parameters
 TEST_PARAMS = {
-    'dwi': 'testCase/Original.nii.gz',
-    'bvecs': 'testCase/bvecs.bvec',
-    'bvals': 'testCase/bvals.bval',
-    'reverse_pe': 'testCase/b0_all.nii.gz',
-    'pe_dir': 'PA',
-    'readout_time': '0.089',
-    'output_dir': 'testCase/output',
-    'prefix': 'test'
+    "dwi": "testCase/Original.nii.gz",
+    "bvecs": "testCase/bvecs.bvec",
+    "bvals": "testCase/bvals.bval",
+    "reverse_pe": "testCase/b0_all.nii.gz",
+    "pe_dir": "PA",
+    "readout_time": "0.089",
+    "output_dir": "testCase/output",
+    "prefix": "test",
 }
 
 
 def run_command(cmd, description):
     """Run a command and stream output."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"STEP: {description}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"Command: {' '.join(cmd)}\n")
 
     start_time = time.time()
 
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True
-    )
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
     for line in process.stdout:
-        print(line, end='')
+        print(line, end="")
 
     process.wait()
     elapsed = time.time() - start_time
@@ -61,24 +55,33 @@ def run_command(cmd, description):
 
 def test_preprocessing():
     """Test dwifslpreproc."""
-    os.makedirs(TEST_PARAMS['output_dir'], exist_ok=True)
+    os.makedirs(TEST_PARAMS["output_dir"], exist_ok=True)
 
-    output_dwi = os.path.join(TEST_PARAMS['output_dir'], f"{TEST_PARAMS['prefix']}_dwi_preproc.nii.gz")
-    bvecs_out = os.path.join(TEST_PARAMS['output_dir'], f"{TEST_PARAMS['prefix']}_bvecs_preproc")
-    bvals_out = os.path.join(TEST_PARAMS['output_dir'], f"{TEST_PARAMS['prefix']}_bvals_preproc")
+    output_dwi = os.path.join(
+        TEST_PARAMS["output_dir"], f"{TEST_PARAMS['prefix']}_dwi_preproc.nii.gz"
+    )
+    bvecs_out = os.path.join(TEST_PARAMS["output_dir"], f"{TEST_PARAMS['prefix']}_bvecs_preproc")
+    bvals_out = os.path.join(TEST_PARAMS["output_dir"], f"{TEST_PARAMS['prefix']}_bvals_preproc")
 
     cmd = [
-        'dwifslpreproc',
-        TEST_PARAMS['dwi'],
+        "dwifslpreproc",
+        TEST_PARAMS["dwi"],
         output_dwi,
-        '-fslgrad', TEST_PARAMS['bvecs'], TEST_PARAMS['bvals'],
-        '-export_grad_fsl', bvecs_out, bvals_out,
-        '-pe_dir', TEST_PARAMS['pe_dir'],
-        '-readout_time', TEST_PARAMS['readout_time'],
-        '-rpe_pair',
-        '-se_epi', TEST_PARAMS['reverse_pe'],
-        '-align_seepi',
-        '-info'  # More verbose output
+        "-fslgrad",
+        TEST_PARAMS["bvecs"],
+        TEST_PARAMS["bvals"],
+        "-export_grad_fsl",
+        bvecs_out,
+        bvals_out,
+        "-pe_dir",
+        TEST_PARAMS["pe_dir"],
+        "-readout_time",
+        TEST_PARAMS["readout_time"],
+        "-rpe_pair",
+        "-se_epi",
+        TEST_PARAMS["reverse_pe"],
+        "-align_seepi",
+        "-info",  # More verbose output
     ]
 
     return run_command(cmd, "Preprocessing (dwifslpreproc)")
@@ -86,12 +89,14 @@ def test_preprocessing():
 
 def test_dti_fitting():
     """Test dwi2tensor and tensor2metric."""
-    input_dwi = os.path.join(TEST_PARAMS['output_dir'], f"{TEST_PARAMS['prefix']}_dwi_preproc.nii.gz")
-    bvecs_in = os.path.join(TEST_PARAMS['output_dir'], f"{TEST_PARAMS['prefix']}_bvecs_preproc")
-    bvals_in = os.path.join(TEST_PARAMS['output_dir'], f"{TEST_PARAMS['prefix']}_bvals_preproc")
-    tensor_out = os.path.join(TEST_PARAMS['output_dir'], f"{TEST_PARAMS['prefix']}_tensor.nii.gz")
-    fa_out = os.path.join(TEST_PARAMS['output_dir'], f"{TEST_PARAMS['prefix']}_FA.nii.gz")
-    v1_out = os.path.join(TEST_PARAMS['output_dir'], f"{TEST_PARAMS['prefix']}_V1.nii.gz")
+    input_dwi = os.path.join(
+        TEST_PARAMS["output_dir"], f"{TEST_PARAMS['prefix']}_dwi_preproc.nii.gz"
+    )
+    bvecs_in = os.path.join(TEST_PARAMS["output_dir"], f"{TEST_PARAMS['prefix']}_bvecs_preproc")
+    bvals_in = os.path.join(TEST_PARAMS["output_dir"], f"{TEST_PARAMS['prefix']}_bvals_preproc")
+    tensor_out = os.path.join(TEST_PARAMS["output_dir"], f"{TEST_PARAMS['prefix']}_tensor.nii.gz")
+    fa_out = os.path.join(TEST_PARAMS["output_dir"], f"{TEST_PARAMS['prefix']}_FA.nii.gz")
+    v1_out = os.path.join(TEST_PARAMS["output_dir"], f"{TEST_PARAMS['prefix']}_V1.nii.gz")
 
     if not os.path.exists(input_dwi):
         print(f"ERROR: Preprocessed DWI not found: {input_dwi}")
@@ -99,26 +104,24 @@ def test_dti_fitting():
         return False
 
     # Step 1: dwi2tensor
-    cmd1 = [
-        'dwi2tensor',
-        input_dwi,
-        tensor_out,
-        '-fslgrad', bvecs_in, bvals_in,
-        '-info'
-    ]
+    cmd1 = ["dwi2tensor", input_dwi, tensor_out, "-fslgrad", bvecs_in, bvals_in, "-info"]
 
     if not run_command(cmd1, "Tensor fitting (dwi2tensor)"):
         return False
 
     # Step 2: tensor2metric
     cmd2 = [
-        'tensor2metric',
+        "tensor2metric",
         tensor_out,
-        '-fa', fa_out,
-        '-vector', v1_out,
-        '-num', '1',
-        '-modulate', 'none',
-        '-info'
+        "-fa",
+        fa_out,
+        "-vector",
+        v1_out,
+        "-num",
+        "1",
+        "-modulate",
+        "none",
+        "-info",
     ]
 
     return run_command(cmd2, "Metric extraction (tensor2metric)")
@@ -126,27 +129,23 @@ def test_dti_fitting():
 
 def test_roi_detection():
     """Test ROI detection using DTIALPSDetector."""
-    fa_path = os.path.join(TEST_PARAMS['output_dir'], f"{TEST_PARAMS['prefix']}_FA.nii.gz")
-    v1_path = os.path.join(TEST_PARAMS['output_dir'], f"{TEST_PARAMS['prefix']}_V1.nii.gz")
+    fa_path = os.path.join(TEST_PARAMS["output_dir"], f"{TEST_PARAMS['prefix']}_FA.nii.gz")
+    v1_path = os.path.join(TEST_PARAMS["output_dir"], f"{TEST_PARAMS['prefix']}_V1.nii.gz")
 
     if not os.path.exists(fa_path) or not os.path.exists(v1_path):
-        print(f"ERROR: FA or V1 not found")
+        print("ERROR: FA or V1 not found")
         print("Run --step dti first")
         return False
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("STEP: ROI Detection (DTIALPSDetector)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     try:
         from dti_alps import DTIALPSDetector
 
         detector = DTIALPSDetector(
-            fa_thresh=0.25,
-            orient_thresh=0.7,
-            min_zone_width=5,
-            roi_radius_mm=3.0,
-            z_tolerance=2
+            fa_thresh=0.25, orient_thresh=0.7, min_zone_width=5, roi_radius_mm=3.0, z_tolerance=2
         )
 
         print(f"Loading FA: {fa_path}")
@@ -157,13 +156,13 @@ def test_roi_detection():
         detector.find_candidates()
 
         print("\nSelecting optimal ROIs...")
-        rois = detector.select_optimal_rois()
+        detector.select_optimal_rois()
 
         # Save masks (with fiber criteria filtering)
-        roi_dir = os.path.join(TEST_PARAMS['output_dir'], 'rois')
+        roi_dir = os.path.join(TEST_PARAMS["output_dir"], "rois")
         os.makedirs(roi_dir, exist_ok=True)
         print("\nFiltering ROI voxels by fiber classification criteria...")
-        detector.save_roi_masks(roi_dir, TEST_PARAMS['prefix'])
+        detector.save_roi_masks(roi_dir, TEST_PARAMS["prefix"])
 
         print("\n[SUCCESS] ROI detection completed")
         return True
@@ -171,18 +170,19 @@ def test_roi_detection():
     except Exception as e:
         print(f"\n[FAILED] ROI detection failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
 
 def test_alps_calculation():
     """Test ALPS index calculation from tensor and existing ROI masks."""
-    tensor_path = os.path.join(TEST_PARAMS['output_dir'], f"{TEST_PARAMS['prefix']}_tensor.nii.gz")
-    roi_dir = os.path.join(TEST_PARAMS['output_dir'], 'rois')
+    tensor_path = os.path.join(TEST_PARAMS["output_dir"], f"{TEST_PARAMS['prefix']}_tensor.nii.gz")
+    roi_dir = os.path.join(TEST_PARAMS["output_dir"], "rois")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("STEP: ALPS Index Calculation")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     try:
         import nibabel as nib
@@ -190,14 +190,14 @@ def test_alps_calculation():
 
         # Check for existing ROI masks
         roi_files = {
-            'proj_left': os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_proj_left.nii.gz"),
-            'proj_right': os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_proj_right.nii.gz"),
-            'assoc_left': os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_assoc_left.nii.gz"),
-            'assoc_right': os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_assoc_right.nii.gz"),
+            "proj_left": os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_proj_left.nii.gz"),
+            "proj_right": os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_proj_right.nii.gz"),
+            "assoc_left": os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_assoc_left.nii.gz"),
+            "assoc_right": os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_assoc_right.nii.gz"),
         }
 
         # Verify all ROI files exist
-        for name, path in roi_files.items():
+        for _name, path in roi_files.items():
             if not os.path.exists(path):
                 print(f"ERROR: ROI mask not found: {path}")
                 print("Run --step roi first to generate ROI masks")
@@ -227,9 +227,9 @@ def test_alps_calculation():
         print("\nCalculating ALPS index...")
 
         results = {}
-        for side in ['left', 'right']:
-            proj_mask = masks[f'proj_{side}']
-            assoc_mask = masks[f'assoc_{side}']
+        for side in ["left", "right"]:
+            proj_mask = masks[f"proj_{side}"]
+            assoc_mask = masks[f"assoc_{side}"]
 
             proj_idx = np.where(proj_mask > 0)
             assoc_idx = np.where(assoc_mask > 0)
@@ -253,7 +253,7 @@ def test_alps_calculation():
             print(f"  ALPS Index: {alps_index:.4f}")
 
         # Bilateral average
-        bilateral = (results['left'] + results['right']) / 2
+        bilateral = (results["left"] + results["right"]) / 2
         print(f"\nBILATERAL ALPS Index: {bilateral:.4f}")
 
         print("\n[SUCCESS] ALPS calculation completed")
@@ -262,29 +262,34 @@ def test_alps_calculation():
     except Exception as e:
         print(f"\n[FAILED] ALPS calculation failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Test DTI-ALPS pipeline components')
-    parser.add_argument('--step', choices=['preproc', 'dti', 'roi', 'alps', 'all'],
-                       default='all', help='Which step to test')
+    parser = argparse.ArgumentParser(description="Test DTI-ALPS pipeline components")
+    parser.add_argument(
+        "--step",
+        choices=["preproc", "dti", "roi", "alps", "all"],
+        default="all",
+        help="Which step to test",
+    )
     args = parser.parse_args()
 
     print("DTI-ALPS Pipeline Test")
     print(f"Test data: {TEST_PARAMS['dwi']}")
     print(f"Output: {TEST_PARAMS['output_dir']}")
 
-    if args.step == 'preproc':
+    if args.step == "preproc":
         test_preprocessing()
-    elif args.step == 'dti':
+    elif args.step == "dti":
         test_dti_fitting()
-    elif args.step == 'roi':
+    elif args.step == "roi":
         test_roi_detection()
-    elif args.step == 'alps':
+    elif args.step == "alps":
         test_alps_calculation()
-    elif args.step == 'all':
+    elif args.step == "all":
         if not test_preprocessing():
             return
         if not test_dti_fitting():
@@ -294,5 +299,5 @@ def main():
         test_alps_calculation()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

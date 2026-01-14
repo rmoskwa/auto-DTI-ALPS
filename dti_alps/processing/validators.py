@@ -3,7 +3,7 @@ Input validation for DTI-ALPS pipeline.
 """
 
 import os
-from typing import Tuple, List, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 from ..gui import config
 
 
-def validate_file_exists(path: str, file_type: str) -> Tuple[bool, str]:
+def validate_file_exists(path: str, file_type: str) -> tuple[bool, str]:
     """
     Check if a file exists.
 
@@ -36,7 +36,7 @@ def validate_file_exists(path: str, file_type: str) -> Tuple[bool, str]:
     return True, f"{file_type} found"
 
 
-def validate_nifti(path: str) -> Tuple[bool, str]:
+def validate_nifti(path: str) -> tuple[bool, str]:
     """
     Validate a NIfTI file and return shape information.
 
@@ -52,14 +52,21 @@ def validate_nifti(path: str) -> Tuple[bool, str]:
     """
     try:
         import nibabel as nib
+
         img = nib.load(path)
         shape = img.shape
         zooms = img.header.get_zooms()
 
         if len(shape) == 3:
-            return True, f"3D: {shape[0]}x{shape[1]}x{shape[2]}, voxel: {zooms[0]:.2f}x{zooms[1]:.2f}x{zooms[2]:.2f}mm"
+            return (
+                True,
+                f"3D: {shape[0]}x{shape[1]}x{shape[2]}, voxel: {zooms[0]:.2f}x{zooms[1]:.2f}x{zooms[2]:.2f}mm",
+            )
         elif len(shape) == 4:
-            return True, f"4D: {shape[0]}x{shape[1]}x{shape[2]}x{shape[3]} volumes, voxel: {zooms[0]:.2f}x{zooms[1]:.2f}x{zooms[2]:.2f}mm"
+            return (
+                True,
+                f"4D: {shape[0]}x{shape[1]}x{shape[2]}x{shape[3]} volumes, voxel: {zooms[0]:.2f}x{zooms[1]:.2f}x{zooms[2]:.2f}mm",
+            )
         else:
             return True, f"Shape: {shape}"
 
@@ -67,8 +74,7 @@ def validate_nifti(path: str) -> Tuple[bool, str]:
         return False, f"Invalid NIfTI file: {str(e)}"
 
 
-def validate_gradients(bvecs_path: str, bvals_path: str,
-                       dwi_path: str = None) -> Tuple[bool, str]:
+def validate_gradients(bvecs_path: str, bvals_path: str, dwi_path: str = None) -> tuple[bool, str]:
     """
     Validate gradient table files.
 
@@ -111,6 +117,7 @@ def validate_gradients(bvecs_path: str, bvals_path: str,
         # Check against DWI volume count if provided
         if dwi_path:
             import nibabel as nib
+
             dwi = nib.load(dwi_path)
             if len(dwi.shape) > 3:
                 n_volumes = dwi.shape[3]
@@ -127,7 +134,7 @@ def validate_gradients(bvecs_path: str, bvals_path: str,
         return False, f"Error reading gradient files: {str(e)}"
 
 
-def validate_readout_time(value: str) -> Tuple[bool, str]:
+def validate_readout_time(value: str) -> tuple[bool, str]:
     """
     Validate readout time value.
 
@@ -158,7 +165,7 @@ def validate_readout_time(value: str) -> Tuple[bool, str]:
         return False, "Readout time must be a number"
 
 
-def validate_directory(path: str, create: bool = False) -> Tuple[bool, str]:
+def validate_directory(path: str, create: bool = False) -> tuple[bool, str]:
     """
     Validate output directory.
 
@@ -197,7 +204,7 @@ def validate_directory(path: str, create: bool = False) -> Tuple[bool, str]:
     return True, ""
 
 
-def validate_pipeline_state(state: 'PipelineState') -> List[str]:
+def validate_pipeline_state(state: "PipelineState") -> list[str]:
     """
     Validate all pipeline state parameters before execution.
 
@@ -232,12 +239,12 @@ def validate_pipeline_state(state: 'PipelineState') -> List[str]:
 
     # Validate gradient consistency
     if state.bvecs_path and state.bvals_path and state.dwi_path:
-        if (os.path.isfile(state.bvecs_path) and
-            os.path.isfile(state.bvals_path) and
-            os.path.isfile(state.dwi_path)):
-            valid, msg = validate_gradients(
-                state.bvecs_path, state.bvals_path, state.dwi_path
-            )
+        if (
+            os.path.isfile(state.bvecs_path)
+            and os.path.isfile(state.bvals_path)
+            and os.path.isfile(state.dwi_path)
+        ):
+            valid, msg = validate_gradients(state.bvecs_path, state.bvals_path, state.dwi_path)
             if not valid:
                 errors.append(msg)
 
@@ -271,6 +278,7 @@ def validate_pipeline_state(state: 'PipelineState') -> List[str]:
 
     # Check MRtrix3 availability
     from . import commands
+
     mrtrix_ok, missing = commands.check_mrtrix3_available()
     if not mrtrix_ok:
         errors.append(f"MRtrix3 commands not found: {', '.join(missing)}")

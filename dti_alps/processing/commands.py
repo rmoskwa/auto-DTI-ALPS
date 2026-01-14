@@ -2,13 +2,13 @@
 MRtrix3 command builders for DTI-ALPS pipeline.
 """
 
-from typing import List, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .pipeline import PipelineState
 
 
-def build_dwifslpreproc_cmd(state: 'PipelineState') -> List[str]:
+def build_dwifslpreproc_cmd(state: "PipelineState") -> list[str]:
     """
     Build dwifslpreproc command for DWI preprocessing.
 
@@ -83,7 +83,7 @@ def build_dwifslpreproc_cmd(state: 'PipelineState') -> List[str]:
     return cmd
 
 
-def build_dwi2tensor_cmd(state: 'PipelineState') -> List[str]:
+def build_dwi2tensor_cmd(state: "PipelineState") -> list[str]:
     """
     Build dwi2tensor command for DTI fitting.
 
@@ -117,7 +117,7 @@ def build_dwi2tensor_cmd(state: 'PipelineState') -> List[str]:
     return cmd
 
 
-def build_tensor2metric_cmd(state: 'PipelineState') -> List[str]:
+def build_tensor2metric_cmd(state: "PipelineState") -> list[str]:
     """
     Build tensor2metric command to extract FA and V1.
 
@@ -187,7 +187,7 @@ def check_fsl_available() -> tuple:
     for cmd in required_commands:
         # FSL commands might have different names
         found = False
-        for variant in [cmd, f"fsl{cmd}", f"{cmd}_cuda", f"eddy_openmp"]:
+        for variant in [cmd, f"fsl{cmd}", f"{cmd}_cuda", "eddy_openmp"]:
             if shutil.which(variant) is not None:
                 found = True
                 break

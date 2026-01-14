@@ -3,15 +3,15 @@ Pipeline state management and execution for DTI-ALPS processing.
 """
 
 import os
+import queue
 import subprocess
 import threading
-import queue
-from dataclasses import dataclass, field
-from typing import Optional, Dict, List, Callable, Any
-from pathlib import Path
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
-from . import commands
 from ..gui import config
+from . import commands
 
 
 @dataclass
@@ -19,26 +19,27 @@ class PipelineState:
     """
     Holds all input parameters and intermediate results for the DTI-ALPS pipeline.
     """
+
     # Stage 1: Input files
-    dwi_path: Optional[str] = None
-    bvecs_path: Optional[str] = None
-    bvals_path: Optional[str] = None
-    reverse_pe_path: Optional[str] = None
-    json_sidecar_path: Optional[str] = None
+    dwi_path: str | None = None
+    bvecs_path: str | None = None
+    bvals_path: str | None = None
+    reverse_pe_path: str | None = None
+    json_sidecar_path: str | None = None
 
     # Stage 2: Preprocessing parameters
     pe_direction: str = config.DEFAULT_PE_DIRECTION
     readout_time: float = config.DEFAULT_READOUT_TIME
     rpe_scheme: str = config.DEFAULT_RPE_SCHEME
-    eddy_mask_path: Optional[str] = None
-    eddy_slspec_path: Optional[str] = None
+    eddy_mask_path: str | None = None
+    eddy_slspec_path: str | None = None
     eddy_options: str = ""
     topup_options: str = ""
     generate_qc: bool = False
     keep_intermediates: bool = False
 
     # Stage 3: DTI fitting parameters
-    dti_mask_path: Optional[str] = None
+    dti_mask_path: str | None = None
 
     # Stage 4: ROI detection parameters
     fa_thresh: float = config.DEFAULT_FA_THRESH
@@ -52,14 +53,14 @@ class PipelineState:
     output_prefix: str = "subject"
 
     # Intermediate outputs (set during processing)
-    preprocessed_dwi_path: Optional[str] = None
-    tensor_path: Optional[str] = None
-    fa_path: Optional[str] = None
-    v1_path: Optional[str] = None
+    preprocessed_dwi_path: str | None = None
+    tensor_path: str | None = None
+    fa_path: str | None = None
+    v1_path: str | None = None
 
     # Results
-    roi_centers: Optional[Dict[str, tuple]] = None
-    alps_results: Optional[Dict[str, float]] = None
+    roi_centers: dict[str, tuple] | None = None
+    alps_results: dict[str, float] | None = None
 
     def get_output_path(self, suffix: str) -> str:
         """Generate output file path with prefix and suffix."""
@@ -85,8 +86,9 @@ class PipelineRunner:
     5. ALPS index calculation
     """
 
-    def __init__(self, state: PipelineState,
-                 progress_callback: Optional[Callable[[str, Any], None]] = None):
+    def __init__(
+        self, state: PipelineState, progress_callback: Callable[[str, Any], None] | None = None
+    ):
         """
         Initialize the pipeline runner.
 
@@ -110,7 +112,7 @@ class PipelineRunner:
         """Update stage status via callback."""
         self.progress_callback("stage", (stage, status))
 
-    def _run_command(self, cmd: List[str], stage_name: str) -> bool:
+    def _run_command(self, cmd: list[str], stage_name: str) -> bool:
         """
         Execute a command and stream output with non-blocking I/O.
 
@@ -137,7 +139,7 @@ class PipelineRunner:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=0  # Unbuffered
+                bufsize=0,  # Unbuffered
             )
 
             last_heartbeat = time.time()
@@ -174,13 +176,15 @@ class PipelineRunner:
                     current_time = time.time()
                     if current_time - last_heartbeat > heartbeat_interval:
                         elapsed = int(current_time - last_heartbeat)
-                        self._log(f"  [{stage_name}] Still processing... ({elapsed}s since last output)")
+                        self._log(
+                            f"  [{stage_name}] Still processing... ({elapsed}s since last output)"
+                        )
                         last_heartbeat = current_time
 
             # Read any remaining output
             remaining = process.stdout.read()
             if remaining:
-                for line in remaining.strip().split('\n'):
+                for line in remaining.strip().split("\n"):
                     if line:
                         self._log(line)
 
@@ -275,7 +279,7 @@ class PipelineRunner:
                 orient_thresh=self.state.orient_thresh,
                 min_zone_width=self.state.min_zone_width,
                 roi_radius_mm=self.state.roi_radius_mm,
-                z_tolerance=self.state.z_tolerance
+                z_tolerance=self.state.z_tolerance,
             )
 
             # Load FA and V1 data
@@ -341,27 +345,27 @@ class PipelineRunner:
             # Calculate mean diffusivities in each ROI
             results = {}
 
-            for side in ['left', 'right']:
-                proj_mask = masks[f'proj_{side}']
-                assoc_mask = masks[f'assoc_{side}']
+            for side in ["left", "right"]:
+                proj_mask = masks[f"proj_{side}"]
+                assoc_mask = masks[f"assoc_{side}"]
 
                 proj_idx = np.where(proj_mask > 0)
                 assoc_idx = np.where(assoc_mask > 0)
 
                 # Projection ROI: Dxx (perivascular) and Dyy (perpendicular)
-                results[f'Dxx_proj_{side}'] = np.mean(dxx[proj_idx])
-                results[f'Dyy_proj_{side}'] = np.mean(dyy[proj_idx])
+                results[f"Dxx_proj_{side}"] = np.mean(dxx[proj_idx])
+                results[f"Dyy_proj_{side}"] = np.mean(dyy[proj_idx])
 
                 # Association ROI: Dxx (perivascular) and Dzz (perpendicular)
-                results[f'Dxx_assoc_{side}'] = np.mean(dxx[assoc_idx])
-                results[f'Dzz_assoc_{side}'] = np.mean(dzz[assoc_idx])
+                results[f"Dxx_assoc_{side}"] = np.mean(dxx[assoc_idx])
+                results[f"Dzz_assoc_{side}"] = np.mean(dzz[assoc_idx])
 
             # Calculate ALPS index for each hemisphere
-            for side in ['left', 'right']:
-                dxx_proj = results[f'Dxx_proj_{side}']
-                dxx_assoc = results[f'Dxx_assoc_{side}']
-                dyy_proj = results[f'Dyy_proj_{side}']
-                dzz_assoc = results[f'Dzz_assoc_{side}']
+            for side in ["left", "right"]:
+                dxx_proj = results[f"Dxx_proj_{side}"]
+                dxx_assoc = results[f"Dxx_assoc_{side}"]
+                dyy_proj = results[f"Dyy_proj_{side}"]
+                dzz_assoc = results[f"Dzz_assoc_{side}"]
 
                 numerator = (dxx_proj + dxx_assoc) / 2
                 denominator = (dyy_proj + dzz_assoc) / 2
@@ -369,16 +373,16 @@ class PipelineRunner:
                 if denominator > 0:
                     alps_index = numerator / denominator
                 else:
-                    alps_index = float('nan')
+                    alps_index = float("nan")
 
-                results[f'ALPS_{side}'] = alps_index
+                results[f"ALPS_{side}"] = alps_index
                 self._log(f"  {side.capitalize()} ALPS index: {alps_index:.4f}")
 
             # Calculate bilateral average
-            alps_left = results['ALPS_left']
-            alps_right = results['ALPS_right']
+            alps_left = results["ALPS_left"]
+            alps_right = results["ALPS_right"]
             if not (np.isnan(alps_left) or np.isnan(alps_right)):
-                results['ALPS_bilateral'] = (alps_left + alps_right) / 2
+                results["ALPS_bilateral"] = (alps_left + alps_right) / 2
                 self._log(f"  Bilateral ALPS index: {results['ALPS_bilateral']:.4f}")
 
             self.state.alps_results = results
@@ -445,9 +449,9 @@ class PipelineWorker(threading.Thread):
     Communicates with GUI via queue for thread-safe updates.
     """
 
-    def __init__(self, runner: PipelineRunner,
-                 result_queue: queue.Queue,
-                 cancel_event: threading.Event):
+    def __init__(
+        self, runner: PipelineRunner, result_queue: queue.Queue, cancel_event: threading.Event
+    ):
         """
         Initialize the worker thread.
 

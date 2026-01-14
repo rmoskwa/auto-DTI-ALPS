@@ -20,7 +20,7 @@ RPE_SCHEMES = {
     "none": "No reverse PE (eddy correction only)",
     "pair": "Reverse PE b=0 volumes provided",
     "all": "All DWIs have opposing PE",
-    "header": "PE info from image headers"
+    "header": "PE info from image headers",
 }
 
 # Default preprocessing parameters
@@ -44,27 +44,13 @@ Z_TOLERANCE_RANGE = (0, 5)
 READOUT_TIME_RANGE = (0.001, 1.0)
 
 # File type filters for file dialogs
-NIFTI_FILETYPES = [
-    ("NIfTI files", "*.nii *.nii.gz"),
-    ("All files", "*.*")
-]
+NIFTI_FILETYPES = [("NIfTI files", "*.nii *.nii.gz"), ("All files", "*.*")]
 
-BVEC_FILETYPES = [
-    ("bvec files", "*.bvec *.bvecs"),
-    ("Text files", "*.txt"),
-    ("All files", "*.*")
-]
+BVEC_FILETYPES = [("bvec files", "*.bvec *.bvecs"), ("Text files", "*.txt"), ("All files", "*.*")]
 
-BVAL_FILETYPES = [
-    ("bval files", "*.bval *.bvals"),
-    ("Text files", "*.txt"),
-    ("All files", "*.*")
-]
+BVAL_FILETYPES = [("bval files", "*.bval *.bvals"), ("Text files", "*.txt"), ("All files", "*.*")]
 
-JSON_FILETYPES = [
-    ("JSON files", "*.json"),
-    ("All files", "*.*")
-]
+JSON_FILETYPES = [("JSON files", "*.json"), ("All files", "*.*")]
 
 # Pipeline stages
 PIPELINE_STAGES = [
@@ -72,7 +58,7 @@ PIPELINE_STAGES = [
     ("preproc", "Preprocessing"),
     ("dti", "DTI Fitting"),
     ("roi", "ROI Detection"),
-    ("results", "Results")
+    ("results", "Results"),
 ]
 
 # MRtrix3 tensor volume indices
@@ -83,16 +69,16 @@ TENSOR_DZZ_INDEX = 2  # D33
 
 # Color scheme
 COLORS = {
-    "proj_left": "#0066CC",    # Blue
-    "proj_right": "#00CCCC",   # Cyan
-    "assoc_left": "#CC0000",   # Red
+    "proj_left": "#0066CC",  # Blue
+    "proj_right": "#00CCCC",  # Cyan
+    "assoc_left": "#CC0000",  # Red
     "assoc_right": "#FF6600",  # Orange
     "background": "#F0F0F0",
     "sidebar": "#E0E0E0",
     "progress_bg": "#FFFFFF",
     "success": "#28A745",
     "error": "#DC3545",
-    "warning": "#FFC107"
+    "warning": "#FFC107",
 }
 
 # Tooltips for UI elements
@@ -109,5 +95,5 @@ TOOLTIPS = {
     "orient_thresh": "Minimum eigenvector component for fiber orientation classification",
     "min_zone_width": "Minimum contiguous fiber zone width (voxels) for ROI placement",
     "roi_radius": "Spherical ROI radius in millimeters",
-    "z_tolerance": "Maximum Z-slice difference allowed between bilateral ROIs"
+    "z_tolerance": "Maximum Z-slice difference allowed between bilateral ROIs",
 }

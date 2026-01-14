@@ -12,16 +12,17 @@ The algorithm mimics human visual inspection by:
 4. Enforcing bilateral Z-alignment as required by DTI-ALPS theory
 """
 
-import numpy as np
-import nibabel as nib
-from dataclasses import dataclass
-from typing import Optional, Tuple, List, Dict
 import os
+from dataclasses import dataclass
+
+import nibabel as nib
+import numpy as np
 
 
 @dataclass
 class FiberZone:
     """Represents a contiguous zone of fibers along an X-line."""
+
     start_x: int
     end_x: int
     fiber_type: str  # 'proj' or 'assoc'
@@ -40,6 +41,7 @@ class FiberZone:
 @dataclass
 class ROICandidate:
     """Represents a candidate location for DTI-ALPS ROI placement."""
+
     proj_zone: FiberZone
     assoc_zone: FiberZone
     hemisphere: str  # 'left' or 'right'
@@ -71,11 +73,11 @@ class ROICandidate:
         return self.width_score * 0.3 + self.purity_score * 100 * 0.7
 
     @property
-    def proj_center(self) -> Tuple[int, int, int]:
+    def proj_center(self) -> tuple[int, int, int]:
         return (self.proj_zone.center_x, self.y, self.z)
 
     @property
-    def assoc_center(self) -> Tuple[int, int, int]:
+    def assoc_center(self) -> tuple[int, int, int]:
         return (self.assoc_zone.center_x, self.y, self.z)
 
 
@@ -104,7 +106,7 @@ class DTIALPSDetector:
         orient_thresh: float = 0.7,
         min_zone_width: int = 5,
         roi_radius_mm: float = 3.0,
-        z_tolerance: int = 2
+        z_tolerance: int = 2,
     ):
         self.fa_thresh = fa_thresh
         self.orient_thresh = orient_thresh
@@ -113,14 +115,14 @@ class DTIALPSDetector:
         self.z_tolerance = z_tolerance
 
         # Data storage
-        self.fa: Optional[np.ndarray] = None
-        self.v1: Optional[np.ndarray] = None
-        self.affine: Optional[np.ndarray] = None
+        self.fa: np.ndarray | None = None
+        self.v1: np.ndarray | None = None
+        self.affine: np.ndarray | None = None
         self.header = None
 
         # Results
-        self.candidates: List[ROICandidate] = []
-        self.selected_rois: Dict[str, Tuple[int, int, int]] = {}
+        self.candidates: list[ROICandidate] = []
+        self.selected_rois: dict[str, tuple[int, int, int]] = {}
 
     def load_data(self, fa_path: str, v1_path: str) -> None:
         """Load FA and V1 NIfTI files."""
@@ -135,7 +137,7 @@ class DTIALPSDetector:
         print(f"Loaded FA: shape={self.fa.shape}, voxel size={self.header.get_zooms()[:3]}")
         print(f"Loaded V1: shape={self.v1.shape}")
 
-    def classify_fibers(self) -> Tuple[np.ndarray, np.ndarray]:
+    def classify_fibers(self) -> tuple[np.ndarray, np.ndarray]:
         """
         Classify voxels as projection or association fibers.
 
@@ -157,10 +159,8 @@ class DTIALPSDetector:
         return proj_mask, assoc_mask
 
     def _get_spherical_roi_voxels(
-        self,
-        center: Tuple[int, int, int],
-        radius_mm: Optional[float] = None
-    ) -> List[Tuple[int, int, int]]:
+        self, center: tuple[int, int, int], radius_mm: float | None = None
+    ) -> list[tuple[int, int, int]]:
         """
         Get list of voxel coordinates within a spherical ROI in physical space.
 
@@ -201,7 +201,7 @@ class DTIALPSDetector:
             for dx in range(-range_x, range_x + 1):
                 for dy in range(-range_y, range_y + 1):
                     # Calculate distance in mm (accounting for voxel dimensions)
-                    dist_mm_sq = (dx * vox_x)**2 + (dy * vox_y)**2 + (dz * vox_z)**2
+                    dist_mm_sq = (dx * vox_x) ** 2 + (dy * vox_y) ** 2 + (dz * vox_z) ** 2
 
                     # Check if within spherical radius in mm
                     if dist_mm_sq > radius_mm**2:
@@ -214,10 +214,7 @@ class DTIALPSDetector:
         return voxels
 
     def compute_3d_fiber_purity(
-        self,
-        center: Tuple[int, int, int],
-        expected_type: str,
-        radius_mm: Optional[float] = None
+        self, center: tuple[int, int, int], expected_type: str, radius_mm: float | None = None
     ) -> float:
         """
         Compute the fiber purity score for a 3D spherical ROI.
@@ -253,9 +250,9 @@ class DTIALPSDetector:
             vy = v1_abs[x, y, z, 1]
             vz = v1_abs[x, y, z, 2]
 
-            if expected_type == 'proj' and vz > self.orient_thresh:
+            if expected_type == "proj" and vz > self.orient_thresh:
                 matching_count += 1
-            elif expected_type == 'assoc' and vy > self.orient_thresh:
+            elif expected_type == "assoc" and vy > self.orient_thresh:
                 matching_count += 1
 
         if valid_count == 0:
@@ -263,7 +260,7 @@ class DTIALPSDetector:
 
         return matching_count / valid_count
 
-    def _find_zones_along_x(self, y: int, z: int) -> List[FiberZone]:
+    def _find_zones_along_x(self, y: int, z: int) -> list[FiberZone]:
         """
         Find contiguous fiber zones along an X-line at given Y, Z.
 
@@ -282,9 +279,9 @@ class DTIALPSDetector:
                 vz = v1_abs[x, y, z, 2]
 
                 if vz > self.orient_thresh:
-                    fiber_type = 'proj'
+                    fiber_type = "proj"
                 elif vy > self.orient_thresh:
-                    fiber_type = 'assoc'
+                    fiber_type = "assoc"
                 else:
                     fiber_type = None
             else:
@@ -293,23 +290,25 @@ class DTIALPSDetector:
             # Zone transition
             if fiber_type != current_type:
                 # Save previous zone if valid
-                if current_type in ['proj', 'assoc'] and start_x is not None:
+                if current_type in ["proj", "assoc"] and start_x is not None:
                     zones.append(FiberZone(start_x, x - 1, current_type, y, z))
 
                 # Start new zone
-                if fiber_type in ['proj', 'assoc']:
+                if fiber_type in ["proj", "assoc"]:
                     start_x = x
                 else:
                     start_x = None
                 current_type = fiber_type
 
         # Close final zone
-        if current_type in ['proj', 'assoc'] and start_x is not None:
+        if current_type in ["proj", "assoc"] and start_x is not None:
             zones.append(FiberZone(start_x, self.fa.shape[0] - 1, current_type, y, z))
 
         return zones
 
-    def _find_adjacent_pairs(self, zones: List[FiberZone], max_gap: int = 3) -> List[Tuple[FiberZone, FiberZone]]:
+    def _find_adjacent_pairs(
+        self, zones: list[FiberZone], max_gap: int = 3
+    ) -> list[tuple[FiberZone, FiberZone]]:
         """
         Find adjacent projection-association zone pairs.
 
@@ -339,18 +338,16 @@ class DTIALPSDetector:
                 continue
 
             # Check for proj-assoc pair (in either order)
-            if z1.fiber_type == 'proj' and z2.fiber_type == 'assoc':
+            if z1.fiber_type == "proj" and z2.fiber_type == "assoc":
                 pairs.append((z1, z2))
-            elif z1.fiber_type == 'assoc' and z2.fiber_type == 'proj':
+            elif z1.fiber_type == "assoc" and z2.fiber_type == "proj":
                 pairs.append((z2, z1))
 
         return pairs
 
     def find_candidates(
-        self,
-        z_range: Optional[Tuple[int, int]] = None,
-        y_range: Optional[Tuple[int, int]] = None
-    ) -> List[ROICandidate]:
+        self, z_range: tuple[int, int] | None = None, y_range: tuple[int, int] | None = None
+    ) -> list[ROICandidate]:
         """
         Find all DTI-ALPS ROI candidate locations.
 
@@ -398,13 +395,13 @@ class DTIALPSDetector:
                     if avg_x > center_x:
                         # Left hemisphere: assoc should have higher X than proj
                         if assoc_zone.center_x > proj_zone.center_x:
-                            hemisphere = 'left'
+                            hemisphere = "left"
                         else:
                             continue  # Wrong orientation for left
                     else:
                         # Right hemisphere: assoc should have lower X than proj
                         if assoc_zone.center_x < proj_zone.center_x:
-                            hemisphere = 'right'
+                            hemisphere = "right"
                         else:
                             continue  # Wrong orientation for right
 
@@ -416,29 +413,26 @@ class DTIALPSDetector:
         # Compute 3D fiber purity for all candidates
         print("Computing 3D fiber purity scores...")
         for candidate in self.candidates:
-            candidate.proj_purity = self.compute_3d_fiber_purity(
-                candidate.proj_center, 'proj'
-            )
-            candidate.assoc_purity = self.compute_3d_fiber_purity(
-                candidate.assoc_center, 'assoc'
-            )
+            candidate.proj_purity = self.compute_3d_fiber_purity(candidate.proj_center, "proj")
+            candidate.assoc_purity = self.compute_3d_fiber_purity(candidate.assoc_center, "assoc")
 
         # Filter candidates with minimum purity threshold
         min_purity = 0.7
         self.candidates = [
-            c for c in self.candidates
+            c
+            for c in self.candidates
             if c.proj_purity >= min_purity and c.assoc_purity >= min_purity
         ]
 
         print(f"After purity filtering (>={min_purity}): {len(self.candidates)} candidates")
-        left_count = sum(1 for c in self.candidates if c.hemisphere == 'left')
-        right_count = sum(1 for c in self.candidates if c.hemisphere == 'right')
+        left_count = sum(1 for c in self.candidates if c.hemisphere == "left")
+        right_count = sum(1 for c in self.candidates if c.hemisphere == "right")
         print(f"  Left hemisphere: {left_count}")
         print(f"  Right hemisphere: {right_count}")
 
         return self.candidates
 
-    def select_optimal_rois(self) -> Dict[str, Tuple[int, int, int]]:
+    def select_optimal_rois(self) -> dict[str, tuple[int, int, int]]:
         """
         Select optimal ROI locations with bilateral Z-alignment.
 
@@ -452,8 +446,8 @@ class DTIALPSDetector:
             raise ValueError("No candidates found. Call find_candidates() first.")
 
         # Separate by hemisphere
-        left_candidates = [c for c in self.candidates if c.hemisphere == 'left']
-        right_candidates = [c for c in self.candidates if c.hemisphere == 'right']
+        left_candidates = [c for c in self.candidates if c.hemisphere == "left"]
+        right_candidates = [c for c in self.candidates if c.hemisphere == "right"]
 
         if not left_candidates or not right_candidates:
             raise ValueError("Need candidates in both hemispheres")
@@ -486,23 +480,31 @@ class DTIALPSDetector:
         left_cand, right_cand = best_pair
 
         self.selected_rois = {
-            'proj_left': left_cand.proj_center,
-            'proj_right': right_cand.proj_center,
-            'assoc_left': left_cand.assoc_center,
-            'assoc_right': right_cand.assoc_center,
+            "proj_left": left_cand.proj_center,
+            "proj_right": right_cand.proj_center,
+            "assoc_left": left_cand.assoc_center,
+            "assoc_right": right_cand.assoc_center,
         }
 
-        print(f"\nSelected ROI centers:")
-        print(f"  Projection Left:  {self.selected_rois['proj_left']} (purity: {left_cand.proj_purity:.1%})")
-        print(f"  Projection Right: {self.selected_rois['proj_right']} (purity: {right_cand.proj_purity:.1%})")
-        print(f"  Association Left:  {self.selected_rois['assoc_left']} (purity: {left_cand.assoc_purity:.1%})")
-        print(f"  Association Right: {self.selected_rois['assoc_right']} (purity: {right_cand.assoc_purity:.1%})")
+        print("\nSelected ROI centers:")
+        print(
+            f"  Projection Left:  {self.selected_rois['proj_left']} (purity: {left_cand.proj_purity:.1%})"
+        )
+        print(
+            f"  Projection Right: {self.selected_rois['proj_right']} (purity: {right_cand.proj_purity:.1%})"
+        )
+        print(
+            f"  Association Left:  {self.selected_rois['assoc_left']} (purity: {left_cand.assoc_purity:.1%})"
+        )
+        print(
+            f"  Association Right: {self.selected_rois['assoc_right']} (purity: {right_cand.assoc_purity:.1%})"
+        )
         print(f"  Combined score: {best_combined_score:.1f}")
         print(f"  Z-difference: {abs(left_cand.z - right_cand.z)}")
 
         return self.selected_rois
 
-    def create_roi_masks(self, filter_by_criteria: bool = True) -> Dict[str, np.ndarray]:
+    def create_roi_masks(self, filter_by_criteria: bool = True) -> dict[str, np.ndarray]:
         """
         Create 3D binary spherical masks for each ROI.
 
@@ -528,8 +530,8 @@ class DTIALPSDetector:
             mask = np.zeros(self.fa.shape, dtype=np.uint8)
 
             # Determine fiber type from ROI name
-            is_projection = 'proj' in roi_name
-            is_association = 'assoc' in roi_name
+            is_projection = "proj" in roi_name
+            is_association = "assoc" in roi_name
 
             # Get spherical ROI voxels
             voxels = self._get_spherical_roi_voxels(center)
@@ -590,7 +592,7 @@ class DTIALPSDetector:
             nib.save(img, filepath)
             print(f"Saved: {filepath}")
 
-    def compute_alps_index(self) -> Dict[str, float]:
+    def compute_alps_index(self) -> dict[str, float]:
         """
         Compute the DTI-ALPS index from the selected ROIs.
 
@@ -611,9 +613,9 @@ class DTIALPSDetector:
         results = {}
 
         # Extract mean values in each ROI
-        for side in ['left', 'right']:
-            proj_mask = masks[f'proj_{side}']
-            assoc_mask = masks[f'assoc_{side}']
+        for side in ["left", "right"]:
+            proj_mask = masks[f"proj_{side}"]
+            assoc_mask = masks[f"assoc_{side}"]
 
             # In projection ROI: measure X and Z components
             proj_idx = np.where(proj_mask > 0)
@@ -627,14 +629,14 @@ class DTIALPSDetector:
             assoc_vx = np.mean(np.abs(self.v1[assoc_idx[0], assoc_idx[1], assoc_idx[2], 0]))
             assoc_vy = np.mean(np.abs(self.v1[assoc_idx[0], assoc_idx[1], assoc_idx[2], 1]))
 
-            results[f'{side}_proj_fa'] = proj_fa
-            results[f'{side}_assoc_fa'] = assoc_fa
-            results[f'{side}_proj_vx'] = proj_vx
-            results[f'{side}_proj_vz'] = proj_vz
-            results[f'{side}_assoc_vx'] = assoc_vx
-            results[f'{side}_assoc_vy'] = assoc_vy
+            results[f"{side}_proj_fa"] = proj_fa
+            results[f"{side}_assoc_fa"] = assoc_fa
+            results[f"{side}_proj_vx"] = proj_vx
+            results[f"{side}_proj_vz"] = proj_vz
+            results[f"{side}_assoc_vx"] = assoc_vx
+            results[f"{side}_assoc_vy"] = assoc_vy
 
-        print(f"\nROI Statistics:")
+        print("\nROI Statistics:")
         print(f"  Left Projection FA: {results['left_proj_fa']:.3f}")
         print(f"  Left Association FA: {results['left_assoc_fa']:.3f}")
         print(f"  Right Projection FA: {results['right_proj_fa']:.3f}")

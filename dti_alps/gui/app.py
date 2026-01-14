@@ -2,15 +2,15 @@
 Main application window for DTI-ALPS Processing Tool.
 """
 
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
 import queue
 import threading
+import tkinter as tk
 from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
 
-from . import config
-from ..processing.pipeline import PipelineState, PipelineRunner, PipelineWorker
 from ..processing import validators
+from ..processing.pipeline import PipelineRunner, PipelineState, PipelineWorker
+from . import config
 
 
 class DTIALPSApplication(tk.Tk):
@@ -72,9 +72,7 @@ class DTIALPSApplication(tk.Tk):
         ttk.Frame(toolbar).pack(side=tk.LEFT, expand=True, fill=tk.X)
 
         # Action buttons
-        self.run_btn = ttk.Button(
-            toolbar, text="Run Pipeline", command=self._run_pipeline
-        )
+        self.run_btn = ttk.Button(toolbar, text="Run Pipeline", command=self._run_pipeline)
         self.run_btn.pack(side=tk.RIGHT, padx=5)
 
         self.stop_btn = ttk.Button(
@@ -93,16 +91,18 @@ class DTIALPSApplication(tk.Tk):
         self.sidebar.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
         self.sidebar.pack_propagate(False)
 
-        sidebar_label = ttk.Label(self.sidebar, text="Pipeline Stages",
-                                  font=('TkDefaultFont', 10, 'bold'))
+        sidebar_label = ttk.Label(
+            self.sidebar, text="Pipeline Stages", font=("TkDefaultFont", 10, "bold")
+        )
         sidebar_label.pack(pady=10)
 
         self.stage_buttons = []
-        for i, (stage_id, stage_name) in enumerate(config.PIPELINE_STAGES):
+        for i, (_stage_id, stage_name) in enumerate(config.PIPELINE_STAGES):
             btn = ttk.Button(
-                self.sidebar, text=f"{i+1}. {stage_name}",
+                self.sidebar,
+                text=f"{i + 1}. {stage_name}",
                 command=lambda idx=i: self._show_stage(idx),
-                width=20
+                width=20,
             )
             btn.pack(pady=2, padx=5, fill=tk.X)
             self.stage_buttons.append(btn)
@@ -136,9 +136,7 @@ class DTIALPSApplication(tk.Tk):
         progress_top.pack(fill=tk.X)
 
         self.progress_var = tk.DoubleVar(value=0)
-        self.progress_bar = ttk.Progressbar(
-            progress_top, variable=self.progress_var, maximum=100
-        )
+        self.progress_bar = ttk.Progressbar(progress_top, variable=self.progress_var, maximum=100)
         self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
 
         self.status_label = ttk.Label(progress_top, text="Ready")
@@ -165,16 +163,13 @@ class DTIALPSApplication(tk.Tk):
         req_frame.pack(fill=tk.X, pady=5)
 
         # DWI file
-        self._create_file_row(req_frame, "DWI Image:", "dwi",
-                             config.NIFTI_FILETYPES, 0)
+        self._create_file_row(req_frame, "DWI Image:", "dwi", config.NIFTI_FILETYPES, 0)
 
         # bvecs file
-        self._create_file_row(req_frame, "bvecs File:", "bvecs",
-                             config.BVEC_FILETYPES, 1)
+        self._create_file_row(req_frame, "bvecs File:", "bvecs", config.BVEC_FILETYPES, 1)
 
         # bvals file
-        self._create_file_row(req_frame, "bvals File:", "bvals",
-                             config.BVAL_FILETYPES, 2)
+        self._create_file_row(req_frame, "bvals File:", "bvals", config.BVAL_FILETYPES, 2)
 
         # Phase encoding section
         pe_frame = ttk.LabelFrame(frame, text="Phase Encoding", padding=10)
@@ -183,12 +178,19 @@ class DTIALPSApplication(tk.Tk):
         # PE direction
         ttk.Label(pe_frame, text="Direction:").grid(row=0, column=0, sticky=tk.W, pady=2)
         self.pe_dir_var = tk.StringVar(value=config.DEFAULT_PE_DIRECTION)
-        pe_combo = ttk.Combobox(pe_frame, textvariable=self.pe_dir_var,
-                                values=config.PE_DIRECTIONS, width=10, state="readonly")
+        pe_combo = ttk.Combobox(
+            pe_frame,
+            textvariable=self.pe_dir_var,
+            values=config.PE_DIRECTIONS,
+            width=10,
+            state="readonly",
+        )
         pe_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
 
         # Readout time
-        ttk.Label(pe_frame, text="Readout Time (s):").grid(row=0, column=2, sticky=tk.W, padx=(20, 0), pady=2)
+        ttk.Label(pe_frame, text="Readout Time (s):").grid(
+            row=0, column=2, sticky=tk.W, padx=(20, 0), pady=2
+        )
         self.readout_var = tk.StringVar(value=str(config.DEFAULT_READOUT_TIME))
         readout_entry = ttk.Entry(pe_frame, textvariable=self.readout_var, width=10)
         readout_entry.grid(row=0, column=3, sticky=tk.W, padx=5, pady=2)
@@ -201,21 +203,30 @@ class DTIALPSApplication(tk.Tk):
 
         for i, (scheme, desc) in enumerate(config.RPE_SCHEMES.items()):
             ttk.Radiobutton(
-                rpe_frame, text=f"{scheme}: {desc}",
-                variable=self.rpe_var, value=scheme,
-                command=self._on_rpe_change
+                rpe_frame,
+                text=f"{scheme}: {desc}",
+                variable=self.rpe_var,
+                value=scheme,
+                command=self._on_rpe_change,
             ).grid(row=i, column=0, columnspan=3, sticky=tk.W, pady=2)
 
         # Reverse PE file (conditional)
         self.reverse_pe_frame = ttk.Frame(rpe_frame)
-        self.reverse_pe_frame.grid(row=len(config.RPE_SCHEMES), column=0, columnspan=3, sticky=tk.EW, pady=5)
+        self.reverse_pe_frame.grid(
+            row=len(config.RPE_SCHEMES), column=0, columnspan=3, sticky=tk.EW, pady=5
+        )
 
         ttk.Label(self.reverse_pe_frame, text="Reverse PE b=0:").pack(side=tk.LEFT)
         self.reverse_pe_var = tk.StringVar()
-        self.reverse_pe_entry = ttk.Entry(self.reverse_pe_frame, textvariable=self.reverse_pe_var, width=50)
+        self.reverse_pe_entry = ttk.Entry(
+            self.reverse_pe_frame, textvariable=self.reverse_pe_var, width=50
+        )
         self.reverse_pe_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        ttk.Button(self.reverse_pe_frame, text="Browse...",
-                  command=lambda: self._browse_file("reverse_pe", config.NIFTI_FILETYPES)).pack(side=tk.LEFT)
+        ttk.Button(
+            self.reverse_pe_frame,
+            text="Browse...",
+            command=lambda: self._browse_file("reverse_pe", config.NIFTI_FILETYPES),
+        ).pack(side=tk.LEFT)
 
         self._on_rpe_change()  # Set initial state
 
@@ -223,8 +234,7 @@ class DTIALPSApplication(tk.Tk):
         self.json_frame = ttk.LabelFrame(frame, text="Optional Files", padding=10)
         self.json_frame.pack(fill=tk.X, pady=5)
 
-        self._create_file_row(self.json_frame, "JSON Sidecar:", "json",
-                             config.JSON_FILETYPES, 0)
+        self._create_file_row(self.json_frame, "JSON Sidecar:", "json", config.JSON_FILETYPES, 0)
 
         # Output settings
         out_frame = ttk.LabelFrame(frame, text="Output", padding=10)
@@ -232,12 +242,18 @@ class DTIALPSApplication(tk.Tk):
 
         ttk.Label(out_frame, text="Output Directory:").grid(row=0, column=0, sticky=tk.W, pady=2)
         self.output_dir_var = tk.StringVar()
-        ttk.Entry(out_frame, textvariable=self.output_dir_var, width=50).grid(row=0, column=1, sticky=tk.EW, padx=5, pady=2)
-        ttk.Button(out_frame, text="Browse...", command=self._browse_output_dir).grid(row=0, column=2, pady=2)
+        ttk.Entry(out_frame, textvariable=self.output_dir_var, width=50).grid(
+            row=0, column=1, sticky=tk.EW, padx=5, pady=2
+        )
+        ttk.Button(out_frame, text="Browse...", command=self._browse_output_dir).grid(
+            row=0, column=2, pady=2
+        )
 
         ttk.Label(out_frame, text="Output Prefix:").grid(row=1, column=0, sticky=tk.W, pady=2)
         self.output_prefix_var = tk.StringVar(value="subject")
-        ttk.Entry(out_frame, textvariable=self.output_prefix_var, width=20).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Entry(out_frame, textvariable=self.output_prefix_var, width=20).grid(
+            row=1, column=1, sticky=tk.W, padx=5, pady=2
+        )
 
         out_frame.columnconfigure(1, weight=1)
 
@@ -250,15 +266,25 @@ class DTIALPSApplication(tk.Tk):
         eddy_frame = ttk.LabelFrame(frame, text="Eddy Options", padding=10)
         eddy_frame.pack(fill=tk.X, pady=5)
 
-        self._create_file_row(eddy_frame, "Processing Mask:", "eddy_mask",
-                             config.NIFTI_FILETYPES, 0)
-        self._create_file_row(eddy_frame, "Slice Spec File:", "eddy_slspec",
-                             [("Text files", "*.txt"), ("All files", "*.*")], 1)
+        self._create_file_row(
+            eddy_frame, "Processing Mask:", "eddy_mask", config.NIFTI_FILETYPES, 0
+        )
+        self._create_file_row(
+            eddy_frame,
+            "Slice Spec File:",
+            "eddy_slspec",
+            [("Text files", "*.txt"), ("All files", "*.*")],
+            1,
+        )
 
         ttk.Label(eddy_frame, text="Extra Options:").grid(row=2, column=0, sticky=tk.W, pady=2)
         self.eddy_options_var = tk.StringVar()
-        ttk.Entry(eddy_frame, textvariable=self.eddy_options_var, width=50).grid(row=2, column=1, sticky=tk.EW, padx=5, pady=2)
-        ttk.Label(eddy_frame, text="e.g., --repol --data_is_shelled").grid(row=2, column=2, sticky=tk.W, padx=5)
+        ttk.Entry(eddy_frame, textvariable=self.eddy_options_var, width=50).grid(
+            row=2, column=1, sticky=tk.EW, padx=5, pady=2
+        )
+        ttk.Label(eddy_frame, text="e.g., --repol --data_is_shelled").grid(
+            row=2, column=2, sticky=tk.W, padx=5
+        )
 
         eddy_frame.columnconfigure(1, weight=1)
 
@@ -268,7 +294,9 @@ class DTIALPSApplication(tk.Tk):
 
         ttk.Label(topup_frame, text="Extra Options:").grid(row=0, column=0, sticky=tk.W, pady=2)
         self.topup_options_var = tk.StringVar()
-        ttk.Entry(topup_frame, textvariable=self.topup_options_var, width=50).grid(row=0, column=1, sticky=tk.EW, padx=5, pady=2)
+        ttk.Entry(topup_frame, textvariable=self.topup_options_var, width=50).grid(
+            row=0, column=1, sticky=tk.EW, padx=5, pady=2
+        )
 
         topup_frame.columnconfigure(1, weight=1)
 
@@ -277,12 +305,14 @@ class DTIALPSApplication(tk.Tk):
         qc_frame.pack(fill=tk.X, pady=5)
 
         self.generate_qc_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(qc_frame, text="Generate eddy QC reports",
-                       variable=self.generate_qc_var).pack(anchor=tk.W)
+        ttk.Checkbutton(
+            qc_frame, text="Generate eddy QC reports", variable=self.generate_qc_var
+        ).pack(anchor=tk.W)
 
         self.keep_intermediate_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(qc_frame, text="Keep intermediate files",
-                       variable=self.keep_intermediate_var).pack(anchor=tk.W)
+        ttk.Checkbutton(
+            qc_frame, text="Keep intermediate files", variable=self.keep_intermediate_var
+        ).pack(anchor=tk.W)
 
     def _create_dti_frame(self):
         """Create DTI fitting frame (Stage 3)."""
@@ -292,11 +322,11 @@ class DTIALPSApplication(tk.Tk):
         info_label = ttk.Label(
             frame,
             text="DTI tensor fitting will be performed automatically using MRtrix3.\n\n"
-                 "The following outputs will be generated:\n"
-                 "  - Diffusion tensor image (for ALPS calculation)\n"
-                 "  - FA map (for ROI localization)\n"
-                 "  - Principal eigenvector V1 (for fiber classification)",
-            justify=tk.LEFT
+            "The following outputs will be generated:\n"
+            "  - Diffusion tensor image (for ALPS calculation)\n"
+            "  - FA map (for ROI localization)\n"
+            "  - Principal eigenvector V1 (for fiber classification)",
+            justify=tk.LEFT,
         )
         info_label.pack(anchor=tk.W, pady=20)
 
@@ -304,8 +334,7 @@ class DTIALPSApplication(tk.Tk):
         mask_frame = ttk.LabelFrame(frame, text="Optional Settings", padding=10)
         mask_frame.pack(fill=tk.X, pady=5)
 
-        self._create_file_row(mask_frame, "DTI Mask:", "dti_mask",
-                             config.NIFTI_FILETYPES, 0)
+        self._create_file_row(mask_frame, "DTI Mask:", "dti_mask", config.NIFTI_FILETYPES, 0)
 
     def _create_roi_frame(self):
         """Create ROI detection parameters frame (Stage 4)."""
@@ -315,8 +344,8 @@ class DTIALPSApplication(tk.Tk):
         info_label = ttk.Label(
             frame,
             text="Configure parameters for automatic ROI detection.\n"
-                 "The algorithm will find optimal locations for projection and association fiber ROIs.",
-            justify=tk.LEFT
+            "The algorithm will find optimal locations for projection and association fiber ROIs.",
+            justify=tk.LEFT,
         )
         info_label.pack(anchor=tk.W, pady=10)
 
@@ -328,8 +357,14 @@ class DTIALPSApplication(tk.Tk):
         row = 0
         ttk.Label(param_frame, text="FA Threshold:").grid(row=row, column=0, sticky=tk.W, pady=5)
         self.fa_thresh_var = tk.DoubleVar(value=config.DEFAULT_FA_THRESH)
-        fa_scale = ttk.Scale(param_frame, from_=0.1, to=0.5, variable=self.fa_thresh_var,
-                            orient=tk.HORIZONTAL, length=200)
+        fa_scale = ttk.Scale(
+            param_frame,
+            from_=0.1,
+            to=0.5,
+            variable=self.fa_thresh_var,
+            orient=tk.HORIZONTAL,
+            length=200,
+        )
         fa_scale.grid(row=row, column=1, sticky=tk.W, padx=5)
         self.fa_thresh_label = ttk.Label(param_frame, text=f"{config.DEFAULT_FA_THRESH:.2f}")
         self.fa_thresh_label.grid(row=row, column=2, sticky=tk.W)
@@ -337,32 +372,54 @@ class DTIALPSApplication(tk.Tk):
 
         # Orientation threshold
         row += 1
-        ttk.Label(param_frame, text="Orientation Threshold:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(param_frame, text="Orientation Threshold:").grid(
+            row=row, column=0, sticky=tk.W, pady=5
+        )
         self.orient_thresh_var = tk.DoubleVar(value=config.DEFAULT_ORIENT_THRESH)
-        orient_scale = ttk.Scale(param_frame, from_=0.5, to=0.9, variable=self.orient_thresh_var,
-                                orient=tk.HORIZONTAL, length=200)
+        orient_scale = ttk.Scale(
+            param_frame,
+            from_=0.5,
+            to=0.9,
+            variable=self.orient_thresh_var,
+            orient=tk.HORIZONTAL,
+            length=200,
+        )
         orient_scale.grid(row=row, column=1, sticky=tk.W, padx=5)
-        self.orient_thresh_label = ttk.Label(param_frame, text=f"{config.DEFAULT_ORIENT_THRESH:.2f}")
+        self.orient_thresh_label = ttk.Label(
+            param_frame, text=f"{config.DEFAULT_ORIENT_THRESH:.2f}"
+        )
         self.orient_thresh_label.grid(row=row, column=2, sticky=tk.W)
-        orient_scale.config(command=lambda v: self.orient_thresh_label.config(text=f"{float(v):.2f}"))
+        orient_scale.config(
+            command=lambda v: self.orient_thresh_label.config(text=f"{float(v):.2f}")
+        )
 
         # Min zone width
         row += 1
-        ttk.Label(param_frame, text="Min Zone Width (voxels):").grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(param_frame, text="Min Zone Width (voxels):").grid(
+            row=row, column=0, sticky=tk.W, pady=5
+        )
         self.min_width_var = tk.IntVar(value=config.DEFAULT_MIN_ZONE_WIDTH)
-        ttk.Spinbox(param_frame, from_=3, to=15, textvariable=self.min_width_var, width=5).grid(row=row, column=1, sticky=tk.W, padx=5)
+        ttk.Spinbox(param_frame, from_=3, to=15, textvariable=self.min_width_var, width=5).grid(
+            row=row, column=1, sticky=tk.W, padx=5
+        )
 
         # ROI radius
         row += 1
         ttk.Label(param_frame, text="ROI Radius (mm):").grid(row=row, column=0, sticky=tk.W, pady=5)
         self.roi_radius_var = tk.DoubleVar(value=config.DEFAULT_ROI_RADIUS_MM)
-        ttk.Spinbox(param_frame, from_=2.0, to=8.0, increment=0.5, textvariable=self.roi_radius_var, width=5).grid(row=row, column=1, sticky=tk.W, padx=5)
+        ttk.Spinbox(
+            param_frame, from_=2.0, to=8.0, increment=0.5, textvariable=self.roi_radius_var, width=5
+        ).grid(row=row, column=1, sticky=tk.W, padx=5)
 
         # Z tolerance
         row += 1
-        ttk.Label(param_frame, text="Z-Tolerance (voxels):").grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(param_frame, text="Z-Tolerance (voxels):").grid(
+            row=row, column=0, sticky=tk.W, pady=5
+        )
         self.z_tolerance_var = tk.IntVar(value=config.DEFAULT_Z_TOLERANCE)
-        ttk.Spinbox(param_frame, from_=0, to=5, textvariable=self.z_tolerance_var, width=5).grid(row=row, column=1, sticky=tk.W, padx=5)
+        ttk.Spinbox(param_frame, from_=0, to=5, textvariable=self.z_tolerance_var, width=5).grid(
+            row=row, column=1, sticky=tk.W, padx=5
+        )
 
     def _create_results_frame(self):
         """Create results display frame (Stage 5)."""
@@ -373,7 +430,7 @@ class DTIALPSApplication(tk.Tk):
         self.results_label = ttk.Label(
             frame,
             text="Results will be displayed here after processing completes.",
-            justify=tk.LEFT
+            justify=tk.LEFT,
         )
         self.results_label.pack(anchor=tk.W, pady=20)
 
@@ -390,8 +447,9 @@ class DTIALPSApplication(tk.Tk):
         entry = ttk.Entry(parent, textvariable=var, width=50)
         entry.grid(row=row, column=1, sticky=tk.EW, padx=5, pady=2)
 
-        btn = ttk.Button(parent, text="Browse...",
-                        command=lambda: self._browse_file(var_name, filetypes))
+        btn = ttk.Button(
+            parent, text="Browse...", command=lambda: self._browse_file(var_name, filetypes)
+        )
         btn.grid(row=row, column=2, pady=2)
 
         parent.columnconfigure(1, weight=1)
@@ -416,11 +474,11 @@ class DTIALPSApplication(tk.Tk):
         # Enable/disable reverse PE file selection
         if scheme == "pair":
             for child in self.reverse_pe_frame.winfo_children():
-                if isinstance(child, (ttk.Entry, ttk.Button)):
+                if isinstance(child, ttk.Entry | ttk.Button):
                     child.config(state=tk.NORMAL)
         else:
             for child in self.reverse_pe_frame.winfo_children():
-                if isinstance(child, (ttk.Entry, ttk.Button)):
+                if isinstance(child, ttk.Entry | ttk.Button):
                     child.config(state=tk.DISABLED)
 
     def _show_stage(self, stage_idx):
@@ -430,9 +488,9 @@ class DTIALPSApplication(tk.Tk):
         # Update button states
         for i, btn in enumerate(self.stage_buttons):
             if i == stage_idx:
-                btn.state(['pressed'])
+                btn.state(["pressed"])
             else:
-                btn.state(['!pressed'])
+                btn.state(["!pressed"])
 
         # Hide all frames
         for frame in self.stage_frames.values():
@@ -467,14 +525,14 @@ class DTIALPSApplication(tk.Tk):
         state.rpe_scheme = self.rpe_var.get()
 
         # Optional files and preprocessing options
-        state.json_sidecar_path = getattr(self, 'json_var', tk.StringVar()).get() or None
-        state.eddy_mask_path = getattr(self, 'eddy_mask_var', tk.StringVar()).get() or None
-        state.eddy_slspec_path = getattr(self, 'eddy_slspec_var', tk.StringVar()).get() or None
+        state.json_sidecar_path = getattr(self, "json_var", tk.StringVar()).get() or None
+        state.eddy_mask_path = getattr(self, "eddy_mask_var", tk.StringVar()).get() or None
+        state.eddy_slspec_path = getattr(self, "eddy_slspec_var", tk.StringVar()).get() or None
         state.eddy_options = self.eddy_options_var.get()
         state.topup_options = self.topup_options_var.get()
         state.generate_qc = self.generate_qc_var.get()
         state.keep_intermediates = self.keep_intermediate_var.get()
-        state.dti_mask_path = getattr(self, 'dti_mask_var', tk.StringVar()).get() or None
+        state.dti_mask_path = getattr(self, "dti_mask_var", tk.StringVar()).get() or None
 
         # ROI detection parameters
         state.fa_thresh = self.fa_thresh_var.get()
@@ -570,6 +628,7 @@ class DTIALPSApplication(tk.Tk):
     def _log(self, message):
         """Append message to log."""
         from datetime import datetime
+
         timestamp = datetime.now().strftime("[%H:%M:%S]")
 
         self.log_text.config(state=tk.NORMAL)
@@ -583,15 +642,10 @@ class DTIALPSApplication(tk.Tk):
             "preproc": "Preprocessing",
             "dti": "DTI Fitting",
             "roi": "ROI Detection",
-            "results": "Calculating ALPS"
+            "results": "Calculating ALPS",
         }
 
-        stage_progress = {
-            "preproc": 25,
-            "dti": 50,
-            "roi": 75,
-            "results": 90
-        }
+        stage_progress = {"preproc": 25, "dti": 50, "roi": 75, "results": 90}
 
         if status == "running":
             self.status_label.config(text=f"Running: {stage_names.get(stage, stage)}")
@@ -615,8 +669,9 @@ class DTIALPSApplication(tk.Tk):
             child.destroy()
 
         # Title
-        ttk.Label(frame, text="DTI-ALPS Results",
-                 font=('TkDefaultFont', 12, 'bold')).pack(anchor=tk.W, pady=10)
+        ttk.Label(frame, text="DTI-ALPS Results", font=("TkDefaultFont", 12, "bold")).pack(
+            anchor=tk.W, pady=10
+        )
 
         # Results table
         results_frame = ttk.LabelFrame(frame, text="ALPS Index", padding=10)
@@ -631,45 +686,60 @@ class DTIALPSApplication(tk.Tk):
             tree.column(col, width=120, anchor=tk.CENTER)
 
         # Add data rows
-        alps_left = alps_results.get('ALPS_left', 0)
-        alps_right = alps_results.get('ALPS_right', 0)
-        alps_bilateral = alps_results.get('ALPS_bilateral', 0)
+        alps_left = alps_results.get("ALPS_left", 0)
+        alps_right = alps_results.get("ALPS_right", 0)
+        alps_bilateral = alps_results.get("ALPS_bilateral", 0)
 
-        tree.insert("", tk.END, values=(
-            "ALPS Index",
-            f"{alps_left:.4f}",
-            f"{alps_right:.4f}",
-            f"{alps_bilateral:.4f}"
-        ))
+        tree.insert(
+            "",
+            tk.END,
+            values=("ALPS Index", f"{alps_left:.4f}", f"{alps_right:.4f}", f"{alps_bilateral:.4f}"),
+        )
 
         # Add component values
-        tree.insert("", tk.END, values=(
-            "Dxx (proj)",
-            f"{alps_results.get('Dxx_proj_left', 0):.6f}",
-            f"{alps_results.get('Dxx_proj_right', 0):.6f}",
-            ""
-        ))
+        tree.insert(
+            "",
+            tk.END,
+            values=(
+                "Dxx (proj)",
+                f"{alps_results.get('Dxx_proj_left', 0):.6f}",
+                f"{alps_results.get('Dxx_proj_right', 0):.6f}",
+                "",
+            ),
+        )
 
-        tree.insert("", tk.END, values=(
-            "Dxx (assoc)",
-            f"{alps_results.get('Dxx_assoc_left', 0):.6f}",
-            f"{alps_results.get('Dxx_assoc_right', 0):.6f}",
-            ""
-        ))
+        tree.insert(
+            "",
+            tk.END,
+            values=(
+                "Dxx (assoc)",
+                f"{alps_results.get('Dxx_assoc_left', 0):.6f}",
+                f"{alps_results.get('Dxx_assoc_right', 0):.6f}",
+                "",
+            ),
+        )
 
-        tree.insert("", tk.END, values=(
-            "Dyy (proj)",
-            f"{alps_results.get('Dyy_proj_left', 0):.6f}",
-            f"{alps_results.get('Dyy_proj_right', 0):.6f}",
-            ""
-        ))
+        tree.insert(
+            "",
+            tk.END,
+            values=(
+                "Dyy (proj)",
+                f"{alps_results.get('Dyy_proj_left', 0):.6f}",
+                f"{alps_results.get('Dyy_proj_right', 0):.6f}",
+                "",
+            ),
+        )
 
-        tree.insert("", tk.END, values=(
-            "Dzz (assoc)",
-            f"{alps_results.get('Dzz_assoc_left', 0):.6f}",
-            f"{alps_results.get('Dzz_assoc_right', 0):.6f}",
-            ""
-        ))
+        tree.insert(
+            "",
+            tk.END,
+            values=(
+                "Dzz (assoc)",
+                f"{alps_results.get('Dzz_assoc_left', 0):.6f}",
+                f"{alps_results.get('Dzz_assoc_right', 0):.6f}",
+                "",
+            ),
+        )
 
         tree.pack(fill=tk.X)
 
@@ -677,30 +747,34 @@ class DTIALPSApplication(tk.Tk):
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill=tk.X, pady=10)
 
-        ttk.Button(btn_frame, text="Save CSV Report",
-                  command=self._export_csv).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="View ROI Masks",
-                  command=self._view_rois).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Save CSV Report", command=self._export_csv).pack(
+            side=tk.LEFT, padx=5
+        )
+        ttk.Button(btn_frame, text="View ROI Masks", command=self._view_rois).pack(
+            side=tk.LEFT, padx=5
+        )
 
     def _export_csv(self):
         """Export results to CSV."""
         path = filedialog.asksaveasfilename(
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+            defaultextension=".csv", filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
         )
         if path and self.pipeline_state.alps_results:
             import csv
-            with open(path, 'w', newline='') as f:
+
+            with open(path, "w", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow(["Metric", "Left", "Right", "Bilateral"])
 
                 results = self.pipeline_state.alps_results
-                writer.writerow([
-                    "ALPS_Index",
-                    results.get('ALPS_left', ''),
-                    results.get('ALPS_right', ''),
-                    results.get('ALPS_bilateral', '')
-                ])
+                writer.writerow(
+                    [
+                        "ALPS_Index",
+                        results.get("ALPS_left", ""),
+                        results.get("ALPS_right", ""),
+                        results.get("ALPS_bilateral", ""),
+                    ]
+                )
 
             messagebox.showinfo("Export", f"Results saved to {path}")
 
@@ -711,12 +785,12 @@ class DTIALPSApplication(tk.Tk):
 
         roi_dir = self.pipeline_state.output_dir
         if roi_dir and Path(roi_dir).exists():
-            if sys.platform == 'darwin':
-                subprocess.run(['open', roi_dir])
-            elif sys.platform == 'linux':
-                subprocess.run(['xdg-open', roi_dir])
+            if sys.platform == "darwin":
+                subprocess.run(["open", roi_dir])
+            elif sys.platform == "linux":
+                subprocess.run(["xdg-open", roi_dir])
             else:
-                subprocess.run(['explorer', roi_dir])
+                subprocess.run(["explorer", roi_dir])
 
     def _load_settings(self):
         """Load settings from file."""
@@ -733,5 +807,5 @@ class DTIALPSApplication(tk.Tk):
             f"{config.APP_NAME}\n"
             f"Version {config.APP_VERSION}\n\n"
             "Automatic DTI-ALPS ROI Placement and Analysis\n\n"
-            "Uses MRtrix3 for preprocessing and DTI fitting."
+            "Uses MRtrix3 for preprocessing and DTI fitting.",
         )
