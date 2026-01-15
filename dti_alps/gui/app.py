@@ -604,6 +604,22 @@ class DTIALPSApplication(tk.Tk):
         # Placeholder for results table
         self.results_tree = None
 
+        # Add Results Viewer button (always available)
+        viewer_frame = ttk.Frame(frame)
+        viewer_frame.pack(fill=tk.X, pady=10)
+
+        ttk.Button(
+            viewer_frame,
+            text="Open Results Viewer...",
+            command=self._open_results_viewer,
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(
+            viewer_frame,
+            text="(View any previously processed results)",
+            foreground="gray",
+        ).pack(side=tk.LEFT, padx=5)
+
     def _create_file_row(self, parent, label_text, var_name, filetypes, row):
         """Create a file browser row."""
         ttk.Label(parent, text=label_text).grid(row=row, column=0, sticky=tk.W, pady=2)
@@ -1058,6 +1074,12 @@ class DTIALPSApplication(tk.Tk):
             btn_frame, text="Open Output Folder", command=self._open_batch_output_folder
         ).pack(side=tk.RIGHT, padx=5)
 
+        ttk.Button(
+            btn_frame,
+            text="Open Results Viewer",
+            command=lambda: self._open_results_viewer(batch_state.config.output_dir),
+        ).pack(side=tk.RIGHT, padx=5)
+
     def _open_batch_output_folder(self):
         """Open the batch output folder."""
         import subprocess
@@ -1072,6 +1094,17 @@ class DTIALPSApplication(tk.Tk):
                     subprocess.run(["xdg-open", output_dir])
                 else:
                     subprocess.run(["explorer", output_dir])
+
+    def _open_results_viewer(self, output_folder: str | None = None):
+        """Open the results viewer window."""
+        from .viewer import ResultsViewer
+
+        # Use current output dir if not specified and available
+        if output_folder is None and self.batch_state:
+            output_folder = self.batch_state.config.output_dir
+
+        viewer = ResultsViewer(self, output_folder)
+        viewer.focus_set()
 
     def _export_csv(self):
         """Export results to CSV."""

@@ -7,11 +7,10 @@ A tkinter-based graphical interface for end-to-end DTI-ALPS analysis.
 import sys
 
 
-def main():
-    """Launch the DTI-ALPS GUI application."""
+def _check_dependencies():
+    """Check for required GUI dependencies."""
     import importlib.util
 
-    # Check for required dependencies
     if importlib.util.find_spec("tkinter") is None:
         print("Error: tkinter is required but not installed.")
         print("On Ubuntu/Debian: sudo apt-get install python3-tk")
@@ -27,8 +26,28 @@ def main():
         print("Please install: pip install nibabel numpy scipy matplotlib")
         sys.exit(1)
 
+    # Check for PIL (required by viewer)
+    if importlib.util.find_spec("PIL") is None:
+        print("Error: Pillow is required but not installed.")
+        print("Please install: pip install Pillow")
+        sys.exit(1)
+
+
+def main():
+    """Launch the DTI-ALPS GUI application."""
+    _check_dependencies()
+
     # Import and run application
     from .app import DTIALPSApplication
 
     app = DTIALPSApplication()
     app.mainloop()
+
+
+def viewer(output_folder: str | None = None):
+    """Launch the DTI-ALPS Results Viewer."""
+    _check_dependencies()
+
+    from .viewer import launch_viewer
+
+    launch_viewer(output_folder)

@@ -1,0 +1,819 @@
+"""
+Results Viewer for DTI-ALPS processing output.
+
+Displays FA-modulated RGB direction-encoded color (DEC) images with ROI overlays.
+"""
+
+import csv
+import tkinter as tk
+from dataclasses import dataclass, field
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
+
+import nibabel as nib
+import numpy as np
+from PIL import Image, ImageTk
+
+
+@dataclass
+class SubjectData:
+    """Container for a single subject's loaded data."""
+
+    subject_id: str
+    folder_path: Path
+    fa_path: Path | None = None
+    v1_path: Path | None = None
+    roi_paths: dict[str, Path] = field(default_factory=dict)
+
+    # ALPS metrics from CSV
+    alps_left: float | None = None
+    alps_right: float | None = None
+    alps_combined: float | None = None
+    status: str = ""
+    error: str = ""
+
+    # Loaded image data (lazy loaded)
+    _fa_data: np.ndarray | None = field(default=None, repr=False)
+    _v1_data: np.ndarray | None = field(default=None, repr=False)
+    _roi_data: dict[str, np.ndarray] = field(default_factory=dict, repr=False)
+    _affine: np.ndarray | None = field(default=None, repr=False)
+
+    def load_images(self) -> bool:
+        """Load FA and V1 images into memory. Returns True if successful."""
+        try:
+            if self.fa_path and self.fa_path.exists():
+                fa_img = nib.load(self.fa_path)
+                self._fa_data = fa_img.get_fdata()
+                self._affine = fa_img.affine
+
+            if self.v1_path and self.v1_path.exists():
+                v1_img = nib.load(self.v1_path)
+                self._v1_data = v1_img.get_fdata()
+
+            # Load ROIs
+            for roi_name, roi_path in self.roi_paths.items():
+                if roi_path.exists():
+                    roi_img = nib.load(roi_path)
+                    self._roi_data[roi_name] = roi_img.get_fdata()
+
+            return self._fa_data is not None and self._v1_data is not None
+        except Exception as e:
+            print(f"Error loading images for {self.subject_id}: {e}")
+            return False
+
+    def unload_images(self):
+        """Release image data from memory."""
+        self._fa_data = None
+        self._v1_data = None
+        self._roi_data = {}
+        self._affine = None
+
+    @property
+    def fa_data(self) -> np.ndarray | None:
+        return self._fa_data
+
+    @property
+    def v1_data(self) -> np.ndarray | None:
+        return self._v1_data
+
+    @property
+    def roi_data(self) -> dict[str, np.ndarray]:
+        return self._roi_data
+
+    @property
+    def shape(self) -> tuple[int, ...] | None:
+        if self._fa_data is not None:
+            return self._fa_data.shape
+        return None
+
+
+class ResultsViewer(tk.Toplevel):
+    """
+    Viewer for DTI-ALPS processing results.
+
+    Displays FA-modulated RGB DEC images with ROI overlays and ALPS metrics.
+    """
+
+    # ROI overlay color (solid white with alpha)
+    ROI_COLOR = (255, 255, 255, 200)
+
+    def __init__(self, parent=None, output_folder: str | None = None):
+        """
+        Initialize the results viewer.
+
+        Args:
+            parent: Parent Tk window (optional)
+            output_folder: Path to output folder to load immediately (optional)
+        """
+        super().__init__(parent)
+
+        self.title("DTI-ALPS Results Viewer")
+        self.geometry("1400x900")
+        self.minsize(1000, 700)
+
+        # State
+        self.subjects: dict[str, SubjectData] = {}
+        self.current_subject: SubjectData | None = None
+        self.current_slice = 0
+        self.current_view = "axial"  # axial, coronal, sagittal
+        self.show_rois = True
+        self.zoom_level = 1.0
+
+        # Image display
+        self._photo_image: ImageTk.PhotoImage | None = None
+
+        # Build UI
+        self._create_menu()
+        self._create_layout()
+
+        # Load output folder if provided
+        if output_folder:
+            self.after(100, lambda: self._load_output_folder(output_folder))
+
+    def _create_menu(self):
+        """Create menu bar."""
+        menubar = tk.Menu(self)
+        self.config(menu=menubar)
+
+        # File menu
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Load Results Folder...", command=self._browse_folder)
+        file_menu.add_separator()
+        file_menu.add_command(label="Close", command=self.destroy)
+
+        # View menu
+        view_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="View", menu=view_menu)
+        view_menu.add_command(label="Axial View", command=lambda: self._set_view("axial"))
+        view_menu.add_command(label="Coronal View", command=lambda: self._set_view("coronal"))
+        view_menu.add_command(label="Sagittal View", command=lambda: self._set_view("sagittal"))
+        view_menu.add_separator()
+
+        self.show_rois_var = tk.BooleanVar(value=True)
+        view_menu.add_checkbutton(
+            label="Show ROI Overlays", variable=self.show_rois_var, command=self._update_display
+        )
+
+    def _create_layout(self):
+        """Create main layout."""
+        # Main container
+        main_frame = ttk.Frame(self)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Left panel - Subject list
+        left_panel = ttk.Frame(main_frame, width=280)
+        left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
+        left_panel.pack_propagate(False)
+
+        self._create_subject_panel(left_panel)
+
+        # Right panel - Image and controls
+        right_panel = ttk.Frame(main_frame)
+        right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Top: Image canvas
+        canvas_frame = ttk.LabelFrame(right_panel, text="Image View", padding=5)
+        canvas_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
+
+        self._create_canvas(canvas_frame)
+
+        # Bottom: Controls and metrics
+        bottom_frame = ttk.Frame(right_panel)
+        bottom_frame.pack(fill=tk.X)
+
+        self._create_controls(bottom_frame)
+        self._create_metrics_panel(bottom_frame)
+
+    def _create_subject_panel(self, parent):
+        """Create subject list panel."""
+        # Header with load button
+        header_frame = ttk.Frame(parent)
+        header_frame.pack(fill=tk.X, pady=(0, 5))
+
+        ttk.Label(header_frame, text="Subjects", font=("TkDefaultFont", 10, "bold")).pack(
+            side=tk.LEFT
+        )
+        ttk.Button(header_frame, text="Load Folder...", command=self._browse_folder).pack(
+            side=tk.RIGHT
+        )
+
+        # Subject list
+        list_frame = ttk.Frame(parent)
+        list_frame.pack(fill=tk.BOTH, expand=True)
+
+        columns = ("subject", "status")
+        self.subject_tree = ttk.Treeview(
+            list_frame, columns=columns, show="headings", selectmode="browse"
+        )
+
+        self.subject_tree.heading("subject", text="Subject ID")
+        self.subject_tree.heading("status", text="Status")
+        self.subject_tree.column("subject", width=180)
+        self.subject_tree.column("status", width=70)
+
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.subject_tree.yview)
+        self.subject_tree.configure(yscrollcommand=scrollbar.set)
+
+        self.subject_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Bind selection event
+        self.subject_tree.bind("<<TreeviewSelect>>", self._on_subject_select)
+
+    def _create_canvas(self, parent):
+        """Create image display canvas."""
+        # Canvas with scrollbars for large images
+        canvas_container = ttk.Frame(parent)
+        canvas_container.pack(fill=tk.BOTH, expand=True)
+
+        self.canvas = tk.Canvas(canvas_container, bg="black", highlightthickness=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Bind mouse wheel for slice scrolling
+        self.canvas.bind("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind("<Button-4>", self._on_mousewheel)  # Linux scroll up
+        self.canvas.bind("<Button-5>", self._on_mousewheel)  # Linux scroll down
+
+        # Legend frame
+        self.legend_frame = ttk.Frame(parent)
+        self.legend_frame.pack(fill=tk.X, pady=(5, 0))
+
+        self._create_legend()
+
+    def _create_legend(self):
+        """Create ROI indicator legend."""
+        # Simple legend showing white = ROI
+        frame = ttk.Frame(self.legend_frame)
+        frame.pack(side=tk.LEFT, padx=5)
+
+        # White swatch
+        swatch = tk.Canvas(frame, width=16, height=16, highlightthickness=1)
+        swatch.pack(side=tk.LEFT, padx=(0, 5))
+        swatch.create_rectangle(0, 0, 16, 16, fill="white", outline="gray")
+
+        ttk.Label(frame, text="ROI regions", font=("TkDefaultFont", 9)).pack(side=tk.LEFT)
+
+    def _create_controls(self, parent):
+        """Create slice navigation controls."""
+        controls_frame = ttk.LabelFrame(parent, text="Navigation", padding=5)
+        controls_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
+
+        # View selection
+        view_frame = ttk.Frame(controls_frame)
+        view_frame.pack(fill=tk.X, pady=(0, 5))
+
+        ttk.Label(view_frame, text="View:").pack(side=tk.LEFT)
+        self.view_var = tk.StringVar(value="axial")
+        for view in ["axial", "coronal", "sagittal"]:
+            ttk.Radiobutton(
+                view_frame,
+                text=view.capitalize(),
+                value=view,
+                variable=self.view_var,
+                command=self._on_view_change,
+            ).pack(side=tk.LEFT, padx=3)
+
+        # Slice slider
+        slice_frame = ttk.Frame(controls_frame)
+        slice_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(slice_frame, text="Slice:").pack(side=tk.LEFT)
+
+        self.slice_var = tk.IntVar(value=0)
+        self.slice_slider = ttk.Scale(
+            slice_frame,
+            from_=0,
+            to=100,
+            variable=self.slice_var,
+            orient=tk.HORIZONTAL,
+            command=self._on_slice_change,
+            length=150,
+        )
+        self.slice_slider.pack(side=tk.LEFT, padx=5)
+
+        self.slice_label = ttk.Label(slice_frame, text="0 / 0")
+        self.slice_label.pack(side=tk.LEFT)
+
+        # Zoom controls
+        zoom_frame = ttk.Frame(controls_frame)
+        zoom_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(zoom_frame, text="Zoom:").pack(side=tk.LEFT)
+        ttk.Button(zoom_frame, text="-", width=3, command=self._zoom_out).pack(side=tk.LEFT, padx=2)
+
+        self.zoom_label = ttk.Label(zoom_frame, text="100%", width=6)
+        self.zoom_label.pack(side=tk.LEFT)
+
+        ttk.Button(zoom_frame, text="+", width=3, command=self._zoom_in).pack(side=tk.LEFT, padx=2)
+        ttk.Button(zoom_frame, text="Fit", width=4, command=self._zoom_fit).pack(
+            side=tk.LEFT, padx=5
+        )
+
+    def _create_metrics_panel(self, parent):
+        """Create ALPS metrics display panel."""
+        metrics_frame = ttk.LabelFrame(parent, text="ALPS Metrics", padding=10)
+        metrics_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Subject info
+        info_frame = ttk.Frame(metrics_frame)
+        info_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(info_frame, text="Subject:", font=("TkDefaultFont", 9, "bold")).pack(side=tk.LEFT)
+        self.subject_info_label = ttk.Label(info_frame, text="None selected")
+        self.subject_info_label.pack(side=tk.LEFT, padx=5)
+
+        # ALPS values in a grid
+        values_frame = ttk.Frame(metrics_frame)
+        values_frame.pack(fill=tk.X)
+
+        # Headers
+        ttk.Label(values_frame, text="Left ALPS:", font=("TkDefaultFont", 9)).grid(
+            row=0, column=0, sticky=tk.W, padx=(0, 10)
+        )
+        ttk.Label(values_frame, text="Right ALPS:", font=("TkDefaultFont", 9)).grid(
+            row=0, column=2, sticky=tk.W, padx=(20, 10)
+        )
+        ttk.Label(values_frame, text="Combined:", font=("TkDefaultFont", 9)).grid(
+            row=0, column=4, sticky=tk.W, padx=(20, 10)
+        )
+
+        # Values
+        self.alps_left_label = ttk.Label(
+            values_frame, text="--", font=("TkDefaultFont", 11, "bold")
+        )
+        self.alps_left_label.grid(row=0, column=1, sticky=tk.W)
+
+        self.alps_right_label = ttk.Label(
+            values_frame, text="--", font=("TkDefaultFont", 11, "bold")
+        )
+        self.alps_right_label.grid(row=0, column=3, sticky=tk.W)
+
+        self.alps_combined_label = ttk.Label(
+            values_frame, text="--", font=("TkDefaultFont", 11, "bold")
+        )
+        self.alps_combined_label.grid(row=0, column=5, sticky=tk.W)
+
+        # Status
+        status_frame = ttk.Frame(metrics_frame)
+        status_frame.pack(fill=tk.X, pady=(10, 0))
+
+        ttk.Label(status_frame, text="Status:").pack(side=tk.LEFT)
+        self.status_value_label = ttk.Label(status_frame, text="--")
+        self.status_value_label.pack(side=tk.LEFT, padx=5)
+
+    def _browse_folder(self):
+        """Open folder browser and load results."""
+        folder = filedialog.askdirectory(title="Select DTI-ALPS Output Folder")
+        if folder:
+            self._load_output_folder(folder)
+
+    def _load_output_folder(self, folder_path: str):
+        """Load all results from an output folder."""
+        folder = Path(folder_path)
+
+        if not folder.exists():
+            messagebox.showerror("Error", f"Folder does not exist:\n{folder}")
+            return
+
+        # Look for alps_results.csv
+        csv_path = folder / "alps_results.csv"
+        if not csv_path.exists():
+            messagebox.showerror(
+                "Error",
+                f"No alps_results.csv found in:\n{folder}\n\nIs this a valid output folder?",
+            )
+            return
+
+        # Clear existing data
+        self.subjects.clear()
+        for item in self.subject_tree.get_children():
+            self.subject_tree.delete(item)
+
+        # Parse CSV
+        alps_data = self._parse_alps_csv(csv_path)
+
+        # Find subject folders and match with CSV data
+        for subject_folder in sorted(folder.iterdir()):
+            if not subject_folder.is_dir():
+                continue
+
+            subject_id = subject_folder.name
+
+            # Find FA and V1 files
+            fa_files = list(subject_folder.glob("*_FA.nii.gz"))
+            v1_files = list(subject_folder.glob("*_V1.nii.gz"))
+
+            if not fa_files or not v1_files:
+                continue  # Skip folders without required files
+
+            # Find ROI files
+            roi_dir = subject_folder / "rois"
+            roi_paths = {}
+            if roi_dir.exists():
+                for roi_type in ["proj_left", "proj_right", "assoc_left", "assoc_right"]:
+                    roi_files = list(roi_dir.glob(f"*_{roi_type}.nii.gz"))
+                    if roi_files:
+                        roi_paths[roi_type] = roi_files[0]
+
+            # Create SubjectData
+            subject_data = SubjectData(
+                subject_id=subject_id,
+                folder_path=subject_folder,
+                fa_path=fa_files[0],
+                v1_path=v1_files[0],
+                roi_paths=roi_paths,
+            )
+
+            # Add ALPS metrics from CSV
+            if subject_id in alps_data:
+                csv_row = alps_data[subject_id]
+                subject_data.alps_left = csv_row.get("alps_left")
+                subject_data.alps_right = csv_row.get("alps_right")
+                subject_data.alps_combined = csv_row.get("alps_combined")
+                subject_data.status = csv_row.get("status", "")
+                subject_data.error = csv_row.get("error", "")
+
+            self.subjects[subject_id] = subject_data
+
+            # Add to tree
+            status = subject_data.status if subject_data.status else "unknown"
+            self.subject_tree.insert("", tk.END, iid=subject_id, values=(subject_id, status))
+
+        if not self.subjects:
+            messagebox.showinfo("Info", "No valid subject folders found in the output directory.")
+        else:
+            # Select first subject
+            first_id = list(self.subjects.keys())[0]
+            self.subject_tree.selection_set(first_id)
+            self._select_subject(first_id)
+
+    def _parse_alps_csv(self, csv_path: Path) -> dict:
+        """Parse alps_results.csv and return dict keyed by subject ID."""
+        alps_data = {}
+
+        with open(csv_path, newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                subject_id = row.get("Filename", "")
+                if not subject_id:
+                    continue
+
+                try:
+                    alps_left = float(row.get("Left Hemisphere ALPS", ""))
+                except (ValueError, TypeError):
+                    alps_left = None
+
+                try:
+                    alps_right = float(row.get("Right Hemisphere ALPS", ""))
+                except (ValueError, TypeError):
+                    alps_right = None
+
+                try:
+                    alps_combined = float(row.get("Combined ALPS", ""))
+                except (ValueError, TypeError):
+                    alps_combined = None
+
+                alps_data[subject_id] = {
+                    "alps_left": alps_left,
+                    "alps_right": alps_right,
+                    "alps_combined": alps_combined,
+                    "status": row.get("Status", ""),
+                    "error": row.get("Error", ""),
+                }
+
+        return alps_data
+
+    def _on_subject_select(self, event):
+        """Handle subject selection in tree."""
+        selection = self.subject_tree.selection()
+        if selection:
+            subject_id = selection[0]
+            self._select_subject(subject_id)
+
+    def _select_subject(self, subject_id: str):
+        """Load and display a subject's data."""
+        if subject_id not in self.subjects:
+            return
+
+        # Unload previous subject's images
+        if self.current_subject:
+            self.current_subject.unload_images()
+
+        self.current_subject = self.subjects[subject_id]
+
+        # Update metrics display
+        self._update_metrics_display()
+
+        # Load images
+        if not self.current_subject.load_images():
+            messagebox.showwarning("Warning", f"Could not load images for subject: {subject_id}")
+            return
+
+        # Reset slice to middle
+        shape = self.current_subject.shape
+        if shape:
+            self._update_slice_range()
+            self.current_slice = self._get_num_slices() // 2
+            self.slice_var.set(self.current_slice)
+
+        # Auto-fit image to canvas (after canvas has been sized)
+        self.update_idletasks()
+        self._zoom_fit()
+
+        self._update_display()
+
+    def _update_metrics_display(self):
+        """Update ALPS metrics labels for current subject."""
+        if not self.current_subject:
+            self.subject_info_label.config(text="None selected")
+            self.alps_left_label.config(text="--")
+            self.alps_right_label.config(text="--")
+            self.alps_combined_label.config(text="--")
+            self.status_value_label.config(text="--")
+            return
+
+        subject = self.current_subject
+
+        self.subject_info_label.config(text=subject.subject_id)
+
+        if subject.alps_left is not None:
+            self.alps_left_label.config(text=f"{subject.alps_left:.4f}")
+        else:
+            self.alps_left_label.config(text="--")
+
+        if subject.alps_right is not None:
+            self.alps_right_label.config(text=f"{subject.alps_right:.4f}")
+        else:
+            self.alps_right_label.config(text="--")
+
+        if subject.alps_combined is not None:
+            self.alps_combined_label.config(text=f"{subject.alps_combined:.4f}")
+        else:
+            self.alps_combined_label.config(text="--")
+
+        self.status_value_label.config(text=subject.status if subject.status else "--")
+
+    def _get_num_slices(self) -> int:
+        """Get number of slices for current view."""
+        if not self.current_subject or self.current_subject.shape is None:
+            return 0
+
+        shape = self.current_subject.shape
+        view = self.view_var.get()
+
+        if view == "axial":
+            return shape[2] if len(shape) > 2 else 0
+        elif view == "coronal":
+            return shape[1] if len(shape) > 1 else 0
+        else:  # sagittal
+            return shape[0]
+
+    def _update_slice_range(self):
+        """Update slice slider range for current view."""
+        num_slices = self._get_num_slices()
+        if num_slices > 0:
+            self.slice_slider.config(to=num_slices - 1)
+            self.slice_label.config(text=f"{self.current_slice} / {num_slices - 1}")
+
+    def _update_display(self):
+        """Update the image display."""
+        if not self.current_subject or self.current_subject.fa_data is None:
+            self.canvas.delete("all")
+            return
+
+        # Create DEC image
+        dec_image = self._create_dec_image()
+        if dec_image is None:
+            return
+
+        # Add ROI overlays if enabled
+        if self.show_rois_var.get():
+            dec_image = self._add_roi_overlay(dec_image)
+
+        # Apply zoom and display
+        self._display_image(dec_image)
+
+        # Update slice label
+        num_slices = self._get_num_slices()
+        self.slice_label.config(text=f"{self.current_slice} / {num_slices - 1}")
+
+    def _create_dec_image(self) -> np.ndarray | None:
+        """Create FA-modulated direction-encoded color image for current slice."""
+        subject = self.current_subject
+        if subject is None or subject.fa_data is None or subject.v1_data is None:
+            return None
+
+        fa = subject.fa_data
+        v1 = subject.v1_data
+        view = self.view_var.get()
+        s = self.current_slice
+
+        # Extract slice based on view
+        if view == "axial":
+            if s >= fa.shape[2]:
+                return None
+            fa_slice = fa[:, :, s]
+            v1_slice = v1[:, :, s, :]
+        elif view == "coronal":
+            if s >= fa.shape[1]:
+                return None
+            fa_slice = fa[:, s, :]
+            v1_slice = v1[:, s, :, :]
+        else:  # sagittal
+            if s >= fa.shape[0]:
+                return None
+            fa_slice = fa[s, :, :]
+            v1_slice = v1[s, :, :, :]
+
+        # Create RGB from V1 (absolute values since direction doesn't matter)
+        # V1 is [x, y, z] -> RGB mapping: |x|=R, |y|=G, |z|=B
+        rgb = np.abs(v1_slice)
+
+        # Normalize RGB values
+        rgb_max = np.max(rgb, axis=-1, keepdims=True)
+        rgb_max = np.where(rgb_max > 0, rgb_max, 1)
+        rgb = rgb / rgb_max
+
+        # Modulate by FA
+        fa_norm = np.clip(fa_slice / np.max(fa_slice) if np.max(fa_slice) > 0 else fa_slice, 0, 1)
+        fa_mod = fa_norm[:, :, np.newaxis]
+
+        rgb_modulated = rgb * fa_mod
+
+        # Convert to uint8
+        rgb_uint8 = (np.clip(rgb_modulated, 0, 1) * 255).astype(np.uint8)
+
+        return rgb_uint8
+
+    def _add_roi_overlay(self, dec_image: np.ndarray) -> np.ndarray:
+        """Add ROI overlays to the DEC image as solid white."""
+        subject = self.current_subject
+        if subject is None or not subject.roi_data:
+            return dec_image
+
+        # Work with a copy
+        result = dec_image.copy()
+
+        view = self.view_var.get()
+        s = self.current_slice
+
+        # Combine all ROI masks into one
+        combined_mask = None
+
+        for roi_vol in subject.roi_data.values():
+            # Extract ROI slice
+            if view == "axial":
+                if s >= roi_vol.shape[2]:
+                    continue
+                roi_slice = roi_vol[:, :, s]
+            elif view == "coronal":
+                if s >= roi_vol.shape[1]:
+                    continue
+                roi_slice = roi_vol[:, s, :]
+            else:  # sagittal
+                if s >= roi_vol.shape[0]:
+                    continue
+                roi_slice = roi_vol[s, :, :]
+
+            # Create mask
+            mask = roi_slice > 0
+
+            if combined_mask is None:
+                combined_mask = mask
+            else:
+                combined_mask = combined_mask | mask
+
+        if combined_mask is not None and np.any(combined_mask):
+            # Apply solid white to all ROI voxels
+            result[combined_mask] = [255, 255, 255]
+
+        return result
+
+    def _display_image(self, image: np.ndarray):
+        """Display the image on the canvas."""
+        # Rotate/flip for proper orientation
+        view = self.view_var.get()
+
+        if view == "axial":
+            # Rotate 90 degrees counterclockwise and flip
+            image = np.rot90(image, k=1)
+            image = np.fliplr(image)
+        elif view == "coronal":
+            image = np.rot90(image, k=1)
+            image = np.fliplr(image)
+        else:  # sagittal
+            image = np.rot90(image, k=1)
+
+        # Apply zoom
+        h, w = image.shape[:2]
+        new_w = max(1, int(w * self.zoom_level))
+        new_h = max(1, int(h * self.zoom_level))
+
+        # Convert to PIL Image
+        if image.shape[-1] == 4:
+            pil_image = Image.fromarray(image, mode="RGBA")
+        else:
+            pil_image = Image.fromarray(image, mode="RGB")
+
+        pil_image = pil_image.resize((new_w, new_h), Image.Resampling.NEAREST)
+
+        # Convert to PhotoImage
+        self._photo_image = ImageTk.PhotoImage(pil_image)
+
+        # Update canvas
+        self.canvas.delete("all")
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+
+        # Center image
+        x = max(0, (canvas_w - new_w) // 2)
+        y = max(0, (canvas_h - new_h) // 2)
+
+        self.canvas.create_image(x, y, anchor=tk.NW, image=self._photo_image)
+
+    def _on_view_change(self):
+        """Handle view type change."""
+        self._update_slice_range()
+        # Reset to middle slice
+        self.current_slice = self._get_num_slices() // 2
+        self.slice_var.set(self.current_slice)
+        self._update_display()
+
+    def _on_slice_change(self, value):
+        """Handle slice slider change."""
+        self.current_slice = int(float(value))
+        self._update_display()
+
+    def _on_mousewheel(self, event):
+        """Handle mouse wheel for slice scrolling."""
+        # Determine scroll direction
+        if event.num == 4 or event.delta > 0:
+            delta = 1
+        else:
+            delta = -1
+
+        num_slices = self._get_num_slices()
+        if num_slices > 0:
+            new_slice = max(0, min(num_slices - 1, self.current_slice + delta))
+            if new_slice != self.current_slice:
+                self.current_slice = new_slice
+                self.slice_var.set(self.current_slice)
+                self._update_display()
+
+    def _set_view(self, view: str):
+        """Set the current view type."""
+        self.view_var.set(view)
+        self._on_view_change()
+
+    def _zoom_in(self):
+        """Increase zoom level."""
+        self.zoom_level = min(5.0, self.zoom_level * 1.25)
+        self.zoom_label.config(text=f"{int(self.zoom_level * 100)}%")
+        self._update_display()
+
+    def _zoom_out(self):
+        """Decrease zoom level."""
+        self.zoom_level = max(0.25, self.zoom_level / 1.25)
+        self.zoom_label.config(text=f"{int(self.zoom_level * 100)}%")
+        self._update_display()
+
+    def _zoom_fit(self):
+        """Fit image to canvas."""
+        if not self.current_subject or self.current_subject.shape is None:
+            return
+
+        shape = self.current_subject.shape
+        view = self.view_var.get()
+
+        if view == "axial":
+            img_w, img_h = shape[0], shape[1]
+        elif view == "coronal":
+            img_w, img_h = shape[0], shape[2]
+        else:
+            img_w, img_h = shape[1], shape[2]
+
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+
+        if img_w > 0 and img_h > 0:
+            zoom_w = canvas_w / img_w
+            zoom_h = canvas_h / img_h
+            self.zoom_level = min(zoom_w, zoom_h) * 0.9
+            self.zoom_label.config(text=f"{int(self.zoom_level * 100)}%")
+            self._update_display()
+
+
+def launch_viewer(output_folder: str | None = None):
+    """Launch the results viewer as a standalone application."""
+    root = tk.Tk()
+    root.withdraw()  # Hide the root window
+
+    viewer = ResultsViewer(root, output_folder)
+    viewer.protocol("WM_DELETE_WINDOW", lambda: (viewer.destroy(), root.destroy()))
+
+    viewer.mainloop()
+
+
+if __name__ == "__main__":
+    launch_viewer()
