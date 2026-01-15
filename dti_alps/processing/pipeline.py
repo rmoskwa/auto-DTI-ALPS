@@ -7,11 +7,14 @@ import queue
 import subprocess
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from ..gui import config
 from . import commands
+
+if TYPE_CHECKING:
+    from .discovery import SubjectFiles
 
 
 @dataclass
@@ -72,6 +75,100 @@ class PipelineState:
         self.tensor_path = self.get_output_path("tensor.nii.gz")
         self.fa_path = self.get_output_path("FA.nii.gz")
         self.v1_path = self.get_output_path("V1.nii.gz")
+
+
+@dataclass
+class BatchConfig:
+    """
+    Common parameters shared across all subjects in a batch.
+
+    These parameters are applied uniformly to all subjects unless
+    auto-extraction is enabled (e.g., readout_time from JSON sidecars).
+    """
+
+    # Preprocessing parameters
+    pe_direction: str = config.DEFAULT_PE_DIRECTION
+    auto_pe_direction: bool = True  # Auto-extract PE direction from JSON if available
+    readout_time: float | None = None  # None = auto-extract from JSON/NIfTI
+    rpe_scheme: str = config.DEFAULT_RPE_SCHEME
+
+    # Additional preprocessing options
+    eddy_options: str = ""
+    topup_options: str = ""
+    generate_qc: bool = False
+    keep_intermediates: bool = False
+
+    # ROI detection parameters
+    fa_thresh: float = config.DEFAULT_FA_THRESH
+    orient_thresh: float = config.DEFAULT_ORIENT_THRESH
+    min_zone_width: int = config.DEFAULT_MIN_ZONE_WIDTH
+    roi_radius_mm: float = config.DEFAULT_ROI_RADIUS_MM
+    z_tolerance: int = config.DEFAULT_Z_TOLERANCE
+
+    # Output settings
+    output_dir: str = ""
+
+
+@dataclass
+class SubjectResult:
+    """
+    Results for a single subject in batch processing.
+
+    Tracks both successful results and failure information.
+    """
+
+    subject_id: str
+    folder_path: str
+    status: str = "pending"  # "pending", "running", "completed", "failed", "skipped"
+    alps_left: float | None = None
+    alps_right: float | None = None
+    alps_bilateral: float | None = None
+    error_message: str | None = None
+    processing_time: float = 0.0
+
+    # Detailed diffusivity values (optional, populated on success)
+    dxx_proj_left: float | None = None
+    dxx_proj_right: float | None = None
+    dyy_proj_left: float | None = None
+    dyy_proj_right: float | None = None
+    dxx_assoc_left: float | None = None
+    dxx_assoc_right: float | None = None
+    dzz_assoc_left: float | None = None
+    dzz_assoc_right: float | None = None
+
+
+@dataclass
+class BatchState:
+    """
+    State for batch processing of multiple subjects.
+
+    Holds configuration, subject list, and accumulated results.
+    """
+
+    config: BatchConfig
+    subjects: list["SubjectFiles"] = field(default_factory=list)
+    results: list[SubjectResult] = field(default_factory=list)
+    current_subject_index: int = 0
+
+    @property
+    def total_subjects(self) -> int:
+        """Get total number of subjects in batch."""
+        return len(self.subjects)
+
+    @property
+    def completed_count(self) -> int:
+        """Get number of subjects that have been processed (success or fail)."""
+        return sum(1 for r in self.results if r.status in ("completed", "failed", "skipped"))
+
+    @property
+    def success_count(self) -> int:
+        """Get number of successfully processed subjects."""
+        return sum(1 for r in self.results if r.status == "completed")
+
+    @property
+    def failed_count(self) -> int:
+        """Get number of failed subjects."""
+        return sum(1 for r in self.results if r.status == "failed")
 
 
 class PipelineRunner:
@@ -493,6 +590,351 @@ class PipelineWorker(threading.Thread):
                     self.result_queue.put(("cancelled", None))
                 else:
                     self.result_queue.put(("failed", None))
+
+        except Exception as e:
+            self.result_queue.put(("error", str(e)))
+
+
+class BatchRunner:
+    """
+    Orchestrates batch processing of multiple subjects.
+
+    Processes subjects sequentially, maintaining progress state
+    and handling partial failures gracefully.
+    """
+
+    def __init__(
+        self,
+        batch_state: BatchState,
+        progress_callback: Callable[[str, Any], None] | None = None,
+    ):
+        """
+        Initialize the batch runner.
+
+        Parameters
+        ----------
+        batch_state : BatchState
+            Batch configuration and subject list
+        progress_callback : callable, optional
+            Callback function for progress updates
+        """
+        self.batch_state = batch_state
+        self.progress_callback = progress_callback or (lambda t, d: None)
+        self.cancelled = False
+
+    def _notify(self, msg_type: str, data: Any) -> None:
+        """Send notification via callback."""
+        self.progress_callback(msg_type, data)
+
+    def _create_subject_pipeline_state(self, subject_files: "SubjectFiles") -> PipelineState:
+        """
+        Convert SubjectFiles + BatchConfig into PipelineState for single-subject processing.
+
+        Parameters
+        ----------
+        subject_files : SubjectFiles
+            Files for this subject
+
+        Returns
+        -------
+        PipelineState
+            Configured state for single-subject pipeline
+        """
+        from .discovery import (
+            extract_phase_encoding_direction,
+            extract_readout_time,
+            parse_json_sidecar,
+        )
+
+        batch_config = self.batch_state.config
+
+        # Parse JSON sidecar if available
+        json_data = {}
+        if subject_files.json_sidecar_path:
+            json_data = parse_json_sidecar(subject_files.json_sidecar_path)
+
+        # Determine readout time: from config, or auto-extract from JSON/NIfTI
+        readout_time = batch_config.readout_time
+        if readout_time is None:
+            readout_time = extract_readout_time(json_data, subject_files.dwi_path)
+
+        if readout_time is None:
+            readout_time = config.DEFAULT_READOUT_TIME  # fallback default
+            self._notify(
+                "log",
+                f"  Warning: Could not extract readout time for {subject_files.subject_id}, "
+                f"using default {readout_time}s",
+            )
+
+        # Determine PE direction: from config, or auto-extract from JSON
+        pe_direction = batch_config.pe_direction
+        if batch_config.auto_pe_direction and json_data:
+            extracted_pe = extract_phase_encoding_direction(json_data)
+            if extracted_pe:
+                pe_direction = extracted_pe
+                self._notify(
+                    "log", f"  Auto-detected PE direction: {pe_direction} (from JSON sidecar)"
+                )
+
+        # Create per-subject output directory
+        subject_output_dir = os.path.join(batch_config.output_dir, subject_files.subject_id)
+
+        state = PipelineState(
+            # Input files
+            dwi_path=subject_files.dwi_path,
+            bvecs_path=subject_files.bvec_path,
+            bvals_path=subject_files.bval_path,
+            json_sidecar_path=subject_files.json_sidecar_path,
+            reverse_pe_path=subject_files.reverse_pe_path,
+            # Preprocessing parameters
+            pe_direction=pe_direction,
+            readout_time=readout_time,
+            rpe_scheme=batch_config.rpe_scheme,
+            eddy_options=batch_config.eddy_options,
+            topup_options=batch_config.topup_options,
+            generate_qc=batch_config.generate_qc,
+            keep_intermediates=batch_config.keep_intermediates,
+            # ROI detection parameters
+            fa_thresh=batch_config.fa_thresh,
+            orient_thresh=batch_config.orient_thresh,
+            min_zone_width=batch_config.min_zone_width,
+            roi_radius_mm=batch_config.roi_radius_mm,
+            z_tolerance=batch_config.z_tolerance,
+            # Output settings
+            output_dir=subject_output_dir,
+            output_prefix=subject_files.subject_id,
+        )
+
+        return state
+
+    def run_batch(self) -> bool:
+        """
+        Run batch processing for all subjects.
+
+        Returns
+        -------
+        bool
+            True if all subjects succeeded, False if any failed
+        """
+
+        total = self.batch_state.total_subjects
+        self._notify("batch_start", total)
+        self._notify("log", f"Starting batch processing for {total} subjects")
+
+        for i, subject_files in enumerate(self.batch_state.subjects):
+            if self.cancelled:
+                self._mark_remaining_skipped(i)
+                break
+
+            self.batch_state.current_subject_index = i
+            result = self._process_single_subject(subject_files, i)
+            self.batch_state.results.append(result)
+
+            self._notify("subject_complete", (i, result))
+
+        # Write CSV output
+        self._write_csv_results()
+
+        self._notify("batch_complete", self.batch_state)
+        return self.batch_state.success_count == self.batch_state.total_subjects
+
+    def _process_single_subject(self, subject_files: "SubjectFiles", index: int) -> SubjectResult:
+        """
+        Process a single subject with error handling.
+
+        Parameters
+        ----------
+        subject_files : SubjectFiles
+            Files for this subject
+        index : int
+            Index in subject list
+
+        Returns
+        -------
+        SubjectResult
+            Result object with status and values
+        """
+        import time
+
+        start_time = time.time()
+
+        result = SubjectResult(
+            subject_id=subject_files.subject_id,
+            folder_path=subject_files.folder_path,
+            status="running",
+        )
+
+        self._notify("subject_start", (index, subject_files.subject_id))
+        self._notify(
+            "log",
+            f"Processing subject {index + 1}/{self.batch_state.total_subjects}: "
+            f"{subject_files.subject_id}",
+        )
+
+        try:
+            # Create single-subject state
+            state = self._create_subject_pipeline_state(subject_files)
+
+            # Create progress callback that forwards to batch callback
+            def subject_progress(msg_type: str, data: Any):
+                self._notify(msg_type, data)
+                # Check cancellation
+                if self.cancelled:
+                    pass  # Will be caught by runner
+
+            # Create and run single-subject pipeline
+            runner = PipelineRunner(state, progress_callback=subject_progress)
+
+            # Link cancellation
+            if self.cancelled:
+                runner.cancelled = True
+
+            success = runner.run_full_pipeline()
+
+            if success and state.alps_results:
+                result.status = "completed"
+                result.alps_left = state.alps_results.get("ALPS_left")
+                result.alps_right = state.alps_results.get("ALPS_right")
+                result.alps_bilateral = state.alps_results.get("ALPS_bilateral")
+
+                # Store detailed diffusivity values
+                result.dxx_proj_left = state.alps_results.get("Dxx_proj_left")
+                result.dxx_proj_right = state.alps_results.get("Dxx_proj_right")
+                result.dyy_proj_left = state.alps_results.get("Dyy_proj_left")
+                result.dyy_proj_right = state.alps_results.get("Dyy_proj_right")
+                result.dxx_assoc_left = state.alps_results.get("Dxx_assoc_left")
+                result.dxx_assoc_right = state.alps_results.get("Dxx_assoc_right")
+                result.dzz_assoc_left = state.alps_results.get("Dzz_assoc_left")
+                result.dzz_assoc_right = state.alps_results.get("Dzz_assoc_right")
+
+                self._notify(
+                    "log",
+                    f"  ALPS Index: L={result.alps_left:.4f}, R={result.alps_right:.4f}, "
+                    f"Bi={result.alps_bilateral:.4f}",
+                )
+            else:
+                result.status = "failed"
+                result.error_message = "Pipeline execution failed"
+                self._notify("log", "  FAILED: Pipeline execution failed")
+
+        except Exception as e:
+            result.status = "failed"
+            result.error_message = str(e)
+            self._notify("log", f"  FAILED: {e}")
+
+        result.processing_time = time.time() - start_time
+        return result
+
+    def _mark_remaining_skipped(self, start_index: int) -> None:
+        """Mark remaining subjects as skipped due to cancellation."""
+        for i in range(start_index, len(self.batch_state.subjects)):
+            subject_files = self.batch_state.subjects[i]
+            result = SubjectResult(
+                subject_id=subject_files.subject_id,
+                folder_path=subject_files.folder_path,
+                status="skipped",
+                error_message="Batch cancelled by user",
+            )
+            self.batch_state.results.append(result)
+
+    def _write_csv_results(self) -> None:
+        """Write batch results to CSV file."""
+        import csv
+
+        csv_path = os.path.join(self.batch_state.config.output_dir, "alps_results.csv")
+
+        try:
+            os.makedirs(self.batch_state.config.output_dir, exist_ok=True)
+
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(
+                    [
+                        "Filename",
+                        "Left Hemisphere ALPS",
+                        "Right Hemisphere ALPS",
+                        "Combined ALPS",
+                        "Status",
+                        "Error",
+                    ]
+                )
+
+                for result in self.batch_state.results:
+                    writer.writerow(
+                        [
+                            result.subject_id,
+                            f"{result.alps_left:.6f}" if result.alps_left is not None else "",
+                            f"{result.alps_right:.6f}" if result.alps_right is not None else "",
+                            f"{result.alps_bilateral:.6f}"
+                            if result.alps_bilateral is not None
+                            else "",
+                            result.status,
+                            result.error_message or "",
+                        ]
+                    )
+
+            self._notify("log", f"Results saved to {csv_path}")
+
+        except OSError as e:
+            self._notify("log", f"ERROR: Failed to write CSV: {e}")
+
+    def cancel(self) -> None:
+        """Request batch cancellation."""
+        self.cancelled = True
+
+
+class BatchWorker(threading.Thread):
+    """
+    Background thread for running batch processing.
+
+    Communicates with GUI via queue for thread-safe updates.
+    """
+
+    def __init__(
+        self,
+        batch_runner: BatchRunner,
+        result_queue: queue.Queue,
+        cancel_event: threading.Event,
+    ):
+        """
+        Initialize the batch worker thread.
+
+        Parameters
+        ----------
+        batch_runner : BatchRunner
+            Configured batch runner
+        result_queue : queue.Queue
+            Queue for sending results back to GUI
+        cancel_event : threading.Event
+            Event for signaling cancellation
+        """
+        super().__init__(daemon=True)
+        self.batch_runner = batch_runner
+        self.result_queue = result_queue
+        self.cancel_event = cancel_event
+
+    def run(self):
+        """Execute batch processing in background."""
+        try:
+            # Set up progress callback to send to queue
+            def progress_callback(msg_type: str, data: Any):
+                self.result_queue.put((msg_type, data))
+
+                # Check cancellation after each message
+                if self.cancel_event.is_set():
+                    self.batch_runner.cancelled = True
+
+            self.batch_runner.progress_callback = progress_callback
+
+            # Run batch
+            success = self.batch_runner.run_batch()
+
+            if self.cancel_event.is_set():
+                self.result_queue.put(("batch_cancelled", None))
+            elif success:
+                self.result_queue.put(("batch_success", self.batch_runner.batch_state))
+            else:
+                self.result_queue.put(("batch_partial", self.batch_runner.batch_state))
 
         except Exception as e:
             self.result_queue.put(("error", str(e)))

@@ -54,10 +54,10 @@ def build_dwifslpreproc_cmd(state: "PipelineState") -> list[str]:
         cmd.append("-rpe_all")
     elif state.rpe_scheme == "header":
         cmd.append("-rpe_header")
-
-    # Optional: JSON sidecar
-    if state.json_sidecar_path:
-        cmd.extend(["-json_import", state.json_sidecar_path])
+        # Only use -json_import with -rpe_header, as it relies on header/JSON for PE info
+        # Using -json_import with explicit -pe_dir/-readout_time can cause conflicts
+        if state.json_sidecar_path:
+            cmd.extend(["-json_import", state.json_sidecar_path])
 
     # Optional: Eddy mask
     if state.eddy_mask_path:

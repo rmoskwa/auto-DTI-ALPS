@@ -4,3 +4,5 @@ case*
 testCase*
 __pycache__/
 *.pyc
+CLAUDE.md
+dti_alps.egg-info

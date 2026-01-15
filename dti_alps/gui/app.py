@@ -8,8 +8,14 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from ..processing import validators
-from ..processing.pipeline import PipelineRunner, PipelineState, PipelineWorker
+from ..processing.discovery import SubjectDiscovery, SubjectFiles
+from ..processing.pipeline import (
+    BatchConfig,
+    BatchRunner,
+    BatchState,
+    BatchWorker,
+    PipelineState,
+)
 from . import config
 
 
@@ -36,6 +42,10 @@ class DTIALPSApplication(tk.Tk):
         self.worker = None
         self.result_queue = None
         self.cancel_event = None
+
+        # Batch processing state
+        self.subject_files_list: list[SubjectFiles] = []
+        self.batch_state: BatchState | None = None
 
         # Build UI
         self._create_menu()
@@ -154,87 +164,132 @@ class DTIALPSApplication(tk.Tk):
         self.log_text.config(yscrollcommand=scrollbar.set)
 
     def _create_data_frame(self):
-        """Create data acquisition frame (Stage 1)."""
+        """Create batch data input frame (Stage 1)."""
         frame = ttk.Frame(self.content_frame)
         self.stage_frames["data"] = frame
 
-        # Required files section
-        req_frame = ttk.LabelFrame(frame, text="Required Files", padding=10)
-        req_frame.pack(fill=tk.X, pady=5)
+        # Subject folders section
+        folders_frame = ttk.LabelFrame(frame, text="Subject Folders", padding=10)
+        folders_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        # DWI file
-        self._create_file_row(req_frame, "DWI Image:", "dwi", config.NIFTI_FILETYPES, 0)
+        # Instructions
+        ttk.Label(
+            folders_frame,
+            text="Add folders containing DWI data. Each folder should have a .nii.gz image "
+            "with matching .bvec and .bval files.",
+            wraplength=700,
+        ).pack(anchor=tk.W, pady=(0, 10))
 
-        # bvecs file
-        self._create_file_row(req_frame, "bvecs File:", "bvecs", config.BVEC_FILETYPES, 1)
+        # Treeview for subject list
+        tree_frame = ttk.Frame(folders_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
 
-        # bvals file
-        self._create_file_row(req_frame, "bvals File:", "bvals", config.BVAL_FILETYPES, 2)
+        columns = ("subject_id", "folder", "status", "files")
+        self.subjects_tree = ttk.Treeview(
+            tree_frame,
+            columns=columns,
+            show="headings",
+            selectmode="extended",
+            height=8,
+        )
 
-        # Phase encoding section
-        pe_frame = ttk.LabelFrame(frame, text="Phase Encoding", padding=10)
-        pe_frame.pack(fill=tk.X, pady=5)
+        self.subjects_tree.heading("subject_id", text="Subject ID")
+        self.subjects_tree.heading("folder", text="Folder Path")
+        self.subjects_tree.heading("status", text="Status")
+        self.subjects_tree.heading("files", text="Files Found")
 
-        # PE direction
-        ttk.Label(pe_frame, text="Direction:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.subjects_tree.column("subject_id", width=120)
+        self.subjects_tree.column("folder", width=350)
+        self.subjects_tree.column("status", width=100)
+        self.subjects_tree.column("files", width=150)
+
+        # Scrollbars
+        y_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.subjects_tree.yview)
+        x_scroll = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.subjects_tree.xview)
+        self.subjects_tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+
+        # Grid layout for tree + scrollbars
+        self.subjects_tree.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+        tree_frame.columnconfigure(0, weight=1)
+        tree_frame.rowconfigure(0, weight=1)
+
+        # Buttons frame
+        btn_frame = ttk.Frame(folders_frame)
+        btn_frame.pack(fill=tk.X, pady=10)
+
+        ttk.Button(btn_frame, text="Add Folder...", command=self._add_subject_folder).pack(
+            side=tk.LEFT, padx=5
+        )
+        ttk.Button(btn_frame, text="Remove Selected", command=self._remove_selected_subjects).pack(
+            side=tk.LEFT, padx=5
+        )
+        ttk.Button(btn_frame, text="Clear All", command=self._clear_all_subjects).pack(
+            side=tk.LEFT, padx=5
+        )
+
+        # Common parameters section
+        params_frame = ttk.LabelFrame(frame, text="Common Parameters", padding=10)
+        params_frame.pack(fill=tk.X, pady=5)
+
+        # Row 1: PE direction with auto-extract option
+        ttk.Label(params_frame, text="PE Direction:").grid(row=0, column=0, sticky=tk.W, pady=2)
+
+        self.pe_auto_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            params_frame,
+            text="Auto from JSON",
+            variable=self.pe_auto_var,
+            command=self._on_pe_auto_change,
+        ).grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+
         self.pe_dir_var = tk.StringVar(value=config.DEFAULT_PE_DIRECTION)
-        pe_combo = ttk.Combobox(
-            pe_frame,
+        self.pe_combo = ttk.Combobox(
+            params_frame,
             textvariable=self.pe_dir_var,
             values=config.PE_DIRECTIONS,
+            width=8,
+            state="disabled",  # Start disabled (auto mode)
+        )
+        self.pe_combo.grid(row=0, column=2, sticky=tk.W, padx=5, pady=2)
+
+        # Row 2: Readout time with auto-extract option
+        ttk.Label(params_frame, text="Readout Time:").grid(row=1, column=0, sticky=tk.W, pady=2)
+
+        self.readout_auto_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            params_frame,
+            text="Auto from JSON/NIfTI",
+            variable=self.readout_auto_var,
+            command=self._on_readout_auto_change,
+        ).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+
+        self.readout_var = tk.StringVar(value=str(config.DEFAULT_READOUT_TIME))
+        self.readout_entry = ttk.Entry(params_frame, textvariable=self.readout_var, width=10)
+        self.readout_entry.grid(row=1, column=2, sticky=tk.W, padx=5, pady=2)
+        self.readout_entry.config(state=tk.DISABLED)  # Start disabled (auto mode)
+
+        ttk.Label(params_frame, text="(seconds)").grid(row=1, column=3, sticky=tk.W, pady=2)
+
+        # Row 3: RPE scheme
+        ttk.Label(params_frame, text="RPE Scheme:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        self.rpe_var = tk.StringVar(value=config.DEFAULT_RPE_SCHEME)
+        rpe_combo = ttk.Combobox(
+            params_frame,
+            textvariable=self.rpe_var,
+            values=list(config.RPE_SCHEMES.keys()),
             width=10,
             state="readonly",
         )
-        pe_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        rpe_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
 
-        # Readout time
-        ttk.Label(pe_frame, text="Readout Time (s):").grid(
-            row=0, column=2, sticky=tk.W, padx=(20, 0), pady=2
+        # RPE description label
+        self.rpe_desc_label = ttk.Label(
+            params_frame, text=config.RPE_SCHEMES.get(config.DEFAULT_RPE_SCHEME, "")
         )
-        self.readout_var = tk.StringVar(value=str(config.DEFAULT_READOUT_TIME))
-        readout_entry = ttk.Entry(pe_frame, textvariable=self.readout_var, width=10)
-        readout_entry.grid(row=0, column=3, sticky=tk.W, padx=5, pady=2)
-
-        # RPE scheme section
-        rpe_frame = ttk.LabelFrame(frame, text="Reverse Phase Encoding", padding=10)
-        rpe_frame.pack(fill=tk.X, pady=5)
-
-        self.rpe_var = tk.StringVar(value=config.DEFAULT_RPE_SCHEME)
-
-        for i, (scheme, desc) in enumerate(config.RPE_SCHEMES.items()):
-            ttk.Radiobutton(
-                rpe_frame,
-                text=f"{scheme}: {desc}",
-                variable=self.rpe_var,
-                value=scheme,
-                command=self._on_rpe_change,
-            ).grid(row=i, column=0, columnspan=3, sticky=tk.W, pady=2)
-
-        # Reverse PE file (conditional)
-        self.reverse_pe_frame = ttk.Frame(rpe_frame)
-        self.reverse_pe_frame.grid(
-            row=len(config.RPE_SCHEMES), column=0, columnspan=3, sticky=tk.EW, pady=5
-        )
-
-        ttk.Label(self.reverse_pe_frame, text="Reverse PE b=0:").pack(side=tk.LEFT)
-        self.reverse_pe_var = tk.StringVar()
-        self.reverse_pe_entry = ttk.Entry(
-            self.reverse_pe_frame, textvariable=self.reverse_pe_var, width=50
-        )
-        self.reverse_pe_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        ttk.Button(
-            self.reverse_pe_frame,
-            text="Browse...",
-            command=lambda: self._browse_file("reverse_pe", config.NIFTI_FILETYPES),
-        ).pack(side=tk.LEFT)
-
-        self._on_rpe_change()  # Set initial state
-
-        # Optional files
-        self.json_frame = ttk.LabelFrame(frame, text="Optional Files", padding=10)
-        self.json_frame.pack(fill=tk.X, pady=5)
-
-        self._create_file_row(self.json_frame, "JSON Sidecar:", "json", config.JSON_FILETYPES, 0)
+        self.rpe_desc_label.grid(row=2, column=2, columnspan=4, sticky=tk.W, padx=5, pady=2)
+        rpe_combo.bind("<<ComboboxSelected>>", self._on_rpe_combo_change)
 
         # Output settings
         out_frame = ttk.LabelFrame(frame, text="Output", padding=10)
@@ -249,13 +304,125 @@ class DTIALPSApplication(tk.Tk):
             row=0, column=2, pady=2
         )
 
-        ttk.Label(out_frame, text="Output Prefix:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self.output_prefix_var = tk.StringVar(value="subject")
-        ttk.Entry(out_frame, textvariable=self.output_prefix_var, width=20).grid(
-            row=1, column=1, sticky=tk.W, padx=5, pady=2
-        )
-
         out_frame.columnconfigure(1, weight=1)
+
+    def _on_pe_auto_change(self):
+        """Handle PE direction auto-extract checkbox change."""
+        if self.pe_auto_var.get():
+            self.pe_combo.config(state="disabled")
+        else:
+            self.pe_combo.config(state="readonly")
+
+    def _on_readout_auto_change(self):
+        """Handle readout time auto-extract checkbox change."""
+        if self.readout_auto_var.get():
+            self.readout_entry.config(state=tk.DISABLED)
+        else:
+            self.readout_entry.config(state=tk.NORMAL)
+
+    def _on_rpe_combo_change(self, event=None):
+        """Handle RPE scheme combobox change."""
+        scheme = self.rpe_var.get()
+        desc = config.RPE_SCHEMES.get(scheme, "")
+        self.rpe_desc_label.config(text=desc)
+
+    def _add_subject_folder(self):
+        """Add a folder and discover all DWI runs within it."""
+        folder = filedialog.askdirectory(title="Select Folder with DWI Data")
+        if folder:
+            self._discover_and_add_folder(folder)
+
+    def _discover_and_add_folder(self, folder_path: str) -> int:
+        """
+        Discover all DWI runs in folder and add each as a separate subject entry.
+
+        Returns the number of runs successfully added.
+        """
+        try:
+            discovery = SubjectDiscovery(folder_path)
+            discovered_runs = discovery.discover_files()
+
+            if not discovered_runs:
+                messagebox.showinfo(
+                    "No Data Found",
+                    f"No DWI files with matching bvec/bval files found in:\n{folder_path}",
+                )
+                return 0
+
+            added = 0
+            for subject_files in discovered_runs:
+                # Check for duplicates by DWI path (more specific than folder)
+                is_duplicate = False
+                for existing in self.subject_files_list:
+                    if existing.dwi_path == subject_files.dwi_path:
+                        is_duplicate = True
+                        break
+
+                if is_duplicate:
+                    continue
+
+                # Determine status
+                if subject_files.is_valid:
+                    status = "Ready"
+                else:
+                    status = "Missing Files"
+
+                files_found = subject_files.get_files_summary()
+
+                # Add to tree
+                self.subjects_tree.insert(
+                    "",
+                    tk.END,
+                    values=(
+                        subject_files.subject_id,
+                        folder_path,
+                        status,
+                        files_found,
+                    ),
+                )
+
+                # Store SubjectFiles object
+                self.subject_files_list.append(subject_files)
+                added += 1
+
+            if added > 0:
+                self._log(f"Added {added} DWI run(s) from {folder_path}")
+
+            return added
+
+        except Exception as e:
+            messagebox.showwarning(
+                "Discovery Error", f"Could not process folder:\n{folder_path}\n\nError: {e}"
+            )
+            return 0
+
+    def _remove_selected_subjects(self):
+        """Remove selected subjects from the list."""
+        selected = self.subjects_tree.selection()
+        if not selected:
+            return
+
+        # Get indices to remove (reverse order to maintain indices)
+        indices_to_remove = []
+        for item in selected:
+            idx = self.subjects_tree.index(item)
+            indices_to_remove.append(idx)
+
+        # Remove from list (reverse order)
+        for idx in sorted(indices_to_remove, reverse=True):
+            del self.subject_files_list[idx]
+
+        # Remove from tree
+        for item in selected:
+            self.subjects_tree.delete(item)
+
+    def _clear_all_subjects(self):
+        """Clear all subjects from the list."""
+        if self.subject_files_list:
+            if messagebox.askyesno("Confirm", "Clear all subjects from the list?"):
+                self.subject_files_list.clear()
+                for item in self.subjects_tree.get_children():
+                    self.subjects_tree.delete(item)
 
     def _create_preproc_frame(self):
         """Create preprocessing options frame (Stage 2, Advanced only)."""
@@ -467,20 +634,6 @@ class DTIALPSApplication(tk.Tk):
         if path:
             self.output_dir_var.set(path)
 
-    def _on_rpe_change(self):
-        """Handle RPE scheme change."""
-        scheme = self.rpe_var.get()
-
-        # Enable/disable reverse PE file selection
-        if scheme == "pair":
-            for child in self.reverse_pe_frame.winfo_children():
-                if isinstance(child, ttk.Entry | ttk.Button):
-                    child.config(state=tk.NORMAL)
-        else:
-            for child in self.reverse_pe_frame.winfo_children():
-                if isinstance(child, ttk.Entry | ttk.Button):
-                    child.config(state=tk.DISABLED)
-
     def _show_stage(self, stage_idx):
         """Show the specified pipeline stage."""
         self.current_stage = stage_idx
@@ -506,57 +659,74 @@ class DTIALPSApplication(tk.Tk):
         stage_name = config.PIPELINE_STAGES[stage_idx][1]
         self.content_frame.config(text=f"Stage {stage_idx + 1}: {stage_name}")
 
-    def _collect_state(self):
-        """Collect all UI values into pipeline state."""
-        state = self.pipeline_state
+    def _collect_batch_state(self) -> BatchState:
+        """Collect all UI values into batch state."""
+        # Determine readout time
+        if self.readout_auto_var.get():
+            readout_time = None  # Auto-extract from JSON
+        else:
+            try:
+                readout_time = float(self.readout_var.get())
+            except ValueError:
+                readout_time = config.DEFAULT_READOUT_TIME
 
-        # Input files
-        state.dwi_path = self.dwi_var.get() or None
-        state.bvecs_path = self.bvecs_var.get() or None
-        state.bvals_path = self.bvals_var.get() or None
-        state.reverse_pe_path = self.reverse_pe_var.get() or None
+        # Create batch config
+        batch_config = BatchConfig(
+            pe_direction=self.pe_dir_var.get(),
+            auto_pe_direction=self.pe_auto_var.get(),
+            readout_time=readout_time,
+            rpe_scheme=self.rpe_var.get(),
+            # Preprocessing options
+            eddy_options=getattr(self, "eddy_options_var", tk.StringVar()).get(),
+            topup_options=getattr(self, "topup_options_var", tk.StringVar()).get(),
+            generate_qc=getattr(self, "generate_qc_var", tk.BooleanVar()).get(),
+            keep_intermediates=getattr(self, "keep_intermediate_var", tk.BooleanVar()).get(),
+            # ROI detection parameters
+            fa_thresh=self.fa_thresh_var.get(),
+            orient_thresh=self.orient_thresh_var.get(),
+            min_zone_width=self.min_width_var.get(),
+            roi_radius_mm=self.roi_radius_var.get(),
+            z_tolerance=self.z_tolerance_var.get(),
+            # Output
+            output_dir=self.output_dir_var.get(),
+        )
 
-        # Phase encoding
-        state.pe_direction = self.pe_dir_var.get()
-        try:
-            state.readout_time = float(self.readout_var.get())
-        except ValueError:
-            state.readout_time = config.DEFAULT_READOUT_TIME
-        state.rpe_scheme = self.rpe_var.get()
+        # Create batch state
+        batch_state = BatchState(
+            config=batch_config,
+            subjects=list(self.subject_files_list),  # Copy the list
+        )
 
-        # Optional files and preprocessing options
-        state.json_sidecar_path = getattr(self, "json_var", tk.StringVar()).get() or None
-        state.eddy_mask_path = getattr(self, "eddy_mask_var", tk.StringVar()).get() or None
-        state.eddy_slspec_path = getattr(self, "eddy_slspec_var", tk.StringVar()).get() or None
-        state.eddy_options = self.eddy_options_var.get()
-        state.topup_options = self.topup_options_var.get()
-        state.generate_qc = self.generate_qc_var.get()
-        state.keep_intermediates = self.keep_intermediate_var.get()
-        state.dti_mask_path = getattr(self, "dti_mask_var", tk.StringVar()).get() or None
-
-        # ROI detection parameters
-        state.fa_thresh = self.fa_thresh_var.get()
-        state.orient_thresh = self.orient_thresh_var.get()
-        state.min_zone_width = self.min_width_var.get()
-        state.roi_radius_mm = self.roi_radius_var.get()
-        state.z_tolerance = self.z_tolerance_var.get()
-
-        # Output
-        state.output_dir = self.output_dir_var.get()
-        state.output_prefix = self.output_prefix_var.get() or "subject"
-
-        return state
+        return batch_state
 
     def _run_pipeline(self):
-        """Start pipeline execution."""
-        # Collect state from UI
-        state = self._collect_state()
-
-        # Validate
-        errors = validators.validate_pipeline_state(state)
-        if errors:
-            messagebox.showerror("Validation Error", "\n".join(errors))
+        """Start batch pipeline execution."""
+        # Validate we have subjects
+        if not self.subject_files_list:
+            messagebox.showerror("Validation Error", "No subject folders added.")
             return
+
+        # Check for invalid subjects
+        invalid_subjects = [s for s in self.subject_files_list if not s.is_valid]
+        if invalid_subjects:
+            names = ", ".join(s.subject_id for s in invalid_subjects[:5])
+            if len(invalid_subjects) > 5:
+                names += f" (and {len(invalid_subjects) - 5} more)"
+            messagebox.showerror(
+                "Validation Error",
+                f"Some subjects have missing files:\n{names}\n\n"
+                "Please remove invalid subjects or add missing files.",
+            )
+            return
+
+        # Validate output directory
+        output_dir = self.output_dir_var.get()
+        if not output_dir:
+            messagebox.showerror("Validation Error", "Please specify an output directory.")
+            return
+
+        # Collect batch state
+        self.batch_state = self._collect_batch_state()
 
         # Disable UI
         self.run_btn.config(state=tk.DISABLED)
@@ -567,12 +737,16 @@ class DTIALPSApplication(tk.Tk):
         self.log_text.delete(1.0, tk.END)
         self.log_text.config(state=tk.DISABLED)
 
-        # Create worker
+        # Reset progress
+        self.progress_var.set(0)
+        self.status_label.config(text="Starting batch processing...")
+
+        # Create batch worker
         self.result_queue = queue.Queue()
         self.cancel_event = threading.Event()
 
-        runner = PipelineRunner(state)
-        self.worker = PipelineWorker(runner, self.result_queue, self.cancel_event)
+        batch_runner = BatchRunner(self.batch_state)
+        self.worker = BatchWorker(batch_runner, self.result_queue, self.cancel_event)
         self.worker.start()
 
         # Start polling for results
@@ -610,7 +784,58 @@ class DTIALPSApplication(tk.Tk):
         elif msg_type == "stage":
             stage, status = data
             self._update_stage_status(stage, status)
+        elif msg_type == "batch_start":
+            total = data
+            self.status_label.config(text=f"Processing 0/{total} subjects")
+        elif msg_type == "subject_start":
+            index, subject_id = data
+            total = len(self.subject_files_list)
+            self.status_label.config(text=f"Processing {index + 1}/{total}: {subject_id}")
+            # Update tree status
+            items = self.subjects_tree.get_children()
+            if index < len(items):
+                self.subjects_tree.set(items[index], "status", "Processing")
+        elif msg_type == "subject_complete":
+            index, result = data
+            total = len(self.subject_files_list)
+            completed = index + 1
+
+            # Update progress bar
+            self.progress_var.set((completed / total) * 100)
+            self.status_label.config(text=f"Completed {completed}/{total} subjects")
+
+            # Update tree status
+            items = self.subjects_tree.get_children()
+            if index < len(items):
+                status = "Completed" if result.status == "completed" else "Failed"
+                self.subjects_tree.set(items[index], "status", status)
+        elif msg_type == "batch_complete":
+            batch_state = data
+            self._log(
+                f"Batch complete: {batch_state.success_count}/{batch_state.total_subjects} succeeded"
+            )
+            self.progress_var.set(100)
+            self._show_batch_results(batch_state)
+        elif msg_type == "batch_success":
+            batch_state = data
+            self._log("All subjects processed successfully!")
+            self.status_label.config(text="Complete")
+            self.progress_var.set(100)
+            self._show_batch_results(batch_state)
+        elif msg_type == "batch_partial":
+            batch_state = data
+            self._log(
+                f"Batch completed with errors: {batch_state.success_count}/"
+                f"{batch_state.total_subjects} succeeded"
+            )
+            self.status_label.config(text="Completed with errors")
+            self.progress_var.set(100)
+            self._show_batch_results(batch_state)
+        elif msg_type == "batch_cancelled":
+            self._log("Batch processing cancelled.")
+            self.status_label.config(text="Cancelled")
         elif msg_type == "complete":
+            # Single subject complete (legacy)
             self._log("Pipeline completed successfully!")
             self.status_label.config(text="Complete")
             self.progress_var.set(100)
@@ -753,6 +978,100 @@ class DTIALPSApplication(tk.Tk):
         ttk.Button(btn_frame, text="View ROI Masks", command=self._view_rois).pack(
             side=tk.LEFT, padx=5
         )
+
+    def _show_batch_results(self, batch_state: BatchState):
+        """Display batch processing results."""
+        # Switch to results stage
+        self._show_stage(4)
+
+        # Update results frame
+        frame = self.stage_frames["results"]
+
+        # Clear previous content
+        for child in frame.winfo_children():
+            child.destroy()
+
+        # Title with summary
+        title_frame = ttk.Frame(frame)
+        title_frame.pack(fill=tk.X, pady=10)
+
+        ttk.Label(
+            title_frame, text="Batch Processing Results", font=("TkDefaultFont", 12, "bold")
+        ).pack(side=tk.LEFT)
+
+        summary_text = (
+            f"{batch_state.success_count}/{batch_state.total_subjects} succeeded, "
+            f"{batch_state.failed_count} failed"
+        )
+        ttk.Label(title_frame, text=f"  ({summary_text})").pack(side=tk.LEFT)
+
+        # Results table
+        results_frame = ttk.LabelFrame(frame, text="Subject Results", padding=10)
+        results_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Create treeview for batch results
+        columns = ("subject", "alps_left", "alps_right", "alps_combined", "status")
+        tree = ttk.Treeview(results_frame, columns=columns, show="headings", height=12)
+
+        tree.heading("subject", text="Subject ID")
+        tree.heading("alps_left", text="Left ALPS")
+        tree.heading("alps_right", text="Right ALPS")
+        tree.heading("alps_combined", text="Combined ALPS")
+        tree.heading("status", text="Status")
+
+        tree.column("subject", width=150)
+        tree.column("alps_left", width=100, anchor=tk.CENTER)
+        tree.column("alps_right", width=100, anchor=tk.CENTER)
+        tree.column("alps_combined", width=100, anchor=tk.CENTER)
+        tree.column("status", width=100, anchor=tk.CENTER)
+
+        # Add scrollbar
+        scrollbar = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Add data rows
+        for result in batch_state.results:
+            alps_left = f"{result.alps_left:.4f}" if result.alps_left is not None else ""
+            alps_right = f"{result.alps_right:.4f}" if result.alps_right is not None else ""
+            alps_bi = f"{result.alps_bilateral:.4f}" if result.alps_bilateral is not None else ""
+
+            tree.insert(
+                "",
+                tk.END,
+                values=(result.subject_id, alps_left, alps_right, alps_bi, result.status),
+            )
+
+        self.batch_results_tree = tree  # Store for export
+
+        # Export buttons
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X, pady=10)
+
+        # CSV path info
+        csv_path = Path(batch_state.config.output_dir) / "alps_results.csv"
+        ttk.Label(btn_frame, text=f"Results saved to: {csv_path}").pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(
+            btn_frame, text="Open Output Folder", command=self._open_batch_output_folder
+        ).pack(side=tk.RIGHT, padx=5)
+
+    def _open_batch_output_folder(self):
+        """Open the batch output folder."""
+        import subprocess
+        import sys
+
+        if self.batch_state and self.batch_state.config.output_dir:
+            output_dir = self.batch_state.config.output_dir
+            if Path(output_dir).exists():
+                if sys.platform == "darwin":
+                    subprocess.run(["open", output_dir])
+                elif sys.platform == "linux":
+                    subprocess.run(["xdg-open", output_dir])
+                else:
+                    subprocess.run(["explorer", output_dir])
 
     def _export_csv(self):
         """Export results to CSV."""
