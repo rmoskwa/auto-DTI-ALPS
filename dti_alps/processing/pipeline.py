@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ..gui import config
-from . import commands
+from . import commands, registration
 
 if TYPE_CHECKING:
     from .discovery import SubjectFiles
@@ -72,6 +72,7 @@ class PipelineState:
     tensor_path: str | None = None
     fa_path: str | None = None
     v1_path: str | None = None
+    labels_native_path: str | None = None  # SCR/SLF labels in native space
 
     # Results
     roi_centers: dict[str, tuple] | None = None
@@ -194,8 +195,8 @@ class PipelineRunner:
 
     Stages:
     1. Preprocessing with dwifslpreproc
-    2. DTI tensor fitting with dwi2tensor
-    3. Metric extraction with tensor2metric (FA, V1)
+    2. DTI tensor fitting with dwi2tensor + tensor2metric (FA, V1)
+    3. Registration - FA to JHU template, SCR/SLF labels to native space
     4. ROI detection with DTIALPSDetector
     5. ALPS index calculation
     """
@@ -371,6 +372,40 @@ class PipelineRunner:
         self._update_stage("dti", "complete")
         return True
 
+    def run_registration(self) -> bool:
+        """
+        Run FA-to-template registration to get SCR/SLF labels in native space.
+
+        Returns
+        -------
+        bool
+            True if successful
+        """
+        self._update_stage("registration", "running")
+        self._log("Starting FA-to-template registration...")
+
+        # Check FSL registration tools
+        fsl_ok, missing = registration.check_fsl_registration_available()
+        if not fsl_ok:
+            self._log(f"ERROR: Missing FSL tools: {', '.join(missing)}")
+            self._log("Please ensure FSL is installed and FSLDIR is set")
+            self._update_stage("registration", "failed")
+            return False
+
+        # Run registration
+        success = registration.register_fa_to_template(
+            state=self.state,
+            log_callback=self._log,
+        )
+
+        if success:
+            self._log(f"Labels saved to: {self.state.labels_native_path}")
+            self._update_stage("registration", "complete")
+        else:
+            self._update_stage("registration", "failed")
+
+        return success
+
     def run_roi_detection(self) -> bool:
         """
         Run ROI detection using DTIALPSDetector.
@@ -538,13 +573,19 @@ class PipelineRunner:
         if self.cancelled:
             return False
 
-        # Stage 3: ROI detection
+        # Stage 3: Registration (FA to JHU template, labels to native space)
+        if not self.run_registration():
+            return False
+        if self.cancelled:
+            return False
+
+        # Stage 4: ROI detection
         if not self.run_roi_detection():
             return False
         if self.cancelled:
             return False
 
-        # Stage 4: ALPS calculation
+        # Stage 5: ALPS calculation
         if not self.run_alps_calculation():
             return False
 
