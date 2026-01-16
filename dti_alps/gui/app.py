@@ -69,8 +69,8 @@ class DTIALPSApplication(tk.Tk):
         # Map colors for different states
         style.map(
             "Primary.TButton",
-            background=[("active", "#4a9f4a"), ("!disabled", "#5cb85c")],
-            foreground=[("!disabled", "white")],
+            background=[("disabled", "#cccccc"), ("active", "#4a9f4a"), ("!disabled", "#5cb85c")],
+            foreground=[("disabled", "#666666"), ("!disabled", "white")],
         )
 
     def _create_menu(self):
@@ -108,6 +108,29 @@ class DTIALPSApplication(tk.Tk):
             style="Primary.TButton",
         )
         self.run_btn.pack(padx=5, pady=5)
+        self.run_btn.config(state=tk.DISABLED)  # Start disabled until conditions are met
+
+    def _update_run_button_state(self):
+        """Update Run Pipeline button state based on current inputs."""
+        # Check readout time validity when manual mode is selected
+        readout_valid = True
+        if hasattr(self, "readout_auto_var") and not self.readout_auto_var.get():
+            try:
+                float(self.readout_var.get())
+            except ValueError:
+                readout_valid = False
+
+        # Check all conditions for pipeline to run
+        has_subjects = len(self.subject_files_list) > 0
+        all_valid = all(s.is_valid for s in self.subject_files_list) if has_subjects else False
+        has_output_dir = bool(hasattr(self, "output_dir_var") and self.output_dir_var.get())
+
+        can_run = has_subjects and all_valid and has_output_dir and readout_valid
+
+        if can_run:
+            self.run_btn.config(state=tk.NORMAL)
+        else:
+            self.run_btn.config(state=tk.DISABLED)
 
     def _create_main_layout(self):
         """Create main layout with sidebar and content area."""
@@ -345,6 +368,7 @@ class DTIALPSApplication(tk.Tk):
         ).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
 
         self.readout_var = tk.StringVar(value=str(config.DEFAULT_READOUT_TIME))
+        self.readout_var.trace_add("write", lambda *_: self._update_run_button_state())
         self.readout_entry = ttk.Entry(params_frame, textvariable=self.readout_var, width=10)
         self.readout_entry.grid(row=1, column=2, sticky=tk.W, padx=5, pady=2)
         self.readout_entry.config(state=tk.DISABLED)  # Start disabled (auto mode)
@@ -376,6 +400,7 @@ class DTIALPSApplication(tk.Tk):
 
         ttk.Label(out_frame, text="Output Directory:").grid(row=0, column=0, sticky=tk.W, pady=2)
         self.output_dir_var = tk.StringVar()
+        self.output_dir_var.trace_add("write", lambda *_: self._update_run_button_state())
         ttk.Entry(out_frame, textvariable=self.output_dir_var, width=50).grid(
             row=0, column=1, sticky=tk.EW, padx=5, pady=2
         )
@@ -398,6 +423,7 @@ class DTIALPSApplication(tk.Tk):
             self.readout_entry.config(state=tk.DISABLED)
         else:
             self.readout_entry.config(state=tk.NORMAL)
+        self._update_run_button_state()
 
     def _on_rpe_combo_change(self, event=None):
         """Handle RPE scheme combobox change."""
@@ -607,6 +633,7 @@ class DTIALPSApplication(tk.Tk):
 
             if added > 0:
                 self._log(f"Added {added} DWI run(s) from {folder_path}")
+                self._update_run_button_state()
 
             return added
 
@@ -636,6 +663,8 @@ class DTIALPSApplication(tk.Tk):
         for item in selected:
             self.subjects_tree.delete(item)
 
+        self._update_run_button_state()
+
     def _clear_all_subjects(self):
         """Clear all subjects from the list."""
         if self.subject_files_list:
@@ -643,6 +672,7 @@ class DTIALPSApplication(tk.Tk):
                 self.subject_files_list.clear()
                 for item in self.subjects_tree.get_children():
                     self.subjects_tree.delete(item)
+                self._update_run_button_state()
 
     def _create_dwifslpreproc_frame(self):
         """Create dwifslpreproc options frame (Stage 2)."""
