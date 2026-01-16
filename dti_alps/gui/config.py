@@ -55,11 +55,58 @@ JSON_FILETYPES = [("JSON files", "*.json"), ("All files", "*.*")]
 # Pipeline stages
 PIPELINE_STAGES = [
     ("data", "Data Input"),
-    ("preproc", "Preprocessing"),
-    ("dti", "DTI Fitting"),
+    ("dwifslpreproc", "dwifslpreproc"),
+    ("dwi2tensor", "dwi2tensor"),
+    ("tensor2metric", "tensor2metric"),
     ("roi", "ROI Detection"),
     ("results", "Results"),
 ]
+
+# CLI option definitions for dwifslpreproc
+# Format: (option_name, option_type, description, default_value)
+# option_type: "file", "dir", "string", "int", "flag", "prefix"
+DWIFSLPREPROC_OPTIONS = [
+    ("-eddy_mask", "file", "Processing mask for eddy", None),
+    ("-eddy_slspec", "file", "Slice specification file", None),
+    ("-eddy_options", "string", "Extra eddy flags (e.g., --repol)", None),
+    ("-topup_options", "string", "Extra topup flags", None),
+    ("-topup_files", "prefix", "Pre-computed topup prefix", None),
+    ("-align_seepi", "flag", "Align SE-EPI to DWI", False),
+    ("-eddyqc_text", "dir", "Text QC output directory", None),
+    ("-eddyqc_all", "dir", "Full QC output directory", None),
+    ("-json_import", "file", "Import JSON metadata", None),
+    ("-nocleanup", "flag", "Keep intermediate files", False),
+    ("-nthreads", "int", "Thread count", None),
+    ("-scratch", "dir", "Scratch directory", None),
+]
+
+# CLI option definitions for dwi2tensor
+DWI2TENSOR_OPTIONS = [
+    ("-ols", "flag", "Use ordinary least-squares (instead of IWLS)", False),
+    ("-iter", "int", "IWLS iterations (default: 2)", None),
+    ("-mask", "file", "Processing mask", None),
+    ("-b0", "output", "Output b0 image", None),
+    ("-dkt", "output", "Output kurtosis tensor", None),
+    ("-predicted_signal", "output", "Output predicted signal", None),
+    ("-nthreads", "int", "Thread count", None),
+]
+
+# CLI option definitions for tensor2metric (FA and V1 always computed)
+TENSOR2METRIC_OPTIONS = [
+    ("-mask", "file", "Processing mask", None),
+    ("-adc", "output", "Mean diffusivity output", None),
+    ("-ad", "output", "Axial diffusivity output", None),
+    ("-rd", "output", "Radial diffusivity output", None),
+    ("-cl", "output", "Linearity metric output", None),
+    ("-cp", "output", "Planarity metric output", None),
+    ("-cs", "output", "Sphericity metric output", None),
+    ("-modulate", "choice", "Modulation (none/FA/eigval)", None),
+    ("-num", "int", "Eigenvalue number for vector output", None),
+    ("-nthreads", "int", "Thread count", None),
+]
+
+# Choices for tensor2metric -modulate option
+TENSOR2METRIC_MODULATE_CHOICES = ["none", "FA", "eigval"]
 
 # MRtrix3 tensor volume indices
 # dwi2tensor outputs: D11, D22, D33, D12, D13, D23

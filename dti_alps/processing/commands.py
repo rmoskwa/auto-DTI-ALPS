@@ -8,6 +8,38 @@ if TYPE_CHECKING:
     from .pipeline import PipelineState
 
 
+def _append_options_from_dict(cmd: list[str], options: dict) -> None:
+    """
+    Append CLI options from a dictionary to command list.
+
+    Parameters
+    ----------
+    cmd : list of str
+        Command list to append to
+    options : dict
+        Dictionary of option_name -> value pairs.
+        For flags (bool True), only the option name is added.
+        For other values, both option name and value are added.
+    """
+    for option_name, value in options.items():
+        if value is None:
+            continue
+        if value is True:
+            # Flag option (no value)
+            cmd.append(option_name)
+        elif value is False:
+            # Disabled flag, skip
+            continue
+        elif isinstance(value, str) and value.strip():
+            # String value - add with potential space prefix for nested options
+            if option_name in ("-eddy_options", "-topup_options"):
+                cmd.extend([option_name, f" {value}"])
+            else:
+                cmd.extend([option_name, value])
+        elif isinstance(value, int | float):
+            cmd.extend([option_name, str(value)])
+
+
 def build_dwifslpreproc_cmd(state: "PipelineState") -> list[str]:
     """
     Build dwifslpreproc command for DWI preprocessing.
@@ -59,26 +91,21 @@ def build_dwifslpreproc_cmd(state: "PipelineState") -> list[str]:
         if state.json_sidecar_path:
             cmd.extend(["-json_import", state.json_sidecar_path])
 
-    # Optional: Eddy mask
+    # Legacy options (for backward compatibility)
     if state.eddy_mask_path:
         cmd.extend(["-eddy_mask", state.eddy_mask_path])
-
-    # Optional: Slice specification
     if state.eddy_slspec_path:
         cmd.extend(["-eddy_slspec", state.eddy_slspec_path])
-
-    # Optional: Extra eddy options
     if state.eddy_options:
         cmd.extend(["-eddy_options", f" {state.eddy_options}"])
-
-    # Optional: Extra topup options
     if state.topup_options:
         cmd.extend(["-topup_options", f" {state.topup_options}"])
-
-    # Optional: QC output
     if state.generate_qc:
         qc_dir = state.get_output_path("eddy_qc")
         cmd.extend(["-eddyqc_all", qc_dir])
+
+    # Append options from dict (new GUI options)
+    _append_options_from_dict(cmd, state.dwifslpreproc_options)
 
     return cmd
 
@@ -110,9 +137,12 @@ def build_dwi2tensor_cmd(state: "PipelineState") -> list[str]:
     bvals_preproc = state.get_output_path("bvals_preproc")
     cmd.extend(["-fslgrad", bvecs_preproc, bvals_preproc])
 
-    # Optional: Processing mask
+    # Legacy: Processing mask
     if state.dti_mask_path:
         cmd.extend(["-mask", state.dti_mask_path])
+
+    # Append options from dict (new GUI options)
+    _append_options_from_dict(cmd, state.dwi2tensor_options)
 
     return cmd
 
@@ -136,14 +166,22 @@ def build_tensor2metric_cmd(state: "PipelineState") -> list[str]:
     # Input tensor
     cmd.append(state.tensor_path)
 
-    # Output FA
+    # Output FA (always required for ROI detection)
     cmd.extend(["-fa", state.fa_path])
 
-    # Output principal eigenvector (V1)
-    # Use -modulate none for unit vectors (orientation only)
+    # Output principal eigenvector V1 (always required for fiber classification)
     cmd.extend(["-vector", state.v1_path])
-    cmd.extend(["-num", "1"])
-    cmd.extend(["-modulate", "none"])
+
+    # Default V1 settings (can be overridden by options dict)
+    # Check if options dict overrides -num or -modulate
+    options = state.tensor2metric_options
+    if "-num" not in options:
+        cmd.extend(["-num", "1"])
+    if "-modulate" not in options:
+        cmd.extend(["-modulate", "none"])
+
+    # Append options from dict (new GUI options)
+    _append_options_from_dict(cmd, options)
 
     return cmd
 

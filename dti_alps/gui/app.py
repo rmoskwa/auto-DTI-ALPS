@@ -134,10 +134,14 @@ class DTIALPSApplication(tk.Tk):
         # Create all stage frames (hidden initially)
         self.stage_frames = {}
         self._create_data_frame()
-        self._create_preproc_frame()
-        self._create_dti_frame()
+        self._create_dwifslpreproc_frame()
+        self._create_dwi2tensor_frame()
+        self._create_tensor2metric_frame()
         self._create_roi_frame()
         self._create_results_frame()
+
+        # Storage for CLI option variables (checkbox vars and entry vars)
+        # Initialized by _create_cli_option_row calls in frame creation
 
     def _create_progress_panel(self):
         """Create progress tracking panel."""
@@ -326,6 +330,154 @@ class DTIALPSApplication(tk.Tk):
         desc = config.RPE_SCHEMES.get(scheme, "")
         self.rpe_desc_label.config(text=desc)
 
+    def _create_cli_option_row(
+        self,
+        parent: ttk.Frame,
+        option_name: str,
+        option_type: str,
+        description: str,
+        row: int,
+        stage_prefix: str,
+        filetypes: list | None = None,
+        choices: list | None = None,
+    ) -> None:
+        """
+        Create a CLI option row with checkbox + entry/combo + browse button.
+
+        Parameters
+        ----------
+        parent : ttk.Frame
+            Parent frame to add widgets to
+        option_name : str
+            CLI option name (e.g., "-eddy_mask")
+        option_type : str
+            Type: "file", "dir", "string", "int", "flag", "output", "prefix", "choice"
+        description : str
+            Description text shown to the right
+        row : int
+            Grid row number
+        stage_prefix : str
+            Prefix for variable storage (e.g., "dwifslpreproc")
+        filetypes : list, optional
+            File type filters for file browser
+        choices : list, optional
+            Choice values for "choice" type options
+        """
+        # Initialize option vars storage if needed
+        if not hasattr(self, "cli_option_vars"):
+            self.cli_option_vars = {}
+        if stage_prefix not in self.cli_option_vars:
+            self.cli_option_vars[stage_prefix] = {}
+
+        # Create checkbox to enable/disable option
+        enabled_var = tk.BooleanVar(value=False)
+        chk = ttk.Checkbutton(parent, variable=enabled_var)
+        chk.grid(row=row, column=0, sticky=tk.W, padx=2, pady=2)
+
+        # Option name label
+        name_label = ttk.Label(parent, text=option_name, width=18, anchor=tk.W)
+        name_label.grid(row=row, column=1, sticky=tk.W, padx=2, pady=2)
+
+        # Value entry/combo (depends on type)
+        value_var = tk.StringVar()
+        entry_widget = None
+        browse_btn = None
+
+        if option_type == "flag":
+            # Flag options have no value entry
+            entry_widget = None
+        elif option_type == "choice" and choices:
+            # Dropdown for choice options
+            entry_widget = ttk.Combobox(
+                parent, textvariable=value_var, values=choices, width=12, state="disabled"
+            )
+            entry_widget.grid(row=row, column=2, sticky=tk.W, padx=2, pady=2)
+        elif option_type in ("file", "dir", "output", "prefix"):
+            # Entry + Browse button for file/dir types
+            entry_widget = ttk.Entry(parent, textvariable=value_var, width=35, state=tk.DISABLED)
+            entry_widget.grid(row=row, column=2, sticky=tk.EW, padx=2, pady=2)
+
+            if option_type in ("file", "prefix"):
+                browse_btn = ttk.Button(
+                    parent,
+                    text="Browse...",
+                    command=lambda v=value_var, ft=filetypes: self._browse_cli_file(v, ft),
+                    state=tk.DISABLED,
+                )
+            elif option_type == "dir":
+                browse_btn = ttk.Button(
+                    parent,
+                    text="Browse...",
+                    command=lambda v=value_var: self._browse_cli_dir(v),
+                    state=tk.DISABLED,
+                )
+            elif option_type == "output":
+                browse_btn = ttk.Button(
+                    parent,
+                    text="Browse...",
+                    command=lambda v=value_var, ft=filetypes: self._browse_cli_save(
+                        v, ft or config.NIFTI_FILETYPES
+                    ),
+                    state=tk.DISABLED,
+                )
+
+            if browse_btn:
+                browse_btn.grid(row=row, column=3, padx=2, pady=2)
+        else:
+            # String/int: just an entry
+            entry_widget = ttk.Entry(parent, textvariable=value_var, width=15, state=tk.DISABLED)
+            entry_widget.grid(row=row, column=2, sticky=tk.W, padx=2, pady=2)
+
+        # Description label
+        desc_label = ttk.Label(parent, text=description, foreground="gray")
+        desc_label.grid(row=row, column=4, sticky=tk.W, padx=5, pady=2)
+
+        # Store variables for later collection
+        self.cli_option_vars[stage_prefix][option_name] = {
+            "enabled_var": enabled_var,
+            "value_var": value_var,
+            "type": option_type,
+            "entry_widget": entry_widget,
+            "browse_btn": browse_btn,
+        }
+
+        # Bind checkbox to enable/disable entry and browse button
+        def toggle_enabled(*args, ew=entry_widget, bb=browse_btn, ot=option_type):
+            if enabled_var.get():
+                if ew:
+                    if ot == "choice":
+                        ew.config(state="readonly")
+                    else:
+                        ew.config(state=tk.NORMAL)
+                if bb:
+                    bb.config(state=tk.NORMAL)
+            else:
+                if ew:
+                    ew.config(state=tk.DISABLED)
+                if bb:
+                    bb.config(state=tk.DISABLED)
+
+        enabled_var.trace_add("write", toggle_enabled)
+
+    def _browse_cli_file(self, var: tk.StringVar, filetypes: list | None):
+        """Browse for a file and set the variable."""
+        ft = filetypes or [("All files", "*.*")]
+        path = filedialog.askopenfilename(filetypes=ft)
+        if path:
+            var.set(path)
+
+    def _browse_cli_dir(self, var: tk.StringVar):
+        """Browse for a directory and set the variable."""
+        path = filedialog.askdirectory()
+        if path:
+            var.set(path)
+
+    def _browse_cli_save(self, var: tk.StringVar, filetypes: list):
+        """Browse for a save file location and set the variable."""
+        path = filedialog.asksaveasfilename(filetypes=filetypes)
+        if path:
+            var.set(path)
+
     def _add_subject_folder(self):
         """Add a folder and discover all DWI runs within it."""
         folder = filedialog.askdirectory(title="Select Folder with DWI Data")
@@ -424,87 +576,191 @@ class DTIALPSApplication(tk.Tk):
                 for item in self.subjects_tree.get_children():
                     self.subjects_tree.delete(item)
 
-    def _create_preproc_frame(self):
-        """Create preprocessing options frame (Stage 2, Advanced only)."""
+    def _create_dwifslpreproc_frame(self):
+        """Create dwifslpreproc options frame (Stage 2)."""
         frame = ttk.Frame(self.content_frame)
-        self.stage_frames["preproc"] = frame
+        self.stage_frames["dwifslpreproc"] = frame
 
-        # Eddy options
-        eddy_frame = ttk.LabelFrame(frame, text="Eddy Options", padding=10)
-        eddy_frame.pack(fill=tk.X, pady=5)
-
-        self._create_file_row(
-            eddy_frame, "Processing Mask:", "eddy_mask", config.NIFTI_FILETYPES, 0
-        )
-        self._create_file_row(
-            eddy_frame,
-            "Slice Spec File:",
-            "eddy_slspec",
-            [("Text files", "*.txt"), ("All files", "*.*")],
-            1,
-        )
-
-        ttk.Label(eddy_frame, text="Extra Options:").grid(row=2, column=0, sticky=tk.W, pady=2)
-        self.eddy_options_var = tk.StringVar()
-        ttk.Entry(eddy_frame, textvariable=self.eddy_options_var, width=50).grid(
-            row=2, column=1, sticky=tk.EW, padx=5, pady=2
-        )
-        ttk.Label(eddy_frame, text="e.g., --repol --data_is_shelled").grid(
-            row=2, column=2, sticky=tk.W, padx=5
-        )
-
-        eddy_frame.columnconfigure(1, weight=1)
-
-        # Topup options
-        topup_frame = ttk.LabelFrame(frame, text="Topup Options", padding=10)
-        topup_frame.pack(fill=tk.X, pady=5)
-
-        ttk.Label(topup_frame, text="Extra Options:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.topup_options_var = tk.StringVar()
-        ttk.Entry(topup_frame, textvariable=self.topup_options_var, width=50).grid(
-            row=0, column=1, sticky=tk.EW, padx=5, pady=2
-        )
-
-        topup_frame.columnconfigure(1, weight=1)
-
-        # QC options
-        qc_frame = ttk.LabelFrame(frame, text="Quality Control", padding=10)
-        qc_frame.pack(fill=tk.X, pady=5)
-
-        self.generate_qc_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            qc_frame, text="Generate eddy QC reports", variable=self.generate_qc_var
-        ).pack(anchor=tk.W)
-
-        self.keep_intermediate_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            qc_frame, text="Keep intermediate files", variable=self.keep_intermediate_var
-        ).pack(anchor=tk.W)
-
-    def _create_dti_frame(self):
-        """Create DTI fitting frame (Stage 3)."""
-        frame = ttk.Frame(self.content_frame)
-        self.stage_frames["dti"] = frame
-
+        # Info text
         info_label = ttk.Label(
             frame,
-            text="DTI tensor fitting will be performed automatically using MRtrix3.\n\n"
-            "The following outputs will be generated:\n"
-            "  - Diffusion tensor image (for ALPS calculation)\n"
-            "  - FA map (for ROI localization)\n"
-            "  - Principal eigenvector V1 (for fiber classification)",
+            text="Configure optional CLI arguments for dwifslpreproc.\n"
+            "Core parameters (PE direction, readout time, RPE scheme) are set in Data Input.",
             justify=tk.LEFT,
         )
-        info_label.pack(anchor=tk.W, pady=20)
+        info_label.pack(anchor=tk.W, pady=(0, 10))
 
-        # Optional mask
-        mask_frame = ttk.LabelFrame(frame, text="Optional Settings", padding=10)
-        mask_frame.pack(fill=tk.X, pady=5)
+        # Scrollable frame for options
+        canvas = tk.Canvas(frame, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=canvas.yview)
+        options_frame = ttk.Frame(canvas)
 
-        self._create_file_row(mask_frame, "DTI Mask:", "dti_mask", config.NIFTI_FILETYPES, 0)
+        options_frame.bind(
+            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        canvas.create_window((0, 0), window=options_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Column headers
+        ttk.Label(options_frame, text="", width=3).grid(row=0, column=0)
+        ttk.Label(options_frame, text="Option", width=18, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=1, sticky=tk.W
+        )
+        ttk.Label(options_frame, text="Value", width=35, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=2, sticky=tk.W
+        )
+        ttk.Label(options_frame, text="", width=8).grid(row=0, column=3)
+        ttk.Label(options_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=4, sticky=tk.W
+        )
+
+        ttk.Separator(options_frame, orient=tk.HORIZONTAL).grid(
+            row=1, column=0, columnspan=5, sticky=tk.EW, pady=5
+        )
+
+        # Create option rows from config
+        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.DWIFSLPREPROC_OPTIONS):
+            filetypes = None
+            if opt_type == "file":
+                if "mask" in opt_name:
+                    filetypes = config.NIFTI_FILETYPES
+                elif "json" in opt_name:
+                    filetypes = config.JSON_FILETYPES
+                elif "slspec" in opt_name:
+                    filetypes = [("Text files", "*.txt"), ("All files", "*.*")]
+
+            self._create_cli_option_row(
+                options_frame,
+                opt_name,
+                opt_type,
+                opt_desc,
+                row=i + 2,
+                stage_prefix="dwifslpreproc",
+                filetypes=filetypes,
+            )
+
+        options_frame.columnconfigure(2, weight=1)
+
+    def _create_dwi2tensor_frame(self):
+        """Create dwi2tensor options frame (Stage 3)."""
+        frame = ttk.Frame(self.content_frame)
+        self.stage_frames["dwi2tensor"] = frame
+
+        # Info text
+        info_label = ttk.Label(
+            frame,
+            text="Configure optional CLI arguments for dwi2tensor (DTI fitting).\n"
+            "The diffusion tensor will be computed from the preprocessed DWI data.",
+            justify=tk.LEFT,
+        )
+        info_label.pack(anchor=tk.W, pady=(0, 10))
+
+        # Options frame
+        options_frame = ttk.LabelFrame(frame, text="dwi2tensor Options", padding=10)
+        options_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Column headers
+        ttk.Label(options_frame, text="", width=3).grid(row=0, column=0)
+        ttk.Label(options_frame, text="Option", width=18, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=1, sticky=tk.W
+        )
+        ttk.Label(options_frame, text="Value", width=35, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=2, sticky=tk.W
+        )
+        ttk.Label(options_frame, text="", width=8).grid(row=0, column=3)
+        ttk.Label(options_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=4, sticky=tk.W
+        )
+
+        ttk.Separator(options_frame, orient=tk.HORIZONTAL).grid(
+            row=1, column=0, columnspan=5, sticky=tk.EW, pady=5
+        )
+
+        # Create option rows from config
+        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.DWI2TENSOR_OPTIONS):
+            filetypes = None
+            if opt_type == "file" and "mask" in opt_name:
+                filetypes = config.NIFTI_FILETYPES
+            elif opt_type == "output":
+                filetypes = config.NIFTI_FILETYPES
+
+            self._create_cli_option_row(
+                options_frame,
+                opt_name,
+                opt_type,
+                opt_desc,
+                row=i + 2,
+                stage_prefix="dwi2tensor",
+                filetypes=filetypes,
+            )
+
+        options_frame.columnconfigure(2, weight=1)
+
+    def _create_tensor2metric_frame(self):
+        """Create tensor2metric options frame (Stage 4)."""
+        frame = ttk.Frame(self.content_frame)
+        self.stage_frames["tensor2metric"] = frame
+
+        # Info text
+        info_label = ttk.Label(
+            frame,
+            text="Configure optional CLI arguments for tensor2metric (metric extraction).\n"
+            "FA and V1 are always computed (required for ALPS analysis).\n"
+            "Additional metrics can be enabled below.",
+            justify=tk.LEFT,
+        )
+        info_label.pack(anchor=tk.W, pady=(0, 10))
+
+        # Options frame
+        options_frame = ttk.LabelFrame(frame, text="tensor2metric Options", padding=10)
+        options_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Column headers
+        ttk.Label(options_frame, text="", width=3).grid(row=0, column=0)
+        ttk.Label(options_frame, text="Option", width=18, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=1, sticky=tk.W
+        )
+        ttk.Label(options_frame, text="Value", width=35, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=2, sticky=tk.W
+        )
+        ttk.Label(options_frame, text="", width=8).grid(row=0, column=3)
+        ttk.Label(options_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=4, sticky=tk.W
+        )
+
+        ttk.Separator(options_frame, orient=tk.HORIZONTAL).grid(
+            row=1, column=0, columnspan=5, sticky=tk.EW, pady=5
+        )
+
+        # Create option rows from config
+        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.TENSOR2METRIC_OPTIONS):
+            filetypes = None
+            choices = None
+            if opt_type == "file" and "mask" in opt_name:
+                filetypes = config.NIFTI_FILETYPES
+            elif opt_type == "output":
+                filetypes = config.NIFTI_FILETYPES
+            elif opt_type == "choice" and opt_name == "-modulate":
+                choices = config.TENSOR2METRIC_MODULATE_CHOICES
+
+            self._create_cli_option_row(
+                options_frame,
+                opt_name,
+                opt_type,
+                opt_desc,
+                row=i + 2,
+                stage_prefix="tensor2metric",
+                filetypes=filetypes,
+                choices=choices,
+            )
+
+        options_frame.columnconfigure(2, weight=1)
 
     def _create_roi_frame(self):
-        """Create ROI detection parameters frame (Stage 4)."""
+        """Create ROI detection parameters frame (Stage 5)."""
         frame = ttk.Frame(self.content_frame)
         self.stage_frames["roi"] = frame
 
@@ -589,7 +845,7 @@ class DTIALPSApplication(tk.Tk):
         )
 
     def _create_results_frame(self):
-        """Create results display frame (Stage 5)."""
+        """Create results display frame (Stage 6)."""
         frame = ttk.Frame(self.content_frame)
         self.stage_frames["results"] = frame
 
@@ -675,6 +931,47 @@ class DTIALPSApplication(tk.Tk):
         stage_name = config.PIPELINE_STAGES[stage_idx][1]
         self.content_frame.config(text=f"Stage {stage_idx + 1}: {stage_name}")
 
+    def _collect_cli_options(self, stage_prefix: str) -> dict[str, any]:
+        """
+        Collect enabled CLI options from a stage into a dictionary.
+
+        Parameters
+        ----------
+        stage_prefix : str
+            Stage prefix (e.g., "dwifslpreproc", "dwi2tensor", "tensor2metric")
+
+        Returns
+        -------
+        dict
+            Dictionary of option_name -> value for enabled options
+        """
+        options = {}
+        if not hasattr(self, "cli_option_vars"):
+            return options
+
+        stage_vars = self.cli_option_vars.get(stage_prefix, {})
+        for option_name, var_info in stage_vars.items():
+            if not var_info["enabled_var"].get():
+                continue  # Option not enabled
+
+            opt_type = var_info["type"]
+            if opt_type == "flag":
+                # Flag option: just True when enabled
+                options[option_name] = True
+            else:
+                # Value option: get the value
+                value = var_info["value_var"].get()
+                if value:  # Only add non-empty values
+                    if opt_type == "int":
+                        try:
+                            options[option_name] = int(value)
+                        except ValueError:
+                            pass  # Skip invalid int
+                    else:
+                        options[option_name] = value
+
+        return options
+
     def _collect_batch_state(self) -> BatchState:
         """Collect all UI values into batch state."""
         # Determine readout time
@@ -686,17 +983,21 @@ class DTIALPSApplication(tk.Tk):
             except ValueError:
                 readout_time = config.DEFAULT_READOUT_TIME
 
+        # Collect CLI options from each stage
+        dwifslpreproc_options = self._collect_cli_options("dwifslpreproc")
+        dwi2tensor_options = self._collect_cli_options("dwi2tensor")
+        tensor2metric_options = self._collect_cli_options("tensor2metric")
+
         # Create batch config
         batch_config = BatchConfig(
             pe_direction=self.pe_dir_var.get(),
             auto_pe_direction=self.pe_auto_var.get(),
             readout_time=readout_time,
             rpe_scheme=self.rpe_var.get(),
-            # Preprocessing options
-            eddy_options=getattr(self, "eddy_options_var", tk.StringVar()).get(),
-            topup_options=getattr(self, "topup_options_var", tk.StringVar()).get(),
-            generate_qc=getattr(self, "generate_qc_var", tk.BooleanVar()).get(),
-            keep_intermediates=getattr(self, "keep_intermediate_var", tk.BooleanVar()).get(),
+            # CLI options dicts from new GUI
+            dwifslpreproc_options=dwifslpreproc_options,
+            dwi2tensor_options=dwi2tensor_options,
+            tensor2metric_options=tensor2metric_options,
             # ROI detection parameters
             fa_thresh=self.fa_thresh_var.get(),
             orient_thresh=self.orient_thresh_var.get(),
@@ -899,8 +1200,8 @@ class DTIALPSApplication(tk.Tk):
         if not alps_results:
             return
 
-        # Switch to results stage
-        self._show_stage(4)
+        # Switch to results stage (stage 6, index 5)
+        self._show_stage(5)
 
         # Update results frame
         frame = self.stage_frames["results"]
@@ -997,8 +1298,8 @@ class DTIALPSApplication(tk.Tk):
 
     def _show_batch_results(self, batch_state: BatchState):
         """Display batch processing results."""
-        # Switch to results stage
-        self._show_stage(4)
+        # Switch to results stage (stage 6, index 5)
+        self._show_stage(5)
 
         # Update results frame
         frame = self.stage_frames["results"]

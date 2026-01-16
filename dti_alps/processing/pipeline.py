@@ -30,10 +30,16 @@ class PipelineState:
     reverse_pe_path: str | None = None
     json_sidecar_path: str | None = None
 
-    # Stage 2: Preprocessing parameters
+    # Stage 2: Preprocessing parameters (core)
     pe_direction: str = config.DEFAULT_PE_DIRECTION
     readout_time: float = config.DEFAULT_READOUT_TIME
     rpe_scheme: str = config.DEFAULT_RPE_SCHEME
+
+    # Stage 2: dwifslpreproc CLI options dict
+    # Keys are option names (e.g., "-eddy_mask"), values are option values or True for flags
+    dwifslpreproc_options: dict[str, Any] = field(default_factory=dict)
+
+    # Legacy preprocessing fields (for backward compatibility)
     eddy_mask_path: str | None = None
     eddy_slspec_path: str | None = None
     eddy_options: str = ""
@@ -41,10 +47,16 @@ class PipelineState:
     generate_qc: bool = False
     keep_intermediates: bool = False
 
-    # Stage 3: DTI fitting parameters
+    # Stage 3: dwi2tensor CLI options dict
+    dwi2tensor_options: dict[str, Any] = field(default_factory=dict)
+
+    # Legacy DTI fitting parameters
     dti_mask_path: str | None = None
 
-    # Stage 4: ROI detection parameters
+    # Stage 4: tensor2metric CLI options dict
+    tensor2metric_options: dict[str, Any] = field(default_factory=dict)
+
+    # Stage 5: ROI detection parameters
     fa_thresh: float = config.DEFAULT_FA_THRESH
     orient_thresh: float = config.DEFAULT_ORIENT_THRESH
     min_zone_width: int = config.DEFAULT_MIN_ZONE_WIDTH
@@ -92,7 +104,12 @@ class BatchConfig:
     readout_time: float | None = None  # None = auto-extract from JSON/NIfTI
     rpe_scheme: str = config.DEFAULT_RPE_SCHEME
 
-    # Additional preprocessing options
+    # CLI options dicts for each stage
+    dwifslpreproc_options: dict[str, Any] = field(default_factory=dict)
+    dwi2tensor_options: dict[str, Any] = field(default_factory=dict)
+    tensor2metric_options: dict[str, Any] = field(default_factory=dict)
+
+    # Legacy preprocessing options (for backward compatibility)
     eddy_options: str = ""
     topup_options: str = ""
     generate_qc: bool = False
@@ -690,6 +707,11 @@ class BatchRunner:
             pe_direction=pe_direction,
             readout_time=readout_time,
             rpe_scheme=batch_config.rpe_scheme,
+            # CLI options dicts
+            dwifslpreproc_options=dict(batch_config.dwifslpreproc_options),
+            dwi2tensor_options=dict(batch_config.dwi2tensor_options),
+            tensor2metric_options=dict(batch_config.tensor2metric_options),
+            # Legacy preprocessing options (for backward compatibility)
             eddy_options=batch_config.eddy_options,
             topup_options=batch_config.topup_options,
             generate_qc=batch_config.generate_qc,
