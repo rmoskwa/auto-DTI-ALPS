@@ -3,7 +3,6 @@ Main application window for DTI-ALPS Processing Tool.
 """
 
 import queue
-import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -41,7 +40,6 @@ class DTIALPSApplication(tk.Tk):
         self.pipeline_state = PipelineState()
         self.worker = None
         self.result_queue = None
-        self.cancel_event = None
 
         # Batch processing state
         self.subject_files_list: list[SubjectFiles] = []
@@ -74,21 +72,17 @@ class DTIALPSApplication(tk.Tk):
         help_menu.add_command(label="About", command=self._show_about)
 
     def _create_toolbar(self):
-        """Create toolbar with action buttons."""
+        """Create toolbar with action buttons centered at top."""
         toolbar = ttk.Frame(self, padding=5)
         toolbar.pack(fill=tk.X, padx=5, pady=5)
 
-        # Spacer
-        ttk.Frame(toolbar).pack(side=tk.LEFT, expand=True, fill=tk.X)
+        # Center container for buttons
+        center_frame = ttk.Frame(toolbar)
+        center_frame.pack(expand=True)
 
-        # Action buttons
-        self.run_btn = ttk.Button(toolbar, text="Run Pipeline", command=self._run_pipeline)
-        self.run_btn.pack(side=tk.RIGHT, padx=5)
-
-        self.stop_btn = ttk.Button(
-            toolbar, text="Stop", command=self._stop_pipeline, state=tk.DISABLED
-        )
-        self.stop_btn.pack(side=tk.RIGHT, padx=5)
+        # Action button (centered)
+        self.run_btn = ttk.Button(center_frame, text="Run Pipeline", command=self._run_pipeline)
+        self.run_btn.pack(padx=5)
 
     def _create_main_layout(self):
         """Create main layout with sidebar and content area."""
@@ -1100,7 +1094,6 @@ class DTIALPSApplication(tk.Tk):
 
         # Disable UI
         self.run_btn.config(state=tk.DISABLED)
-        self.stop_btn.config(state=tk.NORMAL)
 
         # Clear log and console tree
         self.log_text.config(state=tk.NORMAL)
@@ -1119,20 +1112,13 @@ class DTIALPSApplication(tk.Tk):
 
         # Create batch worker
         self.result_queue = queue.Queue()
-        self.cancel_event = threading.Event()
 
         batch_runner = BatchRunner(self.batch_state)
-        self.worker = BatchWorker(batch_runner, self.result_queue, self.cancel_event)
+        self.worker = BatchWorker(batch_runner, self.result_queue, None)
         self.worker.start()
 
         # Start polling for results
         self.after(100, self._check_results)
-
-    def _stop_pipeline(self):
-        """Request pipeline cancellation."""
-        if self.cancel_event:
-            self.cancel_event.set()
-            self._log("Cancellation requested...")
 
     def _check_results(self):
         """Poll result queue for updates."""
@@ -1148,7 +1134,6 @@ class DTIALPSApplication(tk.Tk):
             self.after(100, self._check_results)
         else:
             self.run_btn.config(state=tk.NORMAL)
-            self.stop_btn.config(state=tk.DISABLED)
 
     def _handle_result(self, msg):
         """Handle message from worker."""
