@@ -6,10 +6,13 @@ This script registers a subject's FA image to the JHU-ICBM-FA-1mm template,
 then inverse-warps SCR/SLF label masks from template space to subject space.
 
 Usage:
-    python test_registration.py <subject_fa_path> [--output-dir <dir>]
+    python test_registration.py <subject_fa_path> [--output-dir <dir>] [--v1 <v1_path>]
 
 Example:
     python test_registration.py /mnt/d/Dicoms/travellingHumanPhantom/outputFolderV2/sub-THP0001_ses-THP0001CCF1_acq-GD31_run-01_dwi/sub-THP0001_ses-THP0001CCF1_acq-GD31_run-01_dwi_FA.nii.gz
+
+    # With V1 image transformation to JHU space:
+    python test_registration.py subject_FA.nii.gz --v1 subject_V1.nii.gz
 
 Required Environment:
     - FSL must be installed and FSLDIR set (or sourced via /etc/fsl/fsl.sh)
@@ -51,7 +54,7 @@ def check_fsl_available() -> tuple[bool, str]:
     if not fsldir:
         return False, "FSLDIR not set and FSL not found in common locations"
 
-    required_tools = ["flirt", "fnirt", "invwarp", "applywarp"]
+    required_tools = ["bet2", "flirt", "fnirt", "invwarp", "applywarp"]
     bin_dir = os.path.join(fsldir, "bin")
     if not os.path.isdir(bin_dir):
         bin_dir = os.path.join(fsldir, "share", "fsl", "bin")
@@ -150,15 +153,19 @@ def register_fa_to_template(
     jhu_fa_template: Path,
     labels_template: Path,
     fsl_bin: Path,
+    subject_v1: Path | None = None,
 ) -> dict[str, Path] | None:
     """
     Perform registration of subject FA to JHU template and inverse warp labels.
 
     Steps:
-    1. Linear registration (FLIRT) - subject FA to JHU template
-    2. Non-linear registration (FNIRT) - refine with warping
-    3. Inverse warp (INVWARP) - create template-to-subject transform
-    4. Apply inverse warp (APPLYWARP) - bring labels to subject space
+    1. Fix NaN values in FA image
+    2. Skull stripping with BET2
+    3. Linear registration (FLIRT) - subject FA to JHU template
+    4. Non-linear registration (FNIRT) - refine with warping
+    5. Inverse warp (INVWARP) - create template-to-subject transform
+    6. Apply inverse warp (APPLYWARP) - bring labels to subject space
+    7. (Optional) Apply forward warp to V1 - transform V1 to JHU space
 
     Args:
         subject_fa: Path to subject's FA image
@@ -166,6 +173,7 @@ def register_fa_to_template(
         jhu_fa_template: Path to JHU-ICBM-FA-1mm.nii.gz
         labels_template: Path to SCR/SLF labels in template space
         fsl_bin: Path to FSL bin directory
+        subject_v1: Optional path to subject's V1 image for transformation to JHU space
 
     Returns:
         Dictionary with paths to output files, or None on failure
@@ -175,15 +183,36 @@ def register_fa_to_template(
     # Define output paths
     prefix = subject_fa.stem.replace(".nii", "").replace("_FA", "")
 
-    # Fix NaN values in FA image (FSL doesn't handle NaN)
+    # Step 1: Fix NaN values in FA image (FSL doesn't handle NaN)
     fa_fixed = output_dir / f"{prefix}_FA_nonan.nii.gz"
-    print("\nPreparing FA image (fixing NaN values if present)...")
+    print("\nStep 1: Preparing FA image (fixing NaN values if present)...")
     if not fix_nan_in_nifti(subject_fa, fa_fixed):
         print("ERROR: Failed to prepare FA image")
         return None
-    # Use fixed FA for registration
-    subject_fa_for_reg = fa_fixed
+
+    # Step 2: Skull stripping with BET2
+    fa_brain = output_dir / f"{prefix}_FA_brain.nii.gz"
+    bet_cmd = [
+        str(fsl_bin / "bet2"),
+        str(fa_fixed),
+        str(fa_brain),
+        "-f",
+        "0.3",  # Fractional intensity threshold (lower = larger brain)
+    ]
+
+    if not run_command(bet_cmd, "Step 2: Skull Stripping (BET2)"):
+        return None
+
+    if not fa_brain.exists():
+        print(f"ERROR: Skull-stripped FA not created: {fa_brain}")
+        return None
+
+    # Use skull-stripped FA for registration
+    subject_fa_for_reg = fa_brain
+
     outputs = {
+        "fa_nonan": fa_fixed,
+        "fa_brain": fa_brain,
         "affine_mat": output_dir / f"{prefix}_subject2jhu_affine.mat",
         "registered_fa": output_dir / f"{prefix}_FA_to_JHU.nii.gz",
         "warp_coef": output_dir / f"{prefix}_subject2jhu_warp_coef.nii.gz",
@@ -191,7 +220,7 @@ def register_fa_to_template(
         "labels_native": output_dir / f"{prefix}_SCR_SLF_labels_native.nii.gz",
     }
 
-    # Step 1: Linear Registration (FLIRT)
+    # Step 3: Linear Registration (FLIRT)
     flirt_cmd = [
         str(fsl_bin / "flirt"),
         "-in",
@@ -206,7 +235,7 @@ def register_fa_to_template(
         "12",  # Affine (12 DOF)
     ]
 
-    if not run_command(flirt_cmd, "Step 1: Linear Registration (FLIRT)"):
+    if not run_command(flirt_cmd, "Step 3: Linear Registration (FLIRT)"):
         return None
 
     # Verify affine matrix was created
@@ -214,7 +243,7 @@ def register_fa_to_template(
         print(f"ERROR: Affine matrix not created: {outputs['affine_mat']}")
         return None
 
-    # Step 2: Non-linear Registration (FNIRT)
+    # Step 4: Non-linear Registration (FNIRT)
     fnirt_cmd = [
         str(fsl_bin / "fnirt"),
         f"--in={subject_fa_for_reg}",
@@ -223,7 +252,7 @@ def register_fa_to_template(
         f"--cout={outputs['warp_coef']}",
     ]
 
-    if not run_command(fnirt_cmd, "Step 2: Non-linear Registration (FNIRT)"):
+    if not run_command(fnirt_cmd, "Step 4: Non-linear Registration (FNIRT)"):
         return None
 
     # Verify warp coefficient was created
@@ -231,7 +260,7 @@ def register_fa_to_template(
         print(f"ERROR: Warp coefficients not created: {outputs['warp_coef']}")
         return None
 
-    # Step 3: Create Inverse Warp
+    # Step 5: Create Inverse Warp
     invwarp_cmd = [
         str(fsl_bin / "invwarp"),
         f"--ref={subject_fa}",
@@ -239,7 +268,7 @@ def register_fa_to_template(
         f"--out={outputs['inverse_warp']}",
     ]
 
-    if not run_command(invwarp_cmd, "Step 3: Create Inverse Warp (INVWARP)"):
+    if not run_command(invwarp_cmd, "Step 5: Create Inverse Warp (INVWARP)"):
         return None
 
     # Verify inverse warp was created
@@ -247,7 +276,7 @@ def register_fa_to_template(
         print(f"ERROR: Inverse warp not created: {outputs['inverse_warp']}")
         return None
 
-    # Step 4: Apply Inverse Warp to Labels
+    # Step 6: Apply Inverse Warp to SCR-SLF Labels
     applywarp_cmd = [
         str(fsl_bin / "applywarp"),
         f"--ref={subject_fa}",
@@ -257,13 +286,67 @@ def register_fa_to_template(
         "--interp=nn",  # Nearest neighbor to preserve integer labels
     ]
 
-    if not run_command(applywarp_cmd, "Step 4: Apply Inverse Warp to Labels (APPLYWARP)"):
+    if not run_command(applywarp_cmd, "Step 6: Apply Inverse Warp to SCR-SLF Labels (APPLYWARP)"):
         return None
 
     # Verify labels were created
     if not outputs["labels_native"].exists():
         print(f"ERROR: Labels in native space not created: {outputs['labels_native']}")
         return None
+
+    # Step 6b: Apply Inverse Warp to all ROI templates
+    project_root = Path(__file__).parent.parent
+    roi_templates = {
+        "left_proj": project_root / "templates" / "JHU-labels-left_proj.nii.gz",
+        "left_assoc": project_root / "templates" / "JHU-labels-left_assoc.nii.gz",
+        "right_proj": project_root / "templates" / "JHU-labels-right_proj.nii.gz",
+        "right_assoc": project_root / "templates" / "JHU-labels-right_assoc.nii.gz",
+    }
+
+    print("\nTransforming individual ROI templates to native space...")
+    for roi_name, roi_template in roi_templates.items():
+        if not roi_template.exists():
+            print(f"  WARNING: ROI template not found: {roi_template}")
+            continue
+
+        roi_native = output_dir / f"{prefix}_{roi_name}_native.nii.gz"
+        outputs[f"{roi_name}_native"] = roi_native
+
+        applywarp_roi_cmd = [
+            str(fsl_bin / "applywarp"),
+            f"--ref={subject_fa}",
+            f"--in={roi_template}",
+            f"--warp={outputs['inverse_warp']}",
+            f"--out={roi_native}",
+            "--interp=nn",
+        ]
+
+        if not run_command(applywarp_roi_cmd, f"Step 6b: Transform {roi_name} to Native Space"):
+            return None
+
+        if not roi_native.exists():
+            print(f"ERROR: {roi_name} ROI in native space not created: {roi_native}")
+            return None
+
+    # Step 7 (Optional): Apply forward warp to V1 image
+    if subject_v1 is not None:
+        v1_to_jhu = output_dir / f"{prefix}_V1_to_JHU.nii.gz"
+        outputs["v1_to_jhu"] = v1_to_jhu
+
+        applywarp_v1_cmd = [
+            str(fsl_bin / "applywarp"),
+            f"--ref={jhu_fa_template}",
+            f"--in={subject_v1}",
+            f"--warp={outputs['warp_coef']}",
+            f"--out={v1_to_jhu}",
+        ]
+
+        if not run_command(applywarp_v1_cmd, "Step 7: Transform V1 to JHU Space (APPLYWARP)"):
+            return None
+
+        if not v1_to_jhu.exists():
+            print(f"ERROR: V1 in JHU space not created: {v1_to_jhu}")
+            return None
 
     return outputs
 
@@ -360,6 +443,12 @@ def main():
         default=None,
         help="Path to SCR/SLF labels template (default: templates/JHU-labels-SCR-SLF.nii.gz)",
     )
+    parser.add_argument(
+        "--v1",
+        type=str,
+        default=None,
+        help="Path to subject's V1 (principal eigenvector) image to transform to JHU space",
+    )
 
     args = parser.parse_args()
 
@@ -409,8 +498,18 @@ def main():
         print(f"ERROR: Labels template not found: {labels_template}")
         sys.exit(1)
 
+    # Validate V1 image if provided
+    subject_v1 = None
+    if args.v1:
+        subject_v1 = Path(args.v1).resolve()
+        if not subject_v1.exists():
+            print(f"ERROR: Subject V1 not found: {subject_v1}")
+            sys.exit(1)
+
     print(f"Labels template: {labels_template}")
     print(f"Subject FA: {subject_fa}")
+    if subject_v1:
+        print(f"Subject V1: {subject_v1}")
     print(f"Output directory: {output_dir}")
 
     # Run registration
@@ -424,6 +523,7 @@ def main():
         jhu_fa_template=jhu_fa_template,
         labels_template=labels_template,
         fsl_bin=fsl_bin,
+        subject_v1=subject_v1,
     )
 
     if outputs is None:

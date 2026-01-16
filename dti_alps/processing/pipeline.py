@@ -72,7 +72,10 @@ class PipelineState:
     tensor_path: str | None = None
     fa_path: str | None = None
     v1_path: str | None = None
-    labels_native_path: str | None = None  # SCR/SLF labels in native space
+
+    # ROI masks in native space (set by registration step)
+    # Keys: 'left_proj', 'left_assoc', 'right_proj', 'right_assoc'
+    roi_mask_paths: dict[str, str] = field(default_factory=dict)
 
     # Results
     roi_centers: dict[str, tuple] | None = None
@@ -196,9 +199,8 @@ class PipelineRunner:
     Stages:
     1. Preprocessing with dwifslpreproc
     2. DTI tensor fitting with dwi2tensor + tensor2metric (FA, V1)
-    3. Registration - FA to JHU template, SCR/SLF labels to native space
-    4. ROI detection with DTIALPSDetector
-    5. ALPS index calculation
+    3. Registration - FA to JHU template, ROI masks to native space
+    4. ALPS index calculation
     """
 
     def __init__(
@@ -374,7 +376,7 @@ class PipelineRunner:
 
     def run_registration(self) -> bool:
         """
-        Run FA-to-template registration to get SCR/SLF labels in native space.
+        Run FA-to-template registration to transform ROI masks to native space.
 
         Returns
         -------
@@ -382,7 +384,7 @@ class PipelineRunner:
             True if successful
         """
         self._update_stage("registration", "running")
-        self._log("Starting FA-to-template registration...")
+        self._log("Starting FA-to-template registration and ROI transformation...")
 
         # Check FSL registration tools
         fsl_ok, missing = registration.check_fsl_registration_available()
@@ -399,71 +401,15 @@ class PipelineRunner:
         )
 
         if success:
-            self._log(f"Labels saved to: {self.state.labels_native_path}")
             self._update_stage("registration", "complete")
         else:
             self._update_stage("registration", "failed")
 
         return success
 
-    def run_roi_detection(self) -> bool:
-        """
-        Run ROI detection using DTIALPSDetector.
-
-        Returns
-        -------
-        bool
-            True if successful
-        """
-        self._update_stage("roi", "running")
-        self._log("Starting automatic ROI detection...")
-
-        try:
-            # Clean import from the package
-            from ..detector import DTIALPSDetector
-
-            # Create detector with current parameters
-            detector = DTIALPSDetector(
-                fa_thresh=self.state.fa_thresh,
-                orient_thresh=self.state.orient_thresh,
-                min_zone_width=self.state.min_zone_width,
-                roi_radius_mm=self.state.roi_radius_mm,
-                z_tolerance=self.state.z_tolerance,
-            )
-
-            # Load FA and V1 data
-            self._log(f"Loading FA: {self.state.fa_path}")
-            self._log(f"Loading V1: {self.state.v1_path}")
-            detector.load_data(self.state.fa_path, self.state.v1_path)
-
-            # Find candidates
-            self._log("Searching for ROI candidates...")
-            detector.find_candidates()
-
-            # Select optimal ROIs
-            self._log("Selecting optimal bilateral ROIs...")
-            self.state.roi_centers = detector.select_optimal_rois()
-
-            # Save ROI masks
-            roi_dir = os.path.join(self.state.output_dir, "rois")
-            os.makedirs(roi_dir, exist_ok=True)
-            detector.save_roi_masks(roi_dir, self.state.output_prefix)
-
-            self._log("ROI detection completed successfully")
-            self._update_stage("roi", "complete")
-
-            # Store detector for ALPS calculation
-            self._detector = detector
-            return True
-
-        except Exception as e:
-            self._log(f"ERROR: ROI detection failed: {str(e)}")
-            self._update_stage("roi", "failed")
-            return False
-
     def run_alps_calculation(self) -> bool:
         """
-        Calculate DTI-ALPS index from tensor and ROIs.
+        Calculate DTI-ALPS index from tensor and registered ROI masks.
 
         Returns
         -------
@@ -477,6 +423,12 @@ class PipelineRunner:
             import nibabel as nib
             import numpy as np
 
+            # Verify ROI masks are available
+            if not self.state.roi_mask_paths:
+                self._log("ERROR: ROI masks not available. Run registration first.")
+                self._update_stage("results", "failed")
+                return False
+
             # Load tensor image
             self._log(f"Loading tensor: {self.state.tensor_path}")
             tensor_img = nib.load(self.state.tensor_path)
@@ -488,18 +440,29 @@ class PipelineRunner:
             dyy = tensor_data[:, :, :, config.TENSOR_DYY_INDEX]
             dzz = tensor_data[:, :, :, config.TENSOR_DZZ_INDEX]
 
-            # Get ROI masks
-            masks = self._detector.create_roi_masks()
+            # Load registered ROI masks
+            self._log("Loading registered ROI masks...")
+            masks = {}
+            for roi_name, roi_path in self.state.roi_mask_paths.items():
+                self._log(f"  Loading {roi_name}: {roi_path}")
+                roi_img = nib.load(roi_path)
+                masks[roi_name] = roi_img.get_fdata()
 
             # Calculate mean diffusivities in each ROI
             results = {}
 
             for side in ["left", "right"]:
-                proj_mask = masks[f"proj_{side}"]
-                assoc_mask = masks[f"assoc_{side}"]
+                proj_mask = masks[f"{side}_proj"]
+                assoc_mask = masks[f"{side}_assoc"]
 
                 proj_idx = np.where(proj_mask > 0)
                 assoc_idx = np.where(assoc_mask > 0)
+
+                # Log ROI sizes
+                proj_voxels = len(proj_idx[0])
+                assoc_voxels = len(assoc_idx[0])
+                self._log(f"  {side.capitalize()} projection ROI: {proj_voxels} voxels")
+                self._log(f"  {side.capitalize()} association ROI: {assoc_voxels} voxels")
 
                 # Projection ROI: Dxx (perivascular) and Dyy (perpendicular)
                 results[f"Dxx_proj_{side}"] = np.mean(dxx[proj_idx])
@@ -573,19 +536,13 @@ class PipelineRunner:
         if self.cancelled:
             return False
 
-        # Stage 3: Registration (FA to JHU template, labels to native space)
+        # Stage 3: Registration (FA to JHU template, ROIs to native space)
         if not self.run_registration():
             return False
         if self.cancelled:
             return False
 
-        # Stage 4: ROI detection
-        if not self.run_roi_detection():
-            return False
-        if self.cancelled:
-            return False
-
-        # Stage 5: ALPS calculation
+        # Stage 4: ALPS calculation
         if not self.run_alps_calculation():
             return False
 

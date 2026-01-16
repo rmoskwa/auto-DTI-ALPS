@@ -1,8 +1,8 @@
 """
-FSL-based registration for ROI region limiting in DTI-ALPS pipeline.
+FSL-based registration for automatic ROI placement in DTI-ALPS pipeline.
 
 This module registers subject FA images to the JHU-ICBM-FA-1mm template
-and transforms SCR/SLF label masks to subject native space.
+and transforms pre-defined ROI masks from template space to subject native space.
 """
 
 import os
@@ -81,7 +81,7 @@ def check_fsl_registration_available() -> tuple[bool, list[str]]:
     tuple of (bool, list)
         (all_available, list of missing commands)
     """
-    required_commands = ["flirt", "fnirt", "invwarp", "applywarp"]
+    required_commands = ["bet2", "flirt", "fnirt", "invwarp", "applywarp"]
     missing = []
 
     fsl_bin = get_fsl_bin_dir()
@@ -121,22 +121,33 @@ def get_jhu_template_path() -> Path | None:
     return None
 
 
-def get_labels_template_path() -> Path | None:
+def get_roi_template_paths() -> dict[str, Path] | None:
     """
-    Get path to SCR/SLF labels template shipped with the package.
+    Get paths to pre-defined ROI templates shipped with the package.
 
     Returns
     -------
-    Path or None
-        Path to labels template, or None if not found
+    dict or None
+        Dictionary mapping ROI names to template paths, or None if any missing.
+        Keys: 'left_proj', 'left_assoc', 'right_proj', 'right_assoc'
     """
     # Look relative to this module
     module_dir = Path(__file__).parent.parent.parent
-    template_path = module_dir / "templates" / "JHU-labels-SCR-SLF.nii.gz"
-    if template_path.exists():
-        return template_path
+    templates_dir = module_dir / "templates"
 
-    return None
+    roi_templates = {
+        "left_proj": templates_dir / "JHU-labels-left_proj.nii.gz",
+        "left_assoc": templates_dir / "JHU-labels-left_assoc.nii.gz",
+        "right_proj": templates_dir / "JHU-labels-right_proj.nii.gz",
+        "right_assoc": templates_dir / "JHU-labels-right_assoc.nii.gz",
+    }
+
+    # Check all templates exist
+    for path in roi_templates.values():
+        if not path.exists():
+            return None
+
+    return roi_templates
 
 
 def fix_nan_in_nifti(input_path: str, output_path: str) -> bool:
@@ -231,14 +242,15 @@ def register_fa_to_template(
     log_callback: callable = None,
 ) -> bool:
     """
-    Register subject FA to JHU template and transform labels to native space.
+    Register subject FA to JHU template and transform ROI masks to native space.
 
     Steps:
     1. Fix NaN values in FA image
-    2. Linear registration (FLIRT)
-    3. Non-linear registration (FNIRT)
-    4. Create inverse warp (INVWARP)
-    5. Apply inverse warp to labels (APPLYWARP)
+    2. Skull stripping with BET2
+    3. Linear registration (FLIRT)
+    4. Non-linear registration (FNIRT)
+    5. Create inverse warp (INVWARP)
+    6. Apply inverse warp to all 4 ROI masks (APPLYWARP)
 
     Parameters
     ----------
@@ -265,34 +277,56 @@ def register_fa_to_template(
         log("ERROR: JHU-ICBM-FA-1mm.nii.gz template not found")
         return False
 
-    labels_template = get_labels_template_path()
-    if not labels_template:
-        log("ERROR: JHU-labels-SCR-SLF.nii.gz template not found")
+    roi_templates = get_roi_template_paths()
+    if not roi_templates:
+        log("ERROR: ROI template files not found in templates/ directory")
         return False
 
     # Set up output paths
     reg_dir = Path(state.output_dir) / "registration"
     reg_dir.mkdir(parents=True, exist_ok=True)
 
+    # Also create rois directory for final ROI masks
+    roi_dir = Path(state.output_dir) / "rois"
+    roi_dir.mkdir(parents=True, exist_ok=True)
+
     prefix = state.output_prefix
     fa_nonan = reg_dir / f"{prefix}_FA_nonan.nii.gz"
+    fa_brain = reg_dir / f"{prefix}_FA_brain.nii.gz"
     affine_mat = reg_dir / f"{prefix}_subject2jhu_affine.mat"
     warp_coef = reg_dir / f"{prefix}_subject2jhu_warp_coef.nii.gz"
     inverse_warp = reg_dir / f"{prefix}_jhu2subject_warp_coef.nii.gz"
-    labels_native = reg_dir / f"{prefix}_SCR_SLF_labels_native.nii.gz"
 
-    # Step 1: Fix NaN values
+    # Step 1: Fix NaN values (bet2 may fail on NaN)
     log("Preparing FA image (fixing NaN values if present)...")
     if not fix_nan_in_nifti(state.fa_path, str(fa_nonan)):
         log("ERROR: Failed to prepare FA image")
         return False
 
-    # Step 2: Linear registration (FLIRT)
+    # Step 2: Skull stripping with bet2
+    log("Running skull stripping (BET2)...")
+    bet_cmd = [
+        str(fsl_bin / "bet2"),
+        str(fa_nonan),
+        str(fa_brain),
+        "-f",
+        "0.3",  # Fractional intensity threshold (lower = larger brain)
+    ]
+    log(f"  Command: {' '.join(bet_cmd)}")
+    if not run_fsl_command(bet_cmd, log):
+        log("ERROR: BET2 skull stripping failed")
+        return False
+
+    if not fa_brain.exists():
+        log("ERROR: Skull-stripped FA not created")
+        return False
+
+    # Step 3: Linear registration (FLIRT)
     log("Running linear registration (FLIRT)...")
     flirt_cmd = [
         str(fsl_bin / "flirt"),
         "-in",
-        str(fa_nonan),
+        str(fa_brain),
         "-ref",
         str(jhu_template),
         "-omat",
@@ -309,11 +343,11 @@ def register_fa_to_template(
         log("ERROR: Affine matrix not created")
         return False
 
-    # Step 3: Non-linear registration (FNIRT)
+    # Step 4: Non-linear registration (FNIRT)
     log("Running non-linear registration (FNIRT)...")
     fnirt_cmd = [
         str(fsl_bin / "fnirt"),
-        f"--in={fa_nonan}",
+        f"--in={fa_brain}",
         f"--ref={jhu_template}",
         f"--aff={affine_mat}",
         f"--cout={warp_coef}",
@@ -327,7 +361,7 @@ def register_fa_to_template(
         log("ERROR: Warp coefficients not created")
         return False
 
-    # Step 4: Create inverse warp
+    # Step 5: Create inverse warp
     log("Creating inverse warp (INVWARP)...")
     invwarp_cmd = [
         str(fsl_bin / "invwarp"),
@@ -344,27 +378,38 @@ def register_fa_to_template(
         log("ERROR: Inverse warp not created")
         return False
 
-    # Step 5: Apply inverse warp to labels
-    log("Applying inverse warp to labels (APPLYWARP)...")
-    applywarp_cmd = [
-        str(fsl_bin / "applywarp"),
-        f"--ref={state.fa_path}",
-        f"--in={labels_template}",
-        f"--warp={inverse_warp}",
-        f"--out={labels_native}",
-        "--interp=nn",
-    ]
-    log(f"  Command: {' '.join(applywarp_cmd)}")
-    if not run_fsl_command(applywarp_cmd, log):
-        log("ERROR: APPLYWARP failed")
-        return False
+    # Step 6: Apply inverse warp to all ROI masks
+    log("Transforming ROI masks to native space...")
+    roi_native_paths = {}
 
-    if not labels_native.exists():
-        log("ERROR: Labels in native space not created")
-        return False
+    for roi_name, roi_template in roi_templates.items():
+        roi_native = roi_dir / f"{prefix}_{roi_name}.nii.gz"
+        log(f"  Transforming {roi_name}...")
 
-    # Store result path in state
-    state.labels_native_path = str(labels_native)
+        applywarp_cmd = [
+            str(fsl_bin / "applywarp"),
+            f"--ref={state.fa_path}",
+            f"--in={roi_template}",
+            f"--warp={inverse_warp}",
+            f"--out={roi_native}",
+            "--interp=nn",
+        ]
+        if not run_fsl_command(applywarp_cmd, log):
+            log(f"ERROR: Failed to transform {roi_name}")
+            return False
 
-    log("Registration completed successfully")
+        if not roi_native.exists():
+            log(f"ERROR: {roi_name} ROI not created")
+            return False
+
+        roi_native_paths[roi_name] = str(roi_native)
+
+    # Store ROI paths in state
+    state.roi_mask_paths = roi_native_paths
+
+    log("Registration and ROI transformation completed successfully")
+    log(f"  Left projection ROI: {roi_native_paths['left_proj']}")
+    log(f"  Left association ROI: {roi_native_paths['left_assoc']}")
+    log(f"  Right projection ROI: {roi_native_paths['right_proj']}")
+    log(f"  Right association ROI: {roi_native_paths['right_assoc']}")
     return True
