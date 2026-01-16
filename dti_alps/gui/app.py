@@ -45,6 +45,9 @@ class DTIALPSApplication(tk.Tk):
         self.subject_files_list: list[SubjectFiles] = []
         self.batch_state: BatchState | None = None
 
+        # Configure styles
+        self._setup_styles()
+
         # Build UI
         self._create_menu()
         self._create_toolbar()
@@ -52,6 +55,23 @@ class DTIALPSApplication(tk.Tk):
 
         # Initialize first stage
         self._show_stage(0)
+
+    def _setup_styles(self):
+        """Configure custom ttk styles."""
+        style = ttk.Style()
+
+        # Primary action button style (for Run Pipeline)
+        style.configure(
+            "Primary.TButton",
+            font=("TkDefaultFont", 11, "bold"),
+            padding=(20, 10),
+        )
+        # Map colors for different states
+        style.map(
+            "Primary.TButton",
+            background=[("active", "#4a9f4a"), ("!disabled", "#5cb85c")],
+            foreground=[("!disabled", "white")],
+        )
 
     def _create_menu(self):
         """Create menu bar."""
@@ -80,9 +100,14 @@ class DTIALPSApplication(tk.Tk):
         center_frame = ttk.Frame(toolbar)
         center_frame.pack(expand=True)
 
-        # Action button (centered)
-        self.run_btn = ttk.Button(center_frame, text="Run Pipeline", command=self._run_pipeline)
-        self.run_btn.pack(padx=5)
+        # Action button (centered, prominent styling)
+        self.run_btn = ttk.Button(
+            center_frame,
+            text="Run Pipeline",
+            command=self._run_pipeline,
+            style="Primary.TButton",
+        )
+        self.run_btn.pack(padx=5, pady=5)
 
     def _create_main_layout(self):
         """Create main layout with sidebar and content area."""
