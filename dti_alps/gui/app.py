@@ -91,20 +91,38 @@ class DTIALPSApplication(tk.Tk):
         self.stop_btn.pack(side=tk.RIGHT, padx=5)
 
     def _create_main_layout(self):
-        """Create main layout with sidebar, content, and progress panel."""
+        """Create main layout with sidebar and content area."""
         # Main container
         main_frame = ttk.Frame(self)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Left sidebar with stage navigation
+        # Left sidebar with Main Console and stage navigation
         self.sidebar = ttk.Frame(main_frame, width=200)
         self.sidebar.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
         self.sidebar.pack_propagate(False)
 
+        # Main Console button at top
+        console_label = ttk.Label(
+            self.sidebar, text="Main Console", font=("TkDefaultFont", 10, "bold")
+        )
+        console_label.pack(pady=(10, 5))
+
+        self.console_btn = ttk.Button(
+            self.sidebar,
+            text="Console",
+            command=self._show_console,
+            width=20,
+        )
+        self.console_btn.pack(pady=2, padx=5, fill=tk.X)
+
+        # Separator
+        ttk.Separator(self.sidebar, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10, padx=5)
+
+        # Pipeline Stages section
         sidebar_label = ttk.Label(
             self.sidebar, text="Pipeline Stages", font=("TkDefaultFont", 10, "bold")
         )
-        sidebar_label.pack(pady=10)
+        sidebar_label.pack(pady=(0, 5))
 
         self.stage_buttons = []
         for i, (_stage_id, stage_name) in enumerate(config.PIPELINE_STAGES):
@@ -121,15 +139,12 @@ class DTIALPSApplication(tk.Tk):
         right_frame = ttk.Frame(main_frame)
         right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Content frame (changes with stage)
+        # Content frame (changes with stage/console)
         self.content_frame = ttk.LabelFrame(right_frame, text="Settings", padding=10)
-        self.content_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
+        self.content_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Progress panel at bottom
-        self.progress_frame = ttk.LabelFrame(right_frame, text="Progress", padding=5)
-        self.progress_frame.pack(fill=tk.X, pady=(5, 0))
-
-        self._create_progress_panel()
+        # Create console frame
+        self._create_console_frame()
 
         # Create all stage frames (hidden initially)
         self.stage_frames = {}
@@ -143,29 +158,72 @@ class DTIALPSApplication(tk.Tk):
         # Storage for CLI option variables (checkbox vars and entry vars)
         # Initialized by _create_cli_option_row calls in frame creation
 
-    def _create_progress_panel(self):
-        """Create progress tracking panel."""
-        # Progress bar
-        progress_top = ttk.Frame(self.progress_frame)
-        progress_top.pack(fill=tk.X)
+    def _create_console_frame(self):
+        """Create the Main Console frame with status treeview and log output."""
+        frame = ttk.Frame(self.content_frame)
+        self.console_frame = frame
 
-        self.progress_var = tk.DoubleVar(value=0)
-        self.progress_bar = ttk.Progressbar(progress_top, variable=self.progress_var, maximum=100)
-        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        # Status section with subject treeview
+        status_frame = ttk.LabelFrame(frame, text="Processing Status", padding=10)
+        status_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
 
-        self.status_label = ttk.Label(progress_top, text="Ready")
-        self.status_label.pack(side=tk.LEFT)
+        # Treeview for subject status
+        tree_frame = ttk.Frame(status_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+
+        columns = ("subject_id", "status")
+        self.console_tree = ttk.Treeview(
+            tree_frame,
+            columns=columns,
+            show="headings",
+            selectmode="browse",
+            height=8,
+        )
+
+        self.console_tree.heading("subject_id", text="Subject ID")
+        self.console_tree.heading("status", text="Status")
+
+        self.console_tree.column("subject_id", width=200)
+        self.console_tree.column("status", width=150)
+
+        # Scrollbar for treeview
+        tree_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.console_tree.yview)
+        self.console_tree.configure(yscrollcommand=tree_scroll.set)
+
+        self.console_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Console output section
+        console_output_frame = ttk.LabelFrame(frame, text="Console Output", padding=10)
+        console_output_frame.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
 
         # Log text area
-        log_frame = ttk.Frame(self.progress_frame)
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+        log_frame = ttk.Frame(console_output_frame)
+        log_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.log_text = tk.Text(log_frame, height=6, state=tk.DISABLED, wrap=tk.WORD)
+        self.log_text = tk.Text(log_frame, height=12, state=tk.DISABLED, wrap=tk.WORD)
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         scrollbar = ttk.Scrollbar(log_frame, command=self.log_text.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.config(yscrollcommand=scrollbar.set)
+
+    def _show_console(self):
+        """Show the Main Console view."""
+        # Update button states - deselect all stage buttons
+        for btn in self.stage_buttons:
+            btn.state(["!pressed"])
+        self.console_btn.state(["pressed"])
+
+        # Hide all stage frames
+        for stage_frame in self.stage_frames.values():
+            stage_frame.pack_forget()
+
+        # Show console frame
+        self.console_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Update frame title
+        self.content_frame.config(text="Main Console")
 
     def _create_data_frame(self):
         """Create batch data input frame (Stage 1)."""
@@ -188,7 +246,7 @@ class DTIALPSApplication(tk.Tk):
         tree_frame = ttk.Frame(folders_frame)
         tree_frame.pack(fill=tk.BOTH, expand=True)
 
-        columns = ("subject_id", "folder", "status", "files")
+        columns = ("subject_id", "folder", "files")
         self.subjects_tree = ttk.Treeview(
             tree_frame,
             columns=columns,
@@ -199,13 +257,11 @@ class DTIALPSApplication(tk.Tk):
 
         self.subjects_tree.heading("subject_id", text="Subject ID")
         self.subjects_tree.heading("folder", text="Folder Path")
-        self.subjects_tree.heading("status", text="Status")
         self.subjects_tree.heading("files", text="Files Found")
 
-        self.subjects_tree.column("subject_id", width=120)
-        self.subjects_tree.column("folder", width=350)
-        self.subjects_tree.column("status", width=100)
-        self.subjects_tree.column("files", width=150)
+        self.subjects_tree.column("subject_id", width=150)
+        self.subjects_tree.column("folder", width=400)
+        self.subjects_tree.column("files", width=170)
 
         # Scrollbars
         y_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.subjects_tree.yview)
@@ -513,22 +569,15 @@ class DTIALPSApplication(tk.Tk):
                 if is_duplicate:
                     continue
 
-                # Determine status
-                if subject_files.is_valid:
-                    status = "Ready"
-                else:
-                    status = "Missing Files"
-
                 files_found = subject_files.get_files_summary()
 
-                # Add to tree
+                # Add to Data Input tree (without status)
                 self.subjects_tree.insert(
                     "",
                     tk.END,
                     values=(
                         subject_files.subject_id,
                         folder_path,
-                        status,
                         files_found,
                     ),
                 )
@@ -910,14 +959,18 @@ class DTIALPSApplication(tk.Tk):
         """Show the specified pipeline stage."""
         self.current_stage = stage_idx
 
-        # Update button states
+        # Update button states - deselect console button
+        self.console_btn.state(["!pressed"])
+
+        # Update stage button states
         for i, btn in enumerate(self.stage_buttons):
             if i == stage_idx:
                 btn.state(["pressed"])
             else:
                 btn.state(["!pressed"])
 
-        # Hide all frames
+        # Hide console frame and all stage frames
+        self.console_frame.pack_forget()
         for frame in self.stage_frames.values():
             frame.pack_forget()
 
@@ -1049,14 +1102,20 @@ class DTIALPSApplication(tk.Tk):
         self.run_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
 
-        # Clear log
+        # Clear log and console tree
         self.log_text.config(state=tk.NORMAL)
         self.log_text.delete(1.0, tk.END)
         self.log_text.config(state=tk.DISABLED)
 
-        # Reset progress
-        self.progress_var.set(0)
-        self.status_label.config(text="Starting batch processing...")
+        # Clear and populate console tree with subjects
+        for item in self.console_tree.get_children():
+            self.console_tree.delete(item)
+        for subject_files in self.subject_files_list:
+            self.console_tree.insert("", tk.END, values=(subject_files.subject_id, "Pending"))
+
+        # Switch to console view
+        self._show_console()
+        self._log("Starting batch processing...")
 
         # Create batch worker
         self.result_queue = queue.Queue()
@@ -1103,41 +1162,36 @@ class DTIALPSApplication(tk.Tk):
             self._update_stage_status(stage, status)
         elif msg_type == "batch_start":
             total = data
-            self.status_label.config(text=f"Processing 0/{total} subjects")
+            self._log(f"Processing 0/{total} subjects")
         elif msg_type == "subject_start":
             index, subject_id = data
             total = len(self.subject_files_list)
-            self.status_label.config(text=f"Processing {index + 1}/{total}: {subject_id}")
-            # Update tree status
-            items = self.subjects_tree.get_children()
+            self._log(f"Processing {index + 1}/{total}: {subject_id}")
+            # Update console tree status
+            items = self.console_tree.get_children()
             if index < len(items):
-                self.subjects_tree.set(items[index], "status", "Processing")
+                self.console_tree.set(items[index], "status", "Processing")
         elif msg_type == "subject_complete":
             index, result = data
             total = len(self.subject_files_list)
             completed = index + 1
 
-            # Update progress bar
-            self.progress_var.set((completed / total) * 100)
-            self.status_label.config(text=f"Completed {completed}/{total} subjects")
+            self._log(f"Completed {completed}/{total} subjects")
 
-            # Update tree status
-            items = self.subjects_tree.get_children()
+            # Update console tree status
+            items = self.console_tree.get_children()
             if index < len(items):
                 status = "Completed" if result.status == "completed" else "Failed"
-                self.subjects_tree.set(items[index], "status", status)
+                self.console_tree.set(items[index], "status", status)
         elif msg_type == "batch_complete":
             batch_state = data
             self._log(
                 f"Batch complete: {batch_state.success_count}/{batch_state.total_subjects} succeeded"
             )
-            self.progress_var.set(100)
             self._show_batch_results(batch_state)
         elif msg_type == "batch_success":
             batch_state = data
             self._log("All subjects processed successfully!")
-            self.status_label.config(text="Complete")
-            self.progress_var.set(100)
             self._show_batch_results(batch_state)
         elif msg_type == "batch_partial":
             batch_state = data
@@ -1145,27 +1199,19 @@ class DTIALPSApplication(tk.Tk):
                 f"Batch completed with errors: {batch_state.success_count}/"
                 f"{batch_state.total_subjects} succeeded"
             )
-            self.status_label.config(text="Completed with errors")
-            self.progress_var.set(100)
             self._show_batch_results(batch_state)
         elif msg_type == "batch_cancelled":
             self._log("Batch processing cancelled.")
-            self.status_label.config(text="Cancelled")
         elif msg_type == "complete":
             # Single subject complete (legacy)
             self._log("Pipeline completed successfully!")
-            self.status_label.config(text="Complete")
-            self.progress_var.set(100)
             self._show_results(data)
         elif msg_type == "failed":
             self._log("Pipeline failed.")
-            self.status_label.config(text="Failed")
         elif msg_type == "cancelled":
             self._log("Pipeline cancelled.")
-            self.status_label.config(text="Cancelled")
         elif msg_type == "error":
             self._log(f"Error: {data}")
-            self.status_label.config(text="Error")
 
     def _log(self, message):
         """Append message to log."""
@@ -1179,7 +1225,7 @@ class DTIALPSApplication(tk.Tk):
         self.log_text.config(state=tk.DISABLED)
 
     def _update_stage_status(self, stage, status):
-        """Update stage indicator."""
+        """Update stage indicator (logs status changes)."""
         stage_names = {
             "preproc": "Preprocessing",
             "dti": "DTI Fitting",
@@ -1187,13 +1233,11 @@ class DTIALPSApplication(tk.Tk):
             "results": "Calculating ALPS",
         }
 
-        stage_progress = {"preproc": 25, "dti": 50, "roi": 75, "results": 90}
-
+        stage_name = stage_names.get(stage, stage)
         if status == "running":
-            self.status_label.config(text=f"Running: {stage_names.get(stage, stage)}")
-            self.progress_var.set(stage_progress.get(stage, 0))
+            self._log(f"Running: {stage_name}")
         elif status == "complete":
-            self.progress_var.set(stage_progress.get(stage, 0) + 10)
+            self._log(f"Completed: {stage_name}")
 
     def _show_results(self, alps_results):
         """Display ALPS results."""
