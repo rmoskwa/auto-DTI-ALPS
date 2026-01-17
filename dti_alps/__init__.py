@@ -1,12 +1,8 @@
 """
-DTI-ALPS - Automatic ROI Detection for DTI-ALPS Analysis
+DTI-ALPS - Automated DTI-ALPS Processing Pipeline
 
-This package provides tools for automatic detection of optimal ROI locations
-for DTI-ALPS (Diffusion Tensor Imaging Along the Perivascular Space) analysis.
+This package provides tools for automated DTI-ALPS (Diffusion Tensor Imaging
+Along the Perivascular Space) analysis using template-based ROI placement.
 """
 
 __version__ = "0.1.0"
-
-from .detector import DTIALPSDetector as DTIALPSDetector
-from .detector import FiberZone as FiberZone
-from .detector import ROICandidate as ROICandidate

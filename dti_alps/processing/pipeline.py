@@ -61,17 +61,11 @@ class PipelineState:
     # Legacy DTI fitting parameters
     dti_mask_path: str | None = None
 
-    # Stage 4: tensor2metric CLI options dict
+    # Stage 6: tensor2metric CLI options dict
     tensor2metric_options: dict[str, Any] = field(default_factory=dict)
 
-    # Stage 5: ROI detection parameters
-    fa_thresh: float = config.DEFAULT_FA_THRESH
-    orient_thresh: float = config.DEFAULT_ORIENT_THRESH
-    min_zone_width: int = config.DEFAULT_MIN_ZONE_WIDTH
-    roi_radius_mm: float = config.DEFAULT_ROI_RADIUS_MM
-    z_tolerance: int = config.DEFAULT_Z_TOLERANCE
-
-    # ROI sphere radius for registration-based ROI placement (mm)
+    # Stage 7: ROI placement parameters
+    # ROI sphere radius for template-based ROI placement (mm)
     roi_sphere_radius: float = 2.0
 
     # Output settings
@@ -142,12 +136,8 @@ class BatchConfig:
     generate_qc: bool = False
     keep_intermediates: bool = False
 
-    # ROI detection parameters
-    fa_thresh: float = config.DEFAULT_FA_THRESH
-    orient_thresh: float = config.DEFAULT_ORIENT_THRESH
-    min_zone_width: int = config.DEFAULT_MIN_ZONE_WIDTH
-    roi_radius_mm: float = config.DEFAULT_ROI_RADIUS_MM
-    z_tolerance: int = config.DEFAULT_Z_TOLERANCE
+    # ROI placement parameters
+    roi_sphere_radius: float = 2.0  # Sphere radius in mm for template-based ROI placement
 
     # Output settings
     output_dir: str = ""
@@ -811,12 +801,8 @@ class BatchRunner:
             topup_options=batch_config.topup_options,
             generate_qc=batch_config.generate_qc,
             keep_intermediates=batch_config.keep_intermediates,
-            # ROI detection parameters
-            fa_thresh=batch_config.fa_thresh,
-            orient_thresh=batch_config.orient_thresh,
-            min_zone_width=batch_config.min_zone_width,
-            roi_radius_mm=batch_config.roi_radius_mm,
-            z_tolerance=batch_config.z_tolerance,
+            # ROI placement parameters
+            roi_sphere_radius=batch_config.roi_sphere_radius,
             # Output settings
             output_dir=subject_output_dir,
             output_prefix=subject_files.subject_id,

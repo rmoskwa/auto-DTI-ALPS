@@ -3,6 +3,7 @@ Main application window for DTI-ALPS Processing Tool.
 """
 
 import queue
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -995,98 +996,25 @@ class DTIALPSApplication(tk.Tk):
         options_frame.columnconfigure(2, weight=1)
 
     def _create_roi_frame(self):
-        """Create ROI detection parameters frame (Stage 5)."""
+        """Create ROI placement parameters frame (Stage 7)."""
         frame = ttk.Frame(self.content_frame)
         self.stage_frames["roi"] = frame
 
         info_label = ttk.Label(
             frame,
-            text="Configure parameters for automatic ROI detection.\n"
-            "The algorithm will find optimal locations for projection and association fiber ROIs.",
+            text="Configure parameters for template-based ROI placement.\n"
+            "ROIs are placed by registering the subject FA to the JHU template\n"
+            "and transforming predefined ROI masks to native subject space.",
             justify=tk.LEFT,
         )
         info_label.pack(anchor=tk.W, pady=10)
 
         # Parameters
-        param_frame = ttk.LabelFrame(frame, text="Detection Parameters", padding=10)
+        param_frame = ttk.LabelFrame(frame, text="ROI Placement Parameters", padding=10)
         param_frame.pack(fill=tk.X, pady=5)
 
-        # FA threshold
+        # ROI sphere radius
         row = 0
-        ttk.Label(param_frame, text="FA Threshold:").grid(row=row, column=0, sticky=tk.W, pady=5)
-        self.fa_thresh_var = tk.DoubleVar(value=config.DEFAULT_FA_THRESH)
-        fa_scale = ttk.Scale(
-            param_frame,
-            from_=0.1,
-            to=0.5,
-            variable=self.fa_thresh_var,
-            orient=tk.HORIZONTAL,
-            length=200,
-        )
-        fa_scale.grid(row=row, column=1, sticky=tk.W, padx=5)
-        self.fa_thresh_label = ttk.Label(param_frame, text=f"{config.DEFAULT_FA_THRESH:.2f}")
-        self.fa_thresh_label.grid(row=row, column=2, sticky=tk.W)
-        fa_scale.config(command=lambda v: self.fa_thresh_label.config(text=f"{float(v):.2f}"))
-
-        # Orientation threshold
-        row += 1
-        ttk.Label(param_frame, text="Orientation Threshold:").grid(
-            row=row, column=0, sticky=tk.W, pady=5
-        )
-        self.orient_thresh_var = tk.DoubleVar(value=config.DEFAULT_ORIENT_THRESH)
-        orient_scale = ttk.Scale(
-            param_frame,
-            from_=0.5,
-            to=0.9,
-            variable=self.orient_thresh_var,
-            orient=tk.HORIZONTAL,
-            length=200,
-        )
-        orient_scale.grid(row=row, column=1, sticky=tk.W, padx=5)
-        self.orient_thresh_label = ttk.Label(
-            param_frame, text=f"{config.DEFAULT_ORIENT_THRESH:.2f}"
-        )
-        self.orient_thresh_label.grid(row=row, column=2, sticky=tk.W)
-        orient_scale.config(
-            command=lambda v: self.orient_thresh_label.config(text=f"{float(v):.2f}")
-        )
-
-        # Min zone width
-        row += 1
-        ttk.Label(param_frame, text="Min Zone Width (voxels):").grid(
-            row=row, column=0, sticky=tk.W, pady=5
-        )
-        self.min_width_var = tk.IntVar(value=config.DEFAULT_MIN_ZONE_WIDTH)
-        ttk.Spinbox(param_frame, from_=3, to=15, textvariable=self.min_width_var, width=5).grid(
-            row=row, column=1, sticky=tk.W, padx=5
-        )
-
-        # ROI radius
-        row += 1
-        ttk.Label(param_frame, text="ROI Radius (mm):").grid(row=row, column=0, sticky=tk.W, pady=5)
-        self.roi_radius_var = tk.DoubleVar(value=config.DEFAULT_ROI_RADIUS_MM)
-        ttk.Spinbox(
-            param_frame, from_=2.0, to=8.0, increment=0.5, textvariable=self.roi_radius_var, width=5
-        ).grid(row=row, column=1, sticky=tk.W, padx=5)
-
-        # Z tolerance
-        row += 1
-        ttk.Label(param_frame, text="Z-Tolerance (voxels):").grid(
-            row=row, column=0, sticky=tk.W, pady=5
-        )
-        self.z_tolerance_var = tk.IntVar(value=config.DEFAULT_Z_TOLERANCE)
-        ttk.Spinbox(param_frame, from_=0, to=5, textvariable=self.z_tolerance_var, width=5).grid(
-            row=row, column=1, sticky=tk.W, padx=5
-        )
-
-        # Separator for registration-based ROI parameters
-        row += 1
-        ttk.Separator(param_frame, orient=tk.HORIZONTAL).grid(
-            row=row, column=0, columnspan=3, sticky=tk.EW, pady=10
-        )
-
-        # Registration-based ROI sphere radius
-        row += 1
         ttk.Label(param_frame, text="ROI Sphere Radius (mm):").grid(
             row=row, column=0, sticky=tk.W, pady=5
         )
@@ -1099,9 +1027,28 @@ class DTIALPSApplication(tk.Tk):
             textvariable=self.roi_sphere_radius_var,
             width=5,
         ).grid(row=row, column=1, sticky=tk.W, padx=5)
-        ttk.Label(param_frame, text="(for registration-based placement)").grid(
-            row=row, column=2, sticky=tk.W
+        ttk.Label(
+            param_frame,
+            text="Radius of spherical ROIs created at template-defined locations",
+            foreground="gray",
+        ).grid(row=row, column=2, sticky=tk.W, padx=10)
+
+        # Info about the process
+        info_frame = ttk.LabelFrame(frame, text="Registration Process", padding=10)
+        info_frame.pack(fill=tk.X, pady=10)
+
+        process_text = (
+            "The ROI placement process involves:\n\n"
+            "1. Skull stripping the FA map (FSL BET2)\n"
+            "2. Linear registration to JHU-ICBM-FA template (FSL FLIRT)\n"
+            "3. Non-linear registration refinement (FSL FNIRT)\n"
+            "4. Inverse transformation of template ROI masks to native space\n"
+            "5. Creation of spherical ROIs at transformed mask centroids\n\n"
+            "ROI masks created:\n"
+            "  - Left/Right Projection (superior corona radiata)\n"
+            "  - Left/Right Association (superior longitudinal fasciculus)"
         )
+        ttk.Label(info_frame, text=process_text, justify=tk.LEFT).pack(anchor=tk.W)
 
     def _create_results_frame(self):
         """Create results display frame (Stage 6)."""
@@ -1270,13 +1217,7 @@ class DTIALPSApplication(tk.Tk):
             dwifslpreproc_options=dwifslpreproc_options,
             dwi2tensor_options=dwi2tensor_options,
             tensor2metric_options=tensor2metric_options,
-            # ROI detection parameters
-            fa_thresh=self.fa_thresh_var.get(),
-            orient_thresh=self.orient_thresh_var.get(),
-            min_zone_width=self.min_width_var.get(),
-            roi_radius_mm=self.roi_radius_var.get(),
-            z_tolerance=self.z_tolerance_var.get(),
-            # Registration-based ROI sphere radius
+            # ROI placement parameters
             roi_sphere_radius=self.roi_sphere_radius_var.get(),
             # Output
             output_dir=self.output_dir_var.get(),
@@ -1339,9 +1280,10 @@ class DTIALPSApplication(tk.Tk):
 
         # Create batch worker
         self.result_queue = queue.Queue()
+        self.cancel_event = threading.Event()
 
         batch_runner = BatchRunner(self.batch_state)
-        self.worker = BatchWorker(batch_runner, self.result_queue, None)
+        self.worker = BatchWorker(batch_runner, self.result_queue, self.cancel_event)
         self.worker.start()
 
         # Start polling for results

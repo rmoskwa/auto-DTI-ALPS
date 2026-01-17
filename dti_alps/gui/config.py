@@ -28,23 +28,11 @@ DEFAULT_READOUT_TIME = 0.05  # seconds
 DEFAULT_PE_DIRECTION = "AP"
 DEFAULT_RPE_SCHEME = "none"
 
-# Default ROI detection parameters (from DTIALPSDetector)
-DEFAULT_FA_THRESH = 0.25
-DEFAULT_ORIENT_THRESH = 0.7
-DEFAULT_MIN_ZONE_WIDTH = 5
-DEFAULT_ROI_RADIUS_MM = 3.0  # Fixed: was 4.0, should match detector default
-DEFAULT_Z_TOLERANCE = 2
-
 # Registration-based ROI placement parameters
-DEFAULT_ROI_SPHERE_RADIUS = 2.0  # Sphere radius in mm for registration-based ROI placement
+DEFAULT_ROI_SPHERE_RADIUS = 2.0  # Sphere radius in mm for ROI placement
 
 # Parameter ranges for validation
-FA_THRESH_RANGE = (0.1, 0.5)
-ORIENT_THRESH_RANGE = (0.5, 0.9)
-MIN_ZONE_WIDTH_RANGE = (3, 15)
-ROI_RADIUS_RANGE = (2.0, 8.0)
-ROI_SPHERE_RADIUS_RANGE = (1.0, 6.0)  # Range for registration-based sphere radius
-Z_TOLERANCE_RANGE = (0, 5)
+ROI_SPHERE_RADIUS_RANGE = (1.0, 6.0)  # Range for ROI sphere radius
 READOUT_TIME_RANGE = (0.001, 1.0)
 
 # File type filters for file dialogs
@@ -64,7 +52,7 @@ PIPELINE_STAGES = [
     ("dwifslpreproc", "dwifslpreproc"),
     ("dwi2tensor", "dwi2tensor"),
     ("tensor2metric", "tensor2metric"),
-    ("roi", "ROI Detection"),
+    ("roi", "ROI Placement"),
     ("results", "Results"),
 ]
 
@@ -169,9 +157,5 @@ TOOLTIPS = {
     "rpe_scheme": "Reverse phase encoding acquisition scheme",
     "reverse_pe": "b=0 volume(s) with opposite phase encoding for distortion correction",
     "json_sidecar": "JSON file with acquisition metadata (BIDS format)",
-    "fa_thresh": "Minimum FA value for white matter classification",
-    "orient_thresh": "Minimum eigenvector component for fiber orientation classification",
-    "min_zone_width": "Minimum contiguous fiber zone width (voxels) for ROI placement",
-    "roi_radius": "Spherical ROI radius in millimeters",
-    "z_tolerance": "Maximum Z-slice difference allowed between bilateral ROIs",
+    "roi_sphere_radius": "Spherical ROI radius in millimeters for template-based placement",
 }

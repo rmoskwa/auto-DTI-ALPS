@@ -6,8 +6,11 @@ Usage:
     python -m pytest tests/test_pipeline.py
     python tests/test_pipeline.py --step preproc   # Test preprocessing only
     python tests/test_pipeline.py --step dti       # Test DTI fitting only
-    python tests/test_pipeline.py --step roi       # Test ROI detection only
+    python tests/test_pipeline.py --step alps      # Test ALPS calculation only
     python tests/test_pipeline.py --step all       # Run full pipeline
+
+Note: ROI placement is now done via template-based registration in the full pipeline.
+      Use the GUI for complete DTI-ALPS processing with automatic ROI placement.
 """
 
 import argparse
@@ -127,54 +130,6 @@ def test_dti_fitting():
     return run_command(cmd2, "Metric extraction (tensor2metric)")
 
 
-def test_roi_detection():
-    """Test ROI detection using DTIALPSDetector."""
-    fa_path = os.path.join(TEST_PARAMS["output_dir"], f"{TEST_PARAMS['prefix']}_FA.nii.gz")
-    v1_path = os.path.join(TEST_PARAMS["output_dir"], f"{TEST_PARAMS['prefix']}_V1.nii.gz")
-
-    if not os.path.exists(fa_path) or not os.path.exists(v1_path):
-        print("ERROR: FA or V1 not found")
-        print("Run --step dti first")
-        return False
-
-    print(f"\n{'=' * 60}")
-    print("STEP: ROI Detection (DTIALPSDetector)")
-    print(f"{'=' * 60}")
-
-    try:
-        from dti_alps import DTIALPSDetector
-
-        detector = DTIALPSDetector(
-            fa_thresh=0.25, orient_thresh=0.7, min_zone_width=5, roi_radius_mm=3.0, z_tolerance=2
-        )
-
-        print(f"Loading FA: {fa_path}")
-        print(f"Loading V1: {v1_path}")
-        detector.load_data(fa_path, v1_path)
-
-        print("\nFinding candidates...")
-        detector.find_candidates()
-
-        print("\nSelecting optimal ROIs...")
-        detector.select_optimal_rois()
-
-        # Save masks (with fiber criteria filtering)
-        roi_dir = os.path.join(TEST_PARAMS["output_dir"], "rois")
-        os.makedirs(roi_dir, exist_ok=True)
-        print("\nFiltering ROI voxels by fiber classification criteria...")
-        detector.save_roi_masks(roi_dir, TEST_PARAMS["prefix"])
-
-        print("\n[SUCCESS] ROI detection completed")
-        return True
-
-    except Exception as e:
-        print(f"\n[FAILED] ROI detection failed: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return False
-
-
 def test_alps_calculation():
     """Test ALPS index calculation from tensor and existing ROI masks."""
     tensor_path = os.path.join(TEST_PARAMS["output_dir"], f"{TEST_PARAMS['prefix']}_tensor.nii.gz")
@@ -188,20 +143,31 @@ def test_alps_calculation():
         import nibabel as nib
         import numpy as np
 
-        # Check for existing ROI masks
+        # Check for existing ROI masks (from template-based registration)
         roi_files = {
-            "proj_left": os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_proj_left.nii.gz"),
-            "proj_right": os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_proj_right.nii.gz"),
-            "assoc_left": os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_assoc_left.nii.gz"),
-            "assoc_right": os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_assoc_right.nii.gz"),
+            "left_proj": os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_left_proj.nii.gz"),
+            "left_assoc": os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_left_assoc.nii.gz"),
+            "right_proj": os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_right_proj.nii.gz"),
+            "right_assoc": os.path.join(roi_dir, f"{TEST_PARAMS['prefix']}_right_assoc.nii.gz"),
         }
 
         # Verify all ROI files exist
-        for _name, path in roi_files.items():
+        missing = []
+        for name, path in roi_files.items():
             if not os.path.exists(path):
-                print(f"ERROR: ROI mask not found: {path}")
-                print("Run --step roi first to generate ROI masks")
-                return False
+                missing.append(name)
+
+        if missing:
+            print("ERROR: ROI masks not found.")
+            print("Missing masks:", ", ".join(missing))
+            print()
+            print("ROI masks are created by the template-based registration step.")
+            print("Use the GUI to run the full pipeline which includes:")
+            print("  - FA to JHU template registration")
+            print("  - ROI mask transformation to native space")
+            print()
+            print("  Launch GUI: dti-alps")
+            return False
 
         # Load ROI masks from disk
         print("Loading ROI masks from disk...")
@@ -228,8 +194,8 @@ def test_alps_calculation():
 
         results = {}
         for side in ["left", "right"]:
-            proj_mask = masks[f"proj_{side}"]
-            assoc_mask = masks[f"assoc_{side}"]
+            proj_mask = masks[f"{side}_proj"]
+            assoc_mask = masks[f"{side}_assoc"]
 
             proj_idx = np.where(proj_mask > 0)
             assoc_idx = np.where(assoc_mask > 0)
@@ -271,7 +237,7 @@ def main():
     parser = argparse.ArgumentParser(description="Test DTI-ALPS pipeline components")
     parser.add_argument(
         "--step",
-        choices=["preproc", "dti", "roi", "alps", "all"],
+        choices=["preproc", "dti", "alps", "all"],
         default="all",
         help="Which step to test",
     )
@@ -280,13 +246,14 @@ def main():
     print("DTI-ALPS Pipeline Test")
     print(f"Test data: {TEST_PARAMS['dwi']}")
     print(f"Output: {TEST_PARAMS['output_dir']}")
+    print()
+    print("Note: ROI placement requires the full pipeline with template registration.")
+    print("      Use the GUI for complete processing: dti-alps")
 
     if args.step == "preproc":
         test_preprocessing()
     elif args.step == "dti":
         test_dti_fitting()
-    elif args.step == "roi":
-        test_roi_detection()
     elif args.step == "alps":
         test_alps_calculation()
     elif args.step == "all":
@@ -294,9 +261,9 @@ def main():
             return
         if not test_dti_fitting():
             return
-        if not test_roi_detection():
-            return
-        test_alps_calculation()
+        print()
+        print("Note: Skipping ROI step - requires template registration via GUI.")
+        print("      Run 'dti-alps' to launch the GUI for full pipeline.")
 
 
 if __name__ == "__main__":
