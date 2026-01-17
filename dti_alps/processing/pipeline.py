@@ -69,6 +69,8 @@ class PipelineState:
     roi_sphere_radius: float = 2.0
     # FA threshold for filtering CSF voxels from ROIs
     fa_threshold: float = config.FA_THRESHOLD
+    # ALPS calculation method (ALPS-LAB or ALPS-PAS)
+    alps_method: str = "ALPS-LAB"
 
     # Output settings
     output_dir: str = ""
@@ -81,6 +83,11 @@ class PipelineState:
     tensor_path: str | None = None
     fa_path: str | None = None
     v1_path: str | None = None
+    # ALPS-PAS specific outputs (eigenvalue and eigenvector maps)
+    l2_path: str | None = None
+    l3_path: str | None = None
+    v2_path: str | None = None
+    v3_path: str | None = None
 
     # ROI masks in native space (set by registration step)
     # Keys: 'left_proj', 'left_assoc', 'right_proj', 'right_assoc'
@@ -102,6 +109,11 @@ class PipelineState:
         self.tensor_path = self.get_output_path("tensor.nii.gz")
         self.fa_path = self.get_output_path("FA.nii.gz")
         self.v1_path = self.get_output_path("V1.nii.gz")
+        # ALPS-PAS specific outputs
+        self.l2_path = self.get_output_path("L2.nii.gz")
+        self.l3_path = self.get_output_path("L3.nii.gz")
+        self.v2_path = self.get_output_path("V2.nii.gz")
+        self.v3_path = self.get_output_path("V3.nii.gz")
 
 
 @dataclass
@@ -141,6 +153,7 @@ class BatchConfig:
     # ROI placement parameters
     roi_sphere_radius: float = 2.0  # Sphere radius in mm for template-based ROI placement
     fa_threshold: float = config.FA_THRESHOLD  # FA threshold for filtering CSF voxels
+    alps_method: str = "ALPS-LAB"  # ALPS calculation method (ALPS-LAB or ALPS-PAS)
 
     # Output settings
     output_dir: str = ""
@@ -160,6 +173,7 @@ class SubjectResult:
     alps_left: float | None = None
     alps_right: float | None = None
     alps_bilateral: float | None = None
+    alps_method: str | None = None  # ALPS method used (ALPS-LAB or ALPS-PAS)
     error_message: str | None = None
     processing_time: float = 0.0
 
@@ -440,6 +454,20 @@ class PipelineRunner:
             self._update_stage("dti", "failed")
             return False
 
+        if self.cancelled:
+            return False
+
+        # Step 3: If ALPS-PAS method, extract L2, L3, V2, V3
+        if self.state.alps_method == "ALPS-PAS":
+            self._log("Extracting L2, L3, V2, V3 for ALPS-PAS method...")
+            alps_pas_cmds = commands.build_tensor2metric_alps_pas_cmds(self.state)
+            for cmd in alps_pas_cmds:
+                if self.cancelled:
+                    return False
+                if not self._run_command(cmd, "tensor2metric (ALPS-PAS)"):
+                    self._update_stage("dti", "failed")
+                    return False
+
         self._log("DTI fitting completed successfully")
         self._update_stage("dti", "complete")
         return True
@@ -481,13 +509,17 @@ class PipelineRunner:
         """
         Calculate DTI-ALPS index from tensor and registered ROI masks.
 
+        Supports two methods:
+        - ALPS-LAB: Uses tensor diagonal components (Dxx, Dyy, Dzz)
+        - ALPS-PAS: Uses eigenvalues (L2, L3) sorted by eigenvector X-alignment
+
         Returns
         -------
         bool
             True if successful
         """
         self._update_stage("results", "running")
-        self._log("Calculating DTI-ALPS index...")
+        self._log(f"Calculating DTI-ALPS index using {self.state.alps_method} method...")
 
         try:
             import nibabel as nib
@@ -498,17 +530,6 @@ class PipelineRunner:
                 self._log("ERROR: ROI masks not available. Run registration first.")
                 self._update_stage("results", "failed")
                 return False
-
-            # Load tensor image
-            self._log(f"Loading tensor: {self.state.tensor_path}")
-            tensor_img = nib.load(self.state.tensor_path)
-            tensor_data = tensor_img.get_fdata()
-
-            # Extract directional diffusivities
-            # MRtrix dwi2tensor output format: D11, D22, D33, D12, D13, D23
-            dxx = tensor_data[:, :, :, config.TENSOR_DXX_INDEX]
-            dyy = tensor_data[:, :, :, config.TENSOR_DYY_INDEX]
-            dzz = tensor_data[:, :, :, config.TENSOR_DZZ_INDEX]
 
             # Load FA map for thresholding (to filter out CSF voxels)
             self._log(f"Loading FA map: {self.state.fa_path}")
@@ -524,76 +545,18 @@ class PipelineRunner:
                 roi_img = nib.load(roi_path)
                 masks[roi_name] = roi_img.get_fdata()
 
-            # Calculate mean diffusivities in each ROI
-            results = {}
+            # Dispatch to appropriate method
+            if self.state.alps_method == "ALPS-PAS":
+                results = self._run_alps_pas_calculation(fa_data, masks, nib, np)
+            else:
+                results = self._run_alps_lab_calculation(fa_data, masks, nib, np)
 
-            for side in ["left", "right"]:
-                proj_mask = masks[f"{side}_proj"]
-                assoc_mask = masks[f"{side}_assoc"]
+            if results is None:
+                self._update_stage("results", "failed")
+                return False
 
-                # Get voxel indices with FA threshold applied
-                proj_idx_raw = np.where(proj_mask > 0)
-                assoc_idx_raw = np.where(assoc_mask > 0)
-
-                # Apply FA > threshold filter to exclude CSF voxels
-                proj_fa_mask = fa_data[proj_idx_raw] > self.state.fa_threshold
-                assoc_fa_mask = fa_data[assoc_idx_raw] > self.state.fa_threshold
-
-                proj_idx = tuple(arr[proj_fa_mask] for arr in proj_idx_raw)
-                assoc_idx = tuple(arr[assoc_fa_mask] for arr in assoc_idx_raw)
-
-                # Log ROI sizes before and after FA filtering
-                proj_voxels_raw = len(proj_idx_raw[0])
-                assoc_voxels_raw = len(assoc_idx_raw[0])
-                proj_voxels = len(proj_idx[0])
-                assoc_voxels = len(assoc_idx[0])
-                self._log(
-                    f"  {side.capitalize()} projection ROI: "
-                    f"{proj_voxels}/{proj_voxels_raw} voxels (after FA filter)"
-                )
-                self._log(
-                    f"  {side.capitalize()} association ROI: "
-                    f"{assoc_voxels}/{assoc_voxels_raw} voxels (after FA filter)"
-                )
-
-                # Warn if too many voxels were filtered out
-                if proj_voxels == 0:
-                    self._log(f"  WARNING: No voxels in {side} projection ROI after FA filtering!")
-                if assoc_voxels == 0:
-                    self._log(f"  WARNING: No voxels in {side} association ROI after FA filtering!")
-
-                # Projection ROI: Dxx (perivascular) and Dyy (perpendicular)
-                results[f"Dxx_proj_{side}"] = np.mean(dxx[proj_idx])
-                results[f"Dyy_proj_{side}"] = np.mean(dyy[proj_idx])
-
-                # Association ROI: Dxx (perivascular) and Dzz (perpendicular)
-                results[f"Dxx_assoc_{side}"] = np.mean(dxx[assoc_idx])
-                results[f"Dzz_assoc_{side}"] = np.mean(dzz[assoc_idx])
-
-            # Calculate ALPS index for each hemisphere
-            for side in ["left", "right"]:
-                dxx_proj = results[f"Dxx_proj_{side}"]
-                dxx_assoc = results[f"Dxx_assoc_{side}"]
-                dyy_proj = results[f"Dyy_proj_{side}"]
-                dzz_assoc = results[f"Dzz_assoc_{side}"]
-
-                numerator = (dxx_proj + dxx_assoc) / 2
-                denominator = (dyy_proj + dzz_assoc) / 2
-
-                if denominator > 0:
-                    alps_index = numerator / denominator
-                else:
-                    alps_index = float("nan")
-
-                results[f"ALPS_{side}"] = alps_index
-                self._log(f"  {side.capitalize()} ALPS index: {alps_index:.4f}")
-
-            # Calculate bilateral average
-            alps_left = results["ALPS_left"]
-            alps_right = results["ALPS_right"]
-            if not (np.isnan(alps_left) or np.isnan(alps_right)):
-                results["ALPS_bilateral"] = (alps_left + alps_right) / 2
-                self._log(f"  Bilateral ALPS index: {results['ALPS_bilateral']:.4f}")
+            # Store method used in results
+            results["method"] = self.state.alps_method
 
             self.state.alps_results = results
             self._log("ALPS calculation completed successfully")
@@ -604,6 +567,231 @@ class PipelineRunner:
             self._log(f"ERROR: ALPS calculation failed: {str(e)}")
             self._update_stage("results", "failed")
             return False
+
+    def _run_alps_lab_calculation(self, fa_data, masks, nib, np) -> dict | None:
+        """
+        Calculate ALPS index using ALPS-LAB method (tensor diagonal components).
+
+        Parameters
+        ----------
+        fa_data : ndarray
+            FA map data for thresholding
+        masks : dict
+            Dictionary of ROI masks
+        nib : module
+            nibabel module
+        np : module
+            numpy module
+
+        Returns
+        -------
+        dict or None
+            Results dictionary or None if failed
+        """
+        # Load tensor image
+        self._log(f"Loading tensor: {self.state.tensor_path}")
+        tensor_img = nib.load(self.state.tensor_path)
+        tensor_data = tensor_img.get_fdata()
+
+        # Extract directional diffusivities
+        # MRtrix dwi2tensor output format: D11, D22, D33, D12, D13, D23
+        dxx = tensor_data[:, :, :, config.TENSOR_DXX_INDEX]
+        dyy = tensor_data[:, :, :, config.TENSOR_DYY_INDEX]
+        dzz = tensor_data[:, :, :, config.TENSOR_DZZ_INDEX]
+
+        # Calculate mean diffusivities in each ROI
+        results = {}
+
+        for side in ["left", "right"]:
+            proj_mask = masks[f"{side}_proj"]
+            assoc_mask = masks[f"{side}_assoc"]
+
+            # Get voxel indices with FA threshold applied
+            proj_idx_raw = np.where(proj_mask > 0)
+            assoc_idx_raw = np.where(assoc_mask > 0)
+
+            # Apply FA > threshold filter to exclude CSF voxels
+            proj_fa_mask = fa_data[proj_idx_raw] > self.state.fa_threshold
+            assoc_fa_mask = fa_data[assoc_idx_raw] > self.state.fa_threshold
+
+            proj_idx = tuple(arr[proj_fa_mask] for arr in proj_idx_raw)
+            assoc_idx = tuple(arr[assoc_fa_mask] for arr in assoc_idx_raw)
+
+            # Log ROI sizes before and after FA filtering
+            proj_voxels_raw = len(proj_idx_raw[0])
+            assoc_voxels_raw = len(assoc_idx_raw[0])
+            proj_voxels = len(proj_idx[0])
+            assoc_voxels = len(assoc_idx[0])
+            self._log(
+                f"  {side.capitalize()} projection ROI: "
+                f"{proj_voxels}/{proj_voxels_raw} voxels (after FA filter)"
+            )
+            self._log(
+                f"  {side.capitalize()} association ROI: "
+                f"{assoc_voxels}/{assoc_voxels_raw} voxels (after FA filter)"
+            )
+
+            # Warn if too many voxels were filtered out
+            if proj_voxels == 0:
+                self._log(f"  WARNING: No voxels in {side} projection ROI after FA filtering!")
+            if assoc_voxels == 0:
+                self._log(f"  WARNING: No voxels in {side} association ROI after FA filtering!")
+
+            # Projection ROI: Dxx (perivascular) and Dyy (perpendicular)
+            results[f"Dxx_proj_{side}"] = np.mean(dxx[proj_idx])
+            results[f"Dyy_proj_{side}"] = np.mean(dyy[proj_idx])
+
+            # Association ROI: Dxx (perivascular) and Dzz (perpendicular)
+            results[f"Dxx_assoc_{side}"] = np.mean(dxx[assoc_idx])
+            results[f"Dzz_assoc_{side}"] = np.mean(dzz[assoc_idx])
+
+        # Calculate ALPS index for each hemisphere
+        for side in ["left", "right"]:
+            dxx_proj = results[f"Dxx_proj_{side}"]
+            dxx_assoc = results[f"Dxx_assoc_{side}"]
+            dyy_proj = results[f"Dyy_proj_{side}"]
+            dzz_assoc = results[f"Dzz_assoc_{side}"]
+
+            numerator = (dxx_proj + dxx_assoc) / 2
+            denominator = (dyy_proj + dzz_assoc) / 2
+
+            if denominator > 0:
+                alps_index = numerator / denominator
+            else:
+                alps_index = float("nan")
+
+            results[f"ALPS_{side}"] = alps_index
+            self._log(f"  {side.capitalize()} ALPS index: {alps_index:.4f}")
+
+        # Calculate bilateral average
+        alps_left = results["ALPS_left"]
+        alps_right = results["ALPS_right"]
+        if not (np.isnan(alps_left) or np.isnan(alps_right)):
+            results["ALPS_bilateral"] = (alps_left + alps_right) / 2
+            self._log(f"  Bilateral ALPS index: {results['ALPS_bilateral']:.4f}")
+
+        return results
+
+    def _run_alps_pas_calculation(self, fa_data, masks, nib, np) -> dict | None:
+        """
+        Calculate ALPS index using ALPS-PAS method (eigenvector-sorted eigenvalues).
+
+        The ALPS-PAS method uses eigenvalues L2 and L3, sorted based on which
+        eigenvector has greater X-component alignment. This accounts for fiber
+        orientation more accurately than using fixed tensor diagonal components.
+
+        Parameters
+        ----------
+        fa_data : ndarray
+            FA map data for thresholding
+        masks : dict
+            Dictionary of ROI masks
+        nib : module
+            nibabel module
+        np : module
+            numpy module
+
+        Returns
+        -------
+        dict or None
+            Results dictionary or None if failed
+        """
+        # Load eigenvalue and eigenvector maps
+        self._log(f"Loading L2: {self.state.l2_path}")
+        l2_data = nib.load(self.state.l2_path).get_fdata()
+
+        self._log(f"Loading L3: {self.state.l3_path}")
+        l3_data = nib.load(self.state.l3_path).get_fdata()
+
+        self._log(f"Loading V2: {self.state.v2_path}")
+        v2_data = nib.load(self.state.v2_path).get_fdata()
+
+        self._log(f"Loading V3: {self.state.v3_path}")
+        v3_data = nib.load(self.state.v3_path).get_fdata()
+
+        # Extract X-components of eigenvectors (first component, index 0)
+        v2_x = v2_data[:, :, :, 0]
+        v3_x = v3_data[:, :, :, 0]
+
+        # Sort eigenvalues by X-alignment: the eigenvalue whose eigenvector
+        # has greater |X-component| is assigned to diff_X (perivascular direction)
+        mask_v2_more_x = np.abs(v2_x) > np.abs(v3_x)
+        diff_X = np.where(mask_v2_more_x, l2_data, l3_data)
+        diff_perp = np.where(mask_v2_more_x, l3_data, l2_data)
+
+        # Calculate mean diffusivities in each ROI
+        results = {}
+
+        for side in ["left", "right"]:
+            proj_mask = masks[f"{side}_proj"]
+            assoc_mask = masks[f"{side}_assoc"]
+
+            # Get voxel indices with FA threshold applied
+            proj_idx_raw = np.where(proj_mask > 0)
+            assoc_idx_raw = np.where(assoc_mask > 0)
+
+            # Apply FA > threshold filter to exclude CSF voxels
+            proj_fa_mask = fa_data[proj_idx_raw] > self.state.fa_threshold
+            assoc_fa_mask = fa_data[assoc_idx_raw] > self.state.fa_threshold
+
+            proj_idx = tuple(arr[proj_fa_mask] for arr in proj_idx_raw)
+            assoc_idx = tuple(arr[assoc_fa_mask] for arr in assoc_idx_raw)
+
+            # Log ROI sizes before and after FA filtering
+            proj_voxels_raw = len(proj_idx_raw[0])
+            assoc_voxels_raw = len(assoc_idx_raw[0])
+            proj_voxels = len(proj_idx[0])
+            assoc_voxels = len(assoc_idx[0])
+            self._log(
+                f"  {side.capitalize()} projection ROI: "
+                f"{proj_voxels}/{proj_voxels_raw} voxels (after FA filter)"
+            )
+            self._log(
+                f"  {side.capitalize()} association ROI: "
+                f"{assoc_voxels}/{assoc_voxels_raw} voxels (after FA filter)"
+            )
+
+            # Warn if too many voxels were filtered out
+            if proj_voxels == 0:
+                self._log(f"  WARNING: No voxels in {side} projection ROI after FA filtering!")
+            if assoc_voxels == 0:
+                self._log(f"  WARNING: No voxels in {side} association ROI after FA filtering!")
+
+            # Projection ROI: diff_X (X-aligned) and diff_perp (perpendicular)
+            results[f"Dxx_proj_{side}"] = np.mean(diff_X[proj_idx])
+            results[f"Dyy_proj_{side}"] = np.mean(diff_perp[proj_idx])
+
+            # Association ROI: diff_X (X-aligned) and diff_perp (perpendicular)
+            results[f"Dxx_assoc_{side}"] = np.mean(diff_X[assoc_idx])
+            results[f"Dzz_assoc_{side}"] = np.mean(diff_perp[assoc_idx])
+
+        # Calculate ALPS index for each hemisphere
+        # ALPS = mean(diff_X_proj, diff_X_assoc) / mean(diff_perp_proj, diff_perp_assoc)
+        for side in ["left", "right"]:
+            diff_x_proj = results[f"Dxx_proj_{side}"]
+            diff_x_assoc = results[f"Dxx_assoc_{side}"]
+            diff_perp_proj = results[f"Dyy_proj_{side}"]
+            diff_perp_assoc = results[f"Dzz_assoc_{side}"]
+
+            numerator = (diff_x_proj + diff_x_assoc) / 2
+            denominator = (diff_perp_proj + diff_perp_assoc) / 2
+
+            if denominator > 0:
+                alps_index = numerator / denominator
+            else:
+                alps_index = float("nan")
+
+            results[f"ALPS_{side}"] = alps_index
+            self._log(f"  {side.capitalize()} ALPS index: {alps_index:.4f}")
+
+        # Calculate bilateral average
+        alps_left = results["ALPS_left"]
+        alps_right = results["ALPS_right"]
+        if not (np.isnan(alps_left) or np.isnan(alps_right)):
+            results["ALPS_bilateral"] = (alps_left + alps_right) / 2
+            self._log(f"  Bilateral ALPS index: {results['ALPS_bilateral']:.4f}")
+
+        return results
 
     def run_full_pipeline(self) -> bool:
         """
@@ -835,6 +1023,7 @@ class BatchRunner:
             # ROI placement parameters
             roi_sphere_radius=batch_config.roi_sphere_radius,
             fa_threshold=batch_config.fa_threshold,
+            alps_method=batch_config.alps_method,
             # Output settings
             output_dir=subject_output_dir,
             output_prefix=subject_files.subject_id,
@@ -931,6 +1120,7 @@ class BatchRunner:
                 result.alps_left = state.alps_results.get("ALPS_left")
                 result.alps_right = state.alps_results.get("ALPS_right")
                 result.alps_bilateral = state.alps_results.get("ALPS_bilateral")
+                result.alps_method = state.alps_results.get("method")
 
                 # Store detailed diffusivity values
                 result.dxx_proj_left = state.alps_results.get("Dxx_proj_left")
@@ -989,6 +1179,7 @@ class BatchRunner:
                         "Left Hemisphere ALPS",
                         "Right Hemisphere ALPS",
                         "Combined ALPS",
+                        "Method",
                         "Status",
                         "Error",
                     ]
@@ -1003,6 +1194,7 @@ class BatchRunner:
                             f"{result.alps_bilateral:.6f}"
                             if result.alps_bilateral is not None
                             else "",
+                            result.alps_method or "",
                             result.status,
                             result.error_message or "",
                         ]

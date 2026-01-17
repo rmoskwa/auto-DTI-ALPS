@@ -252,6 +252,53 @@ def build_tensor2metric_cmd(state: "PipelineState") -> list[str]:
     return cmd
 
 
+def build_tensor2metric_alps_pas_cmds(state: "PipelineState") -> list[list[str]]:
+    """
+    Build tensor2metric commands to extract L2, L3, V2, V3 for ALPS-PAS method.
+
+    The ALPS-PAS method uses eigenvalues (L2, L3) sorted by eigenvector X-alignment
+    rather than raw tensor diagonal components (Dxx, Dyy, Dzz).
+
+    Parameters
+    ----------
+    state : PipelineState
+        Pipeline configuration
+
+    Returns
+    -------
+    list of list of str
+        List of commands to execute (L2, L3, V2, V3 extraction)
+    """
+    return [
+        # Extract second eigenvalue (L2)
+        ["tensor2metric", state.tensor_path, "-value", state.l2_path, "-num", "2"],
+        # Extract third eigenvalue (L3)
+        ["tensor2metric", state.tensor_path, "-value", state.l3_path, "-num", "3"],
+        # Extract second eigenvector (V2) without modulation
+        [
+            "tensor2metric",
+            state.tensor_path,
+            "-vector",
+            state.v2_path,
+            "-num",
+            "2",
+            "-modulate",
+            "none",
+        ],
+        # Extract third eigenvector (V3) without modulation
+        [
+            "tensor2metric",
+            state.tensor_path,
+            "-vector",
+            state.v3_path,
+            "-num",
+            "3",
+            "-modulate",
+            "none",
+        ],
+    ]
+
+
 def check_mrtrix3_available() -> tuple:
     """
     Check if MRtrix3 commands are available in PATH.

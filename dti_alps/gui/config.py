@@ -32,6 +32,10 @@ DEFAULT_RPE_SCHEME = "none"
 DEFAULT_ROI_SPHERE_RADIUS = 2.0  # Sphere radius in mm for ROI placement
 FA_THRESHOLD = 0.2  # Minimum FA value for ROI voxels (filters out CSF)
 
+# ALPS calculation methods
+ALPS_METHODS = ["ALPS-LAB", "ALPS-PAS"]
+DEFAULT_ALPS_METHOD = "ALPS-LAB"
+
 # Parameter ranges for validation
 ROI_SPHERE_RADIUS_RANGE = (1.0, 6.0)  # Range for ROI sphere radius
 READOUT_TIME_RANGE = (0.001, 1.0)

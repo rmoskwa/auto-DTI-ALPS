@@ -1051,6 +1051,23 @@ class DTIALPSApplication(tk.Tk):
             foreground="gray",
         ).grid(row=row, column=2, sticky=tk.W, padx=10)
 
+        # ALPS calculation method
+        row = 2
+        ttk.Label(param_frame, text="ALPS Method:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self.alps_method_var = tk.StringVar(value=config.DEFAULT_ALPS_METHOD)
+        ttk.Combobox(
+            param_frame,
+            textvariable=self.alps_method_var,
+            values=config.ALPS_METHODS,
+            state="readonly",
+            width=12,
+        ).grid(row=row, column=1, sticky=tk.W, padx=5)
+        ttk.Label(
+            param_frame,
+            text="ALPS-LAB: tensor diagonal, ALPS-PAS: eigenvector-sorted eigenvalues",
+            foreground="gray",
+        ).grid(row=row, column=2, sticky=tk.W, padx=10)
+
         # Info about the process
         info_frame = ttk.LabelFrame(frame, text="Registration Process", padding=10)
         info_frame.pack(fill=tk.X, pady=10)
@@ -1238,6 +1255,7 @@ class DTIALPSApplication(tk.Tk):
             # ROI placement parameters
             roi_sphere_radius=self.roi_sphere_radius_var.get(),
             fa_threshold=self.fa_threshold_var.get(),
+            alps_method=self.alps_method_var.get(),
             # Output
             output_dir=self.output_dir_var.get(),
         )
