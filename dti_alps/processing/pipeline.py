@@ -63,6 +63,9 @@ class PipelineState:
     roi_radius_mm: float = config.DEFAULT_ROI_RADIUS_MM
     z_tolerance: int = config.DEFAULT_Z_TOLERANCE
 
+    # ROI sphere radius for registration-based ROI placement (mm)
+    roi_sphere_radius: float = 2.0
+
     # Output settings
     output_dir: str = ""
     output_prefix: str = "subject"

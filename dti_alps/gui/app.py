@@ -942,6 +942,30 @@ class DTIALPSApplication(tk.Tk):
             row=row, column=1, sticky=tk.W, padx=5
         )
 
+        # Separator for registration-based ROI parameters
+        row += 1
+        ttk.Separator(param_frame, orient=tk.HORIZONTAL).grid(
+            row=row, column=0, columnspan=3, sticky=tk.EW, pady=10
+        )
+
+        # Registration-based ROI sphere radius
+        row += 1
+        ttk.Label(param_frame, text="ROI Sphere Radius (mm):").grid(
+            row=row, column=0, sticky=tk.W, pady=5
+        )
+        self.roi_sphere_radius_var = tk.DoubleVar(value=config.DEFAULT_ROI_SPHERE_RADIUS)
+        ttk.Spinbox(
+            param_frame,
+            from_=1.0,
+            to=6.0,
+            increment=0.5,
+            textvariable=self.roi_sphere_radius_var,
+            width=5,
+        ).grid(row=row, column=1, sticky=tk.W, padx=5)
+        ttk.Label(param_frame, text="(for registration-based placement)").grid(
+            row=row, column=2, sticky=tk.W
+        )
+
     def _create_results_frame(self):
         """Create results display frame (Stage 6)."""
         frame = ttk.Frame(self.content_frame)
@@ -1106,6 +1130,8 @@ class DTIALPSApplication(tk.Tk):
             min_zone_width=self.min_width_var.get(),
             roi_radius_mm=self.roi_radius_var.get(),
             z_tolerance=self.z_tolerance_var.get(),
+            # Registration-based ROI sphere radius
+            roi_sphere_radius=self.roi_sphere_radius_var.get(),
             # Output
             output_dir=self.output_dir_var.get(),
         )

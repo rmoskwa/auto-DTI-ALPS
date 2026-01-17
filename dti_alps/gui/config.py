@@ -35,11 +35,15 @@ DEFAULT_MIN_ZONE_WIDTH = 5
 DEFAULT_ROI_RADIUS_MM = 3.0  # Fixed: was 4.0, should match detector default
 DEFAULT_Z_TOLERANCE = 2
 
+# Registration-based ROI placement parameters
+DEFAULT_ROI_SPHERE_RADIUS = 2.0  # Sphere radius in mm for registration-based ROI placement
+
 # Parameter ranges for validation
 FA_THRESH_RANGE = (0.1, 0.5)
 ORIENT_THRESH_RANGE = (0.5, 0.9)
 MIN_ZONE_WIDTH_RANGE = (3, 15)
 ROI_RADIUS_RANGE = (2.0, 8.0)
+ROI_SPHERE_RADIUS_RANGE = (1.0, 6.0)  # Range for registration-based sphere radius
 Z_TOLERANCE_RANGE = (0, 5)
 READOUT_TIME_RANGE = (0.001, 1.0)
 

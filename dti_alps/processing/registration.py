@@ -3,6 +3,8 @@ FSL-based registration for automatic ROI placement in DTI-ALPS pipeline.
 
 This module registers subject FA images to the JHU-ICBM-FA-1mm template
 and transforms pre-defined ROI masks from template space to subject native space.
+After transformation, spherical ROIs are created at the centroid of each
+transformed region with a user-configurable radius.
 """
 
 import os
@@ -10,6 +12,9 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import nibabel as nib
+import numpy as np
 
 if TYPE_CHECKING:
     from .pipeline import PipelineState
@@ -148,6 +153,70 @@ def get_roi_template_paths() -> dict[str, Path] | None:
             return None
 
     return roi_templates
+
+
+def create_sphere_mask(
+    shape: tuple[int, int, int],
+    center_voxel: tuple[float, float, float],
+    radius_mm: float,
+    voxel_size: tuple[float, float, float],
+) -> np.ndarray:
+    """
+    Create a spherical binary mask centered at given voxel coordinates.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Shape of the output array (x, y, z)
+    center_voxel : tuple of float
+        Center of sphere in voxel coordinates
+    radius_mm : float
+        Radius of sphere in millimeters
+    voxel_size : tuple of float
+        Voxel dimensions in millimeters (x, y, z)
+
+    Returns
+    -------
+    np.ndarray
+        Binary mask with sphere
+    """
+    x, y, z = np.ogrid[: shape[0], : shape[1], : shape[2]]
+
+    # Calculate squared distance from center in mm
+    dist_sq = (
+        ((x - center_voxel[0]) * voxel_size[0]) ** 2
+        + ((y - center_voxel[1]) * voxel_size[1]) ** 2
+        + ((z - center_voxel[2]) * voxel_size[2]) ** 2
+    )
+
+    return dist_sq <= radius_mm**2
+
+
+def find_mask_centroid(mask_data: np.ndarray) -> tuple[int, int, int] | None:
+    """
+    Find the centroid of non-zero voxels in a mask, rounded to nearest integer.
+
+    Parameters
+    ----------
+    mask_data : np.ndarray
+        Binary mask array
+
+    Returns
+    -------
+    tuple of int or None
+        Centroid coordinates (x, y, z) rounded to nearest integer,
+        or None if mask is empty
+    """
+    coords = np.where(mask_data > 0)
+    if len(coords[0]) == 0:
+        return None
+
+    centroid = (
+        int(round(coords[0].mean())),
+        int(round(coords[1].mean())),
+        int(round(coords[2].mean())),
+    )
+    return centroid
 
 
 def fix_nan_in_nifti(input_path: str, output_path: str) -> bool:
@@ -378,12 +447,24 @@ def register_fa_to_template(
         log("ERROR: Inverse warp not created")
         return False
 
-    # Step 6: Apply inverse warp to all ROI masks
+    # Step 6: Apply inverse warp to all ROI masks and find centroids
     log("Transforming ROI masks to native space...")
+
+    # Load reference image for shape and voxel size
+    ref_img = nib.load(state.fa_path)
+    ref_shape = ref_img.shape[:3]
+    voxel_size = ref_img.header.get_zooms()[:3]
+
+    # Get sphere radius from state (default 2.0mm)
+    sphere_radius = getattr(state, "roi_sphere_radius", 2.0)
+    log(f"  Sphere radius: {sphere_radius} mm")
+
+    roi_centroids = {}
     roi_native_paths = {}
 
     for roi_name, roi_template in roi_templates.items():
-        roi_native = roi_dir / f"{prefix}_{roi_name}.nii.gz"
+        # First transform to get approximate location
+        roi_transformed = reg_dir / f"{prefix}_{roi_name}_transformed.nii.gz"
         log(f"  Transforming {roi_name}...")
 
         applywarp_cmd = [
@@ -391,23 +472,46 @@ def register_fa_to_template(
             f"--ref={state.fa_path}",
             f"--in={roi_template}",
             f"--warp={inverse_warp}",
-            f"--out={roi_native}",
+            f"--out={roi_transformed}",
             "--interp=nn",
         ]
         if not run_fsl_command(applywarp_cmd, log):
             log(f"ERROR: Failed to transform {roi_name}")
             return False
 
-        if not roi_native.exists():
-            log(f"ERROR: {roi_name} ROI not created")
+        if not roi_transformed.exists():
+            log(f"ERROR: {roi_name} transformed ROI not created")
             return False
 
-        roi_native_paths[roi_name] = str(roi_native)
+        # Load transformed mask and find centroid
+        transformed_img = nib.load(str(roi_transformed))
+        transformed_data = transformed_img.get_fdata()
 
-    # Store ROI paths in state
+        centroid = find_mask_centroid(transformed_data)
+        if centroid is None:
+            log(f"ERROR: No voxels found in transformed {roi_name}")
+            return False
+
+        roi_centroids[roi_name] = centroid
+        log(f"    Centroid: {centroid}")
+
+        # Create spherical ROI at centroid
+        sphere_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
+        n_voxels = int(np.sum(sphere_mask))
+        log(f"    Created sphere with {n_voxels} voxels")
+
+        # Save spherical ROI
+        roi_sphere = roi_dir / f"{prefix}_{roi_name}.nii.gz"
+        sphere_img = nib.Nifti1Image(sphere_mask.astype(np.float32), ref_img.affine, ref_img.header)
+        nib.save(sphere_img, str(roi_sphere))
+
+        roi_native_paths[roi_name] = str(roi_sphere)
+
+    # Store ROI paths and centroids in state
     state.roi_mask_paths = roi_native_paths
+    state.roi_centers = roi_centroids
 
-    log("Registration and ROI transformation completed successfully")
+    log("Registration and ROI creation completed successfully")
     log(f"  Left projection ROI: {roi_native_paths['left_proj']}")
     log(f"  Left association ROI: {roi_native_paths['left_assoc']}")
     log(f"  Right projection ROI: {roi_native_paths['right_proj']}")

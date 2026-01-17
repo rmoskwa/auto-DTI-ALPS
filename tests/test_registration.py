@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """
-Standalone script to test FSL-based registration for ROI region limiting.
+Standalone script to test FSL-based registration for automatic ROI placement.
 
 This script registers a subject's FA image to the JHU-ICBM-FA-1mm template,
-then inverse-warps SCR/SLF label masks from template space to subject space.
+transforms pre-defined ROI templates to subject space, finds the centroid of
+each transformed region, and creates spherical ROIs at those locations.
 
 Usage:
-    python test_registration.py <subject_fa_path> [--output-dir <dir>] [--v1 <v1_path>]
+    python test_registration.py <subject_fa_path> [--output-dir <dir>] [--sphere-radius <mm>]
 
 Example:
-    python test_registration.py /mnt/d/Dicoms/travellingHumanPhantom/outputFolderV2/sub-THP0001_ses-THP0001CCF1_acq-GD31_run-01_dwi/sub-THP0001_ses-THP0001CCF1_acq-GD31_run-01_dwi_FA.nii.gz
+    python test_registration.py subject_FA.nii.gz
+
+    # With custom sphere radius:
+    python test_registration.py subject_FA.nii.gz --sphere-radius 3.0
 
     # With V1 image transformation to JHU space:
     python test_registration.py subject_FA.nii.gz --v1 subject_V1.nii.gz
@@ -17,7 +21,7 @@ Example:
 Required Environment:
     - FSL must be installed and FSLDIR set (or sourced via /etc/fsl/fsl.sh)
     - JHU-ICBM-FA-1mm.nii.gz must exist in $FSLDIR/data/atlases/JHU/
-    - JHU-labels-SCR-SLF.nii.gz must exist in templates/ directory
+    - ROI templates must exist in templates/ directory
 """
 
 import argparse
@@ -147,16 +151,43 @@ def run_command(cmd: list[str], description: str) -> bool:
         return False
 
 
+def create_sphere_mask(shape, center_voxel, radius_mm, voxel_size):
+    """Create a spherical binary mask centered at given voxel coordinates."""
+    import numpy as np
+
+    x, y, z = np.ogrid[: shape[0], : shape[1], : shape[2]]
+    dist_sq = (
+        ((x - center_voxel[0]) * voxel_size[0]) ** 2
+        + ((y - center_voxel[1]) * voxel_size[1]) ** 2
+        + ((z - center_voxel[2]) * voxel_size[2]) ** 2
+    )
+    return dist_sq <= radius_mm**2
+
+
+def find_mask_centroid(mask_data):
+    """Find the centroid of non-zero voxels, rounded to nearest integer."""
+    import numpy as np
+
+    coords = np.where(mask_data > 0)
+    if len(coords[0]) == 0:
+        return None
+    return (
+        int(round(coords[0].mean())),
+        int(round(coords[1].mean())),
+        int(round(coords[2].mean())),
+    )
+
+
 def register_fa_to_template(
     subject_fa: Path,
     output_dir: Path,
     jhu_fa_template: Path,
-    labels_template: Path,
     fsl_bin: Path,
+    sphere_radius: float = 2.0,
     subject_v1: Path | None = None,
 ) -> dict[str, Path] | None:
     """
-    Perform registration of subject FA to JHU template and inverse warp labels.
+    Perform registration of subject FA to JHU template and create spherical ROIs.
 
     Steps:
     1. Fix NaN values in FA image
@@ -164,15 +195,15 @@ def register_fa_to_template(
     3. Linear registration (FLIRT) - subject FA to JHU template
     4. Non-linear registration (FNIRT) - refine with warping
     5. Inverse warp (INVWARP) - create template-to-subject transform
-    6. Apply inverse warp (APPLYWARP) - bring labels to subject space
+    6. Transform ROI templates to subject space, find centroids, create spheres
     7. (Optional) Apply forward warp to V1 - transform V1 to JHU space
 
     Args:
         subject_fa: Path to subject's FA image
         output_dir: Directory for output files
         jhu_fa_template: Path to JHU-ICBM-FA-1mm.nii.gz
-        labels_template: Path to SCR/SLF labels in template space
         fsl_bin: Path to FSL bin directory
+        sphere_radius: Radius of spherical ROIs in mm (default: 2.0)
         subject_v1: Optional path to subject's V1 image for transformation to JHU space
 
     Returns:
@@ -217,7 +248,6 @@ def register_fa_to_template(
         "registered_fa": output_dir / f"{prefix}_FA_to_JHU.nii.gz",
         "warp_coef": output_dir / f"{prefix}_subject2jhu_warp_coef.nii.gz",
         "inverse_warp": output_dir / f"{prefix}_jhu2subject_warp_coef.nii.gz",
-        "labels_native": output_dir / f"{prefix}_SCR_SLF_labels_native.nii.gz",
     }
 
     # Step 3: Linear Registration (FLIRT)
@@ -276,25 +306,10 @@ def register_fa_to_template(
         print(f"ERROR: Inverse warp not created: {outputs['inverse_warp']}")
         return None
 
-    # Step 6: Apply Inverse Warp to SCR-SLF Labels
-    applywarp_cmd = [
-        str(fsl_bin / "applywarp"),
-        f"--ref={subject_fa}",
-        f"--in={labels_template}",
-        f"--warp={outputs['inverse_warp']}",
-        f"--out={outputs['labels_native']}",
-        "--interp=nn",  # Nearest neighbor to preserve integer labels
-    ]
+    # Step 6: Transform ROI templates, find centroids, and create spherical ROIs
+    import nibabel as nib
+    import numpy as np
 
-    if not run_command(applywarp_cmd, "Step 6: Apply Inverse Warp to SCR-SLF Labels (APPLYWARP)"):
-        return None
-
-    # Verify labels were created
-    if not outputs["labels_native"].exists():
-        print(f"ERROR: Labels in native space not created: {outputs['labels_native']}")
-        return None
-
-    # Step 6b: Apply Inverse Warp to all ROI templates
     project_root = Path(__file__).parent.parent
     roi_templates = {
         "left_proj": project_root / "templates" / "JHU-labels-left_proj.nii.gz",
@@ -303,30 +318,62 @@ def register_fa_to_template(
         "right_assoc": project_root / "templates" / "JHU-labels-right_assoc.nii.gz",
     }
 
-    print("\nTransforming individual ROI templates to native space...")
+    # Load reference image for shape and voxel size
+    ref_img = nib.load(str(subject_fa))
+    ref_shape = ref_img.shape[:3]
+    voxel_size = ref_img.header.get_zooms()[:3]
+
+    print(f"\nCreating spherical ROIs with {sphere_radius}mm radius...")
+    print(f"Reference shape: {ref_shape}, voxel size: {voxel_size}")
+
+    roi_centroids = {}
+
     for roi_name, roi_template in roi_templates.items():
         if not roi_template.exists():
             print(f"  WARNING: ROI template not found: {roi_template}")
             continue
 
-        roi_native = output_dir / f"{prefix}_{roi_name}_native.nii.gz"
-        outputs[f"{roi_name}_native"] = roi_native
+        # Transform template to get approximate location
+        roi_transformed = output_dir / f"{prefix}_{roi_name}_transformed.nii.gz"
 
         applywarp_roi_cmd = [
             str(fsl_bin / "applywarp"),
             f"--ref={subject_fa}",
             f"--in={roi_template}",
             f"--warp={outputs['inverse_warp']}",
-            f"--out={roi_native}",
+            f"--out={roi_transformed}",
             "--interp=nn",
         ]
 
-        if not run_command(applywarp_roi_cmd, f"Step 6b: Transform {roi_name} to Native Space"):
+        if not run_command(applywarp_roi_cmd, f"Step 6a: Transform {roi_name} to Native Space"):
             return None
 
-        if not roi_native.exists():
-            print(f"ERROR: {roi_name} ROI in native space not created: {roi_native}")
+        if not roi_transformed.exists():
+            print(f"ERROR: {roi_name} transformed ROI not created")
             return None
+
+        # Find centroid of transformed mask
+        transformed_img = nib.load(str(roi_transformed))
+        transformed_data = transformed_img.get_fdata()
+        centroid = find_mask_centroid(transformed_data)
+
+        if centroid is None:
+            print(f"ERROR: No voxels found in transformed {roi_name}")
+            return None
+
+        roi_centroids[roi_name] = centroid
+        print(f"  {roi_name}: centroid at {centroid}")
+
+        # Create spherical ROI at centroid
+        sphere_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
+        n_voxels = int(np.sum(sphere_mask))
+        print(f"    Created sphere with {n_voxels} voxels")
+
+        # Save spherical ROI
+        roi_sphere = output_dir / f"{prefix}_{roi_name}.nii.gz"
+        sphere_img = nib.Nifti1Image(sphere_mask.astype(np.float32), ref_img.affine, ref_img.header)
+        nib.save(sphere_img, str(roi_sphere))
+        outputs[roi_name] = roi_sphere
 
     # Step 7 (Optional): Apply forward warp to V1 image
     if subject_v1 is not None:
@@ -353,7 +400,7 @@ def register_fa_to_template(
 
 def verify_registration_quality(
     subject_fa: Path,
-    labels_native: Path,
+    roi_outputs: dict[str, Path],
 ) -> None:
     """
     Print summary statistics about the registration result.
@@ -366,53 +413,46 @@ def verify_registration_quality(
         print("Registration Quality Check")
         print("=" * 60)
 
-        # Load images
+        # Load FA image
         fa_img = nib.load(str(subject_fa))
-        labels_img = nib.load(str(labels_native))
-
         fa_data = fa_img.get_fdata()
-        labels_data = labels_img.get_fdata().astype(int)
 
         print(f"\nSubject FA shape: {fa_data.shape}")
-        print(f"Labels shape: {labels_data.shape}")
+        print(f"Voxel size: {fa_img.header.get_zooms()[:3]}")
 
-        # Check label values
-        unique_labels = np.unique(labels_data)
-        print(f"\nUnique label values: {unique_labels}")
+        roi_names = ["left_proj", "left_assoc", "right_proj", "right_assoc"]
 
-        for label_val in unique_labels:
-            if label_val == 0:
+        for roi_name in roi_names:
+            if roi_name not in roi_outputs:
                 continue
-            mask = labels_data == label_val
+
+            roi_path = roi_outputs[roi_name]
+            if not roi_path.exists():
+                print(f"\n{roi_name}: NOT FOUND")
+                continue
+
+            roi_img = nib.load(str(roi_path))
+            roi_data = roi_img.get_fdata()
+            mask = roi_data > 0
             voxel_count = np.sum(mask)
 
-            # Get FA values within this label region
-            fa_in_region = fa_data[mask]
-            mean_fa = np.mean(fa_in_region)
+            # Get FA values within ROI
+            fa_in_roi = fa_data[mask]
+            mean_fa = np.mean(fa_in_roi) if len(fa_in_roi) > 0 else 0
 
-            # JHU atlas label indices
-            label_names = {
-                25: "Right SCR (Superior Corona Radiata)",
-                26: "Left SCR (Superior Corona Radiata)",
-                41: "Right SLF (Superior Longitudinal Fasciculus)",
-                42: "Left SLF (Superior Longitudinal Fasciculus)",
-            }
-            label_name = label_names.get(label_val, f"Label {label_val}")
+            # Get bounding box
+            coords = np.where(mask)
+            if len(coords[0]) > 0:
+                bbox = f"{coords[0].max() - coords[0].min() + 1}x{coords[1].max() - coords[1].min() + 1}x{coords[2].max() - coords[2].min() + 1}"
+            else:
+                bbox = "N/A"
 
-            print(f"\n{label_name}:")
+            print(f"\n{roi_name}:")
             print(f"  Voxel count: {voxel_count}")
-            print(f"  Mean FA in region: {mean_fa:.4f}")
+            print(f"  Bounding box: {bbox}")
+            print(f"  Mean FA in ROI: {mean_fa:.4f}")
 
-        # Check spatial alignment
-        print("\nSpatial alignment check:")
-        print(f"  FA affine:\n{fa_img.affine}")
-        print(f"  Labels affine:\n{labels_img.affine}")
-
-        # Check if shapes match
-        if fa_data.shape == labels_data.shape[:3]:
-            print("\n✓ Shapes match - registration appears successful")
-        else:
-            print("\n✗ Shape mismatch - registration may have issues")
+        print("\n✓ Registration and ROI creation completed")
 
     except ImportError:
         print("\nNote: nibabel not available, skipping quality check")
@@ -438,10 +478,10 @@ def main():
         help="Output directory (default: same as input FA)",
     )
     parser.add_argument(
-        "--labels-template",
-        type=str,
-        default=None,
-        help="Path to SCR/SLF labels template (default: templates/JHU-labels-SCR-SLF.nii.gz)",
+        "--sphere-radius",
+        type=float,
+        default=2.0,
+        help="Radius of spherical ROIs in mm (default: 2.0)",
     )
     parser.add_argument(
         "--v1",
@@ -486,18 +526,6 @@ def main():
 
     print(f"JHU FA template: {jhu_fa_template}")
 
-    # Locate SCR/SLF labels template
-    if args.labels_template:
-        labels_template = Path(args.labels_template).resolve()
-    else:
-        # Look in project templates directory
-        project_root = Path(__file__).parent.parent
-        labels_template = project_root / "templates" / "JHU-labels-SCR-SLF.nii.gz"
-
-    if not labels_template.exists():
-        print(f"ERROR: Labels template not found: {labels_template}")
-        sys.exit(1)
-
     # Validate V1 image if provided
     subject_v1 = None
     if args.v1:
@@ -506,8 +534,10 @@ def main():
             print(f"ERROR: Subject V1 not found: {subject_v1}")
             sys.exit(1)
 
-    print(f"Labels template: {labels_template}")
+    sphere_radius = args.sphere_radius
+
     print(f"Subject FA: {subject_fa}")
+    print(f"Sphere radius: {sphere_radius} mm")
     if subject_v1:
         print(f"Subject V1: {subject_v1}")
     print(f"Output directory: {output_dir}")
@@ -521,8 +551,8 @@ def main():
         subject_fa=subject_fa,
         output_dir=output_dir,
         jhu_fa_template=jhu_fa_template,
-        labels_template=labels_template,
         fsl_bin=fsl_bin,
+        sphere_radius=sphere_radius,
         subject_v1=subject_v1,
     )
 
@@ -543,17 +573,19 @@ def main():
     # Verify registration quality
     verify_registration_quality(
         subject_fa=subject_fa,
-        labels_native=outputs["labels_native"],
+        roi_outputs=outputs,
     )
 
     print("\n" + "=" * 60)
     print("Next Steps:")
     print("=" * 60)
-    print("1. Visually inspect the registered labels overlaid on the FA image")
+    print("1. Visually inspect the spherical ROIs overlaid on the FA image")
     print("   using FSLeyes or similar viewer:")
-    print(f"   fsleyes {subject_fa} {outputs['labels_native']} -cm random")
-    print("\n2. If registration looks good, this module can be integrated")
-    print("   into the DTI-ALPS pipeline as a pre-ROI detection step.")
+    if "left_proj" in outputs:
+        print(
+            f"   fsleyes {subject_fa} {outputs['left_proj']} -cm red {outputs['left_assoc']} -cm blue"
+        )
+    print("\n2. Adjust --sphere-radius if needed (default: 2.0mm)")
 
 
 if __name__ == "__main__":
