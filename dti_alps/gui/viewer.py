@@ -411,7 +411,7 @@ class ResultsViewer(tk.Toplevel):
             roi_dir = subject_folder / "rois"
             roi_paths = {}
             if roi_dir.exists():
-                for roi_type in ["proj_left", "proj_right", "assoc_left", "assoc_right"]:
+                for roi_type in ["left_proj", "right_proj", "left_assoc", "right_assoc"]:
                     roi_files = list(roi_dir.glob(f"*_{roi_type}.nii.gz"))
                     if roi_files:
                         roi_paths[roi_type] = roi_files[0]
