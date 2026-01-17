@@ -123,6 +123,7 @@ class ResultsViewer(tk.Toplevel):
         self.show_rois = True
         self.zoom_level = 1.0
         self.alps_method = "ALPS-LAB"  # Detected from CSV
+        self._labels_built_for_method = "ALPS-LAB"  # Track which method labels are built for
 
         # Image display
         self._photo_image: ImageTk.PhotoImage | None = None
@@ -356,6 +357,9 @@ class ResultsViewer(tk.Toplevel):
         for widget in self.values_frame.winfo_children():
             widget.destroy()
 
+        # Track which method labels are built for
+        self._labels_built_for_method = alps_method
+
         if alps_method == "Both":
             # ALPS-LAB row
             ttk.Label(self.values_frame, text="ALPS-LAB:", font=("TkDefaultFont", 9, "bold")).grid(
@@ -467,6 +471,10 @@ class ResultsViewer(tk.Toplevel):
         # Parse CSV
         alps_data, alps_method = self._parse_alps_csv(csv_path)
         self.alps_method = alps_method  # Store for display
+
+        # Rebuild labels if method changed from initial layout
+        if alps_method != self._labels_built_for_method:
+            self._build_metrics_labels(alps_method)
 
         # Find subject folders and match with CSV data
         for subject_folder in sorted(folder.iterdir()):
@@ -672,8 +680,8 @@ class ResultsViewer(tk.Toplevel):
         self.subject_info_label.config(text=subject.subject_id)
         self.method_label.config(text=subject.alps_method if subject.alps_method else "--")
 
-        # Rebuild metrics labels if method changed
-        if subject.alps_method != self.alps_method:
+        # Rebuild metrics labels if method changed from what labels are built for
+        if subject.alps_method and subject.alps_method != self._labels_built_for_method:
             self.alps_method = subject.alps_method
             self._build_metrics_labels(self.alps_method)
 
@@ -811,13 +819,18 @@ class ResultsViewer(tk.Toplevel):
         # V1 is [x, y, z] -> RGB mapping: |x|=R, |y|=G, |z|=B
         rgb = np.abs(v1_slice)
 
+        # Handle NaN values
+        rgb = np.nan_to_num(rgb, nan=0.0)
+        fa_slice = np.nan_to_num(fa_slice, nan=0.0)
+
         # Normalize RGB values
         rgb_max = np.max(rgb, axis=-1, keepdims=True)
         rgb_max = np.where(rgb_max > 0, rgb_max, 1)
         rgb = rgb / rgb_max
 
         # Modulate by FA
-        fa_norm = np.clip(fa_slice / np.max(fa_slice) if np.max(fa_slice) > 0 else fa_slice, 0, 1)
+        fa_max = np.max(fa_slice)
+        fa_norm = np.clip(fa_slice / fa_max if fa_max > 0 else fa_slice, 0, 1)
         fa_mod = fa_norm[:, :, np.newaxis]
 
         rgb_modulated = rgb * fa_mod
