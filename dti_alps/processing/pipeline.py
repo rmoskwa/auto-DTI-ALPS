@@ -170,14 +170,21 @@ class SubjectResult:
     subject_id: str
     folder_path: str
     status: str = "pending"  # "pending", "running", "completed", "failed", "skipped"
-    alps_left: float | None = None
-    alps_right: float | None = None
-    alps_bilateral: float | None = None
-    alps_method: str | None = None  # ALPS method used (ALPS-LAB or ALPS-PAS)
+    alps_method: str | None = None  # ALPS method used (ALPS-LAB, ALPS-PAS, or Both)
     error_message: str | None = None
     processing_time: float = 0.0
 
-    # Detailed diffusivity values (optional, populated on success)
+    # ALPS-LAB results
+    alps_lab_left: float | None = None
+    alps_lab_right: float | None = None
+    alps_lab_bilateral: float | None = None
+
+    # ALPS-PAS results (populated when method is ALPS-PAS or Both)
+    alps_pas_left: float | None = None
+    alps_pas_right: float | None = None
+    alps_pas_bilateral: float | None = None
+
+    # Detailed diffusivity values for ALPS-LAB (optional, populated on success)
     dxx_proj_left: float | None = None
     dxx_proj_right: float | None = None
     dyy_proj_left: float | None = None
@@ -457,8 +464,8 @@ class PipelineRunner:
         if self.cancelled:
             return False
 
-        # Step 3: If ALPS-PAS method, extract L2, L3, V2, V3
-        if self.state.alps_method == "ALPS-PAS":
+        # Step 3: If ALPS-PAS or Both method, extract L2, L3, V2, V3
+        if self.state.alps_method in ("ALPS-PAS", "Both"):
             self._log("Extracting L2, L3, V2, V3 for ALPS-PAS method...")
             alps_pas_cmds = commands.build_tensor2metric_alps_pas_cmds(self.state)
             for cmd in alps_pas_cmds:
@@ -509,9 +516,10 @@ class PipelineRunner:
         """
         Calculate DTI-ALPS index from tensor and registered ROI masks.
 
-        Supports two methods:
+        Supports three options:
         - ALPS-LAB: Uses tensor diagonal components (Dxx, Dyy, Dzz)
         - ALPS-PAS: Uses eigenvalues (L2, L3) sorted by eigenvector X-alignment
+        - Both: Calculates both ALPS-LAB and ALPS-PAS
 
         Returns
         -------
@@ -545,18 +553,46 @@ class PipelineRunner:
                 roi_img = nib.load(roi_path)
                 masks[roi_name] = roi_img.get_fdata()
 
-            # Dispatch to appropriate method
-            if self.state.alps_method == "ALPS-PAS":
-                results = self._run_alps_pas_calculation(fa_data, masks, nib, np)
-            else:
-                results = self._run_alps_lab_calculation(fa_data, masks, nib, np)
+            # Calculate based on method selection
+            results = {"method": self.state.alps_method}
 
-            if results is None:
-                self._update_stage("results", "failed")
-                return False
+            if self.state.alps_method == "ALPS-LAB":
+                self._log("Calculating ALPS-LAB...")
+                lab_results = self._run_alps_lab_calculation(fa_data, masks, nib, np)
+                if lab_results is None:
+                    self._update_stage("results", "failed")
+                    return False
+                # Store with LAB prefix
+                for key, value in lab_results.items():
+                    results[f"LAB_{key}"] = value
 
-            # Store method used in results
-            results["method"] = self.state.alps_method
+            elif self.state.alps_method == "ALPS-PAS":
+                self._log("Calculating ALPS-PAS...")
+                pas_results = self._run_alps_pas_calculation(fa_data, masks, nib, np)
+                if pas_results is None:
+                    self._update_stage("results", "failed")
+                    return False
+                # Store with PAS prefix
+                for key, value in pas_results.items():
+                    results[f"PAS_{key}"] = value
+
+            elif self.state.alps_method == "Both":
+                # Calculate both methods
+                self._log("Calculating ALPS-LAB...")
+                lab_results = self._run_alps_lab_calculation(fa_data, masks, nib, np)
+                if lab_results is None:
+                    self._update_stage("results", "failed")
+                    return False
+                for key, value in lab_results.items():
+                    results[f"LAB_{key}"] = value
+
+                self._log("Calculating ALPS-PAS...")
+                pas_results = self._run_alps_pas_calculation(fa_data, masks, nib, np)
+                if pas_results is None:
+                    self._update_stage("results", "failed")
+                    return False
+                for key, value in pas_results.items():
+                    results[f"PAS_{key}"] = value
 
             self.state.alps_results = results
             self._log("ALPS calculation completed successfully")
@@ -1117,26 +1153,55 @@ class BatchRunner:
 
             if success and state.alps_results:
                 result.status = "completed"
-                result.alps_left = state.alps_results.get("ALPS_left")
-                result.alps_right = state.alps_results.get("ALPS_right")
-                result.alps_bilateral = state.alps_results.get("ALPS_bilateral")
                 result.alps_method = state.alps_results.get("method")
 
-                # Store detailed diffusivity values
-                result.dxx_proj_left = state.alps_results.get("Dxx_proj_left")
-                result.dxx_proj_right = state.alps_results.get("Dxx_proj_right")
-                result.dyy_proj_left = state.alps_results.get("Dyy_proj_left")
-                result.dyy_proj_right = state.alps_results.get("Dyy_proj_right")
-                result.dxx_assoc_left = state.alps_results.get("Dxx_assoc_left")
-                result.dxx_assoc_right = state.alps_results.get("Dxx_assoc_right")
-                result.dzz_assoc_left = state.alps_results.get("Dzz_assoc_left")
-                result.dzz_assoc_right = state.alps_results.get("Dzz_assoc_right")
+                # Store ALPS-LAB results (if available)
+                result.alps_lab_left = state.alps_results.get("LAB_ALPS_left")
+                result.alps_lab_right = state.alps_results.get("LAB_ALPS_right")
+                result.alps_lab_bilateral = state.alps_results.get("LAB_ALPS_bilateral")
 
-                self._notify(
-                    "log",
-                    f"  ALPS Index: L={result.alps_left:.4f}, R={result.alps_right:.4f}, "
-                    f"Bi={result.alps_bilateral:.4f}",
-                )
+                # Store ALPS-PAS results (if available)
+                result.alps_pas_left = state.alps_results.get("PAS_ALPS_left")
+                result.alps_pas_right = state.alps_results.get("PAS_ALPS_right")
+                result.alps_pas_bilateral = state.alps_results.get("PAS_ALPS_bilateral")
+
+                # Store detailed diffusivity values (from LAB method)
+                result.dxx_proj_left = state.alps_results.get("LAB_Dxx_proj_left")
+                result.dxx_proj_right = state.alps_results.get("LAB_Dxx_proj_right")
+                result.dyy_proj_left = state.alps_results.get("LAB_Dyy_proj_left")
+                result.dyy_proj_right = state.alps_results.get("LAB_Dyy_proj_right")
+                result.dxx_assoc_left = state.alps_results.get("LAB_Dxx_assoc_left")
+                result.dxx_assoc_right = state.alps_results.get("LAB_Dxx_assoc_right")
+                result.dzz_assoc_left = state.alps_results.get("LAB_Dzz_assoc_left")
+                result.dzz_assoc_right = state.alps_results.get("LAB_Dzz_assoc_right")
+
+                # Log appropriate results based on method
+                method = result.alps_method
+                if method == "ALPS-LAB" and result.alps_lab_bilateral is not None:
+                    self._notify(
+                        "log",
+                        f"  ALPS-LAB: L={result.alps_lab_left:.4f}, "
+                        f"R={result.alps_lab_right:.4f}, Bi={result.alps_lab_bilateral:.4f}",
+                    )
+                elif method == "ALPS-PAS" and result.alps_pas_bilateral is not None:
+                    self._notify(
+                        "log",
+                        f"  ALPS-PAS: L={result.alps_pas_left:.4f}, "
+                        f"R={result.alps_pas_right:.4f}, Bi={result.alps_pas_bilateral:.4f}",
+                    )
+                elif method == "Both":
+                    if result.alps_lab_bilateral is not None:
+                        self._notify(
+                            "log",
+                            f"  ALPS-LAB: L={result.alps_lab_left:.4f}, "
+                            f"R={result.alps_lab_right:.4f}, Bi={result.alps_lab_bilateral:.4f}",
+                        )
+                    if result.alps_pas_bilateral is not None:
+                        self._notify(
+                            "log",
+                            f"  ALPS-PAS: L={result.alps_pas_left:.4f}, "
+                            f"R={result.alps_pas_right:.4f}, Bi={result.alps_pas_bilateral:.4f}",
+                        )
             else:
                 result.status = "failed"
                 result.error_message = "Pipeline execution failed"
@@ -1163,42 +1228,109 @@ class BatchRunner:
             self.batch_state.results.append(result)
 
     def _write_csv_results(self) -> None:
-        """Write batch results to CSV file."""
+        """Write batch results to CSV file with method-specific column names."""
         import csv
 
         csv_path = os.path.join(self.batch_state.config.output_dir, "alps_results.csv")
+        alps_method = self.batch_state.config.alps_method
 
         try:
             os.makedirs(self.batch_state.config.output_dir, exist_ok=True)
 
             with open(csv_path, "w", newline="") as f:
                 writer = csv.writer(f)
-                writer.writerow(
-                    [
+
+                # Build header based on method
+                if alps_method == "ALPS-LAB":
+                    header = [
                         "Filename",
-                        "Left Hemisphere ALPS",
-                        "Right Hemisphere ALPS",
-                        "Combined ALPS",
-                        "Method",
+                        "Left Hemisphere ALPS-LAB",
+                        "Right Hemisphere ALPS-LAB",
+                        "Combined ALPS-LAB",
                         "Status",
                         "Error",
                     ]
-                )
+                elif alps_method == "ALPS-PAS":
+                    header = [
+                        "Filename",
+                        "Left Hemisphere ALPS-PAS",
+                        "Right Hemisphere ALPS-PAS",
+                        "Combined ALPS-PAS",
+                        "Status",
+                        "Error",
+                    ]
+                else:  # Both
+                    header = [
+                        "Filename",
+                        "Left Hemisphere ALPS-LAB",
+                        "Right Hemisphere ALPS-LAB",
+                        "Combined ALPS-LAB",
+                        "Left Hemisphere ALPS-PAS",
+                        "Right Hemisphere ALPS-PAS",
+                        "Combined ALPS-PAS",
+                        "Status",
+                        "Error",
+                    ]
+
+                writer.writerow(header)
 
                 for result in self.batch_state.results:
-                    writer.writerow(
-                        [
+                    if alps_method == "ALPS-LAB":
+                        row = [
                             result.subject_id,
-                            f"{result.alps_left:.6f}" if result.alps_left is not None else "",
-                            f"{result.alps_right:.6f}" if result.alps_right is not None else "",
-                            f"{result.alps_bilateral:.6f}"
-                            if result.alps_bilateral is not None
+                            f"{result.alps_lab_left:.6f}"
+                            if result.alps_lab_left is not None
                             else "",
-                            result.alps_method or "",
+                            f"{result.alps_lab_right:.6f}"
+                            if result.alps_lab_right is not None
+                            else "",
+                            f"{result.alps_lab_bilateral:.6f}"
+                            if result.alps_lab_bilateral is not None
+                            else "",
                             result.status,
                             result.error_message or "",
                         ]
-                    )
+                    elif alps_method == "ALPS-PAS":
+                        row = [
+                            result.subject_id,
+                            f"{result.alps_pas_left:.6f}"
+                            if result.alps_pas_left is not None
+                            else "",
+                            f"{result.alps_pas_right:.6f}"
+                            if result.alps_pas_right is not None
+                            else "",
+                            f"{result.alps_pas_bilateral:.6f}"
+                            if result.alps_pas_bilateral is not None
+                            else "",
+                            result.status,
+                            result.error_message or "",
+                        ]
+                    else:  # Both
+                        row = [
+                            result.subject_id,
+                            f"{result.alps_lab_left:.6f}"
+                            if result.alps_lab_left is not None
+                            else "",
+                            f"{result.alps_lab_right:.6f}"
+                            if result.alps_lab_right is not None
+                            else "",
+                            f"{result.alps_lab_bilateral:.6f}"
+                            if result.alps_lab_bilateral is not None
+                            else "",
+                            f"{result.alps_pas_left:.6f}"
+                            if result.alps_pas_left is not None
+                            else "",
+                            f"{result.alps_pas_right:.6f}"
+                            if result.alps_pas_right is not None
+                            else "",
+                            f"{result.alps_pas_bilateral:.6f}"
+                            if result.alps_pas_bilateral is not None
+                            else "",
+                            result.status,
+                            result.error_message or "",
+                        ]
+
+                    writer.writerow(row)
 
             self._notify("log", f"Results saved to {csv_path}")
 

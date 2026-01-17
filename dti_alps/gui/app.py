@@ -1534,7 +1534,7 @@ class DTIALPSApplication(tk.Tk):
         )
 
     def _show_batch_results(self, batch_state: BatchState):
-        """Display batch processing results."""
+        """Display batch processing results with method-specific column names."""
         # Switch to results stage (stage 6, index 5)
         self._show_stage(7)
 
@@ -1549,8 +1549,11 @@ class DTIALPSApplication(tk.Tk):
         title_frame = ttk.Frame(frame)
         title_frame.pack(fill=tk.X, pady=10)
 
+        alps_method = batch_state.config.alps_method
         ttk.Label(
-            title_frame, text="Batch Processing Results", font=("TkDefaultFont", 12, "bold")
+            title_frame,
+            text=f"Batch Processing Results ({alps_method})",
+            font=("TkDefaultFont", 12, "bold"),
         ).pack(side=tk.LEFT)
 
         summary_text = (
@@ -1563,21 +1566,54 @@ class DTIALPSApplication(tk.Tk):
         results_frame = ttk.LabelFrame(frame, text="Subject Results", padding=10)
         results_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        # Create treeview for batch results
-        columns = ("subject", "alps_left", "alps_right", "alps_combined", "status")
-        tree = ttk.Treeview(results_frame, columns=columns, show="headings", height=12)
+        # Create treeview with columns based on method
+        if alps_method == "Both":
+            columns = (
+                "subject",
+                "lab_left",
+                "lab_right",
+                "lab_combined",
+                "pas_left",
+                "pas_right",
+                "pas_combined",
+                "status",
+            )
+            tree = ttk.Treeview(results_frame, columns=columns, show="headings", height=12)
 
-        tree.heading("subject", text="Subject ID")
-        tree.heading("alps_left", text="Left ALPS")
-        tree.heading("alps_right", text="Right ALPS")
-        tree.heading("alps_combined", text="Combined ALPS")
-        tree.heading("status", text="Status")
+            tree.heading("subject", text="Subject ID")
+            tree.heading("lab_left", text="Left LAB")
+            tree.heading("lab_right", text="Right LAB")
+            tree.heading("lab_combined", text="Combined LAB")
+            tree.heading("pas_left", text="Left PAS")
+            tree.heading("pas_right", text="Right PAS")
+            tree.heading("pas_combined", text="Combined PAS")
+            tree.heading("status", text="Status")
 
-        tree.column("subject", width=150)
-        tree.column("alps_left", width=100, anchor=tk.CENTER)
-        tree.column("alps_right", width=100, anchor=tk.CENTER)
-        tree.column("alps_combined", width=100, anchor=tk.CENTER)
-        tree.column("status", width=100, anchor=tk.CENTER)
+            tree.column("subject", width=120)
+            tree.column("lab_left", width=80, anchor=tk.CENTER)
+            tree.column("lab_right", width=80, anchor=tk.CENTER)
+            tree.column("lab_combined", width=90, anchor=tk.CENTER)
+            tree.column("pas_left", width=80, anchor=tk.CENTER)
+            tree.column("pas_right", width=80, anchor=tk.CENTER)
+            tree.column("pas_combined", width=90, anchor=tk.CENTER)
+            tree.column("status", width=80, anchor=tk.CENTER)
+        else:
+            # ALPS-LAB or ALPS-PAS
+            method_suffix = "LAB" if alps_method == "ALPS-LAB" else "PAS"
+            columns = ("subject", "alps_left", "alps_right", "alps_combined", "status")
+            tree = ttk.Treeview(results_frame, columns=columns, show="headings", height=12)
+
+            tree.heading("subject", text="Subject ID")
+            tree.heading("alps_left", text=f"Left {method_suffix}")
+            tree.heading("alps_right", text=f"Right {method_suffix}")
+            tree.heading("alps_combined", text=f"Combined {method_suffix}")
+            tree.heading("status", text="Status")
+
+            tree.column("subject", width=150)
+            tree.column("alps_left", width=100, anchor=tk.CENTER)
+            tree.column("alps_right", width=100, anchor=tk.CENTER)
+            tree.column("alps_combined", width=100, anchor=tk.CENTER)
+            tree.column("status", width=100, anchor=tk.CENTER)
 
         # Add scrollbar
         scrollbar = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=tree.yview)
@@ -1588,15 +1624,73 @@ class DTIALPSApplication(tk.Tk):
 
         # Add data rows
         for result in batch_state.results:
-            alps_left = f"{result.alps_left:.4f}" if result.alps_left is not None else ""
-            alps_right = f"{result.alps_right:.4f}" if result.alps_right is not None else ""
-            alps_bi = f"{result.alps_bilateral:.4f}" if result.alps_bilateral is not None else ""
-
-            tree.insert(
-                "",
-                tk.END,
-                values=(result.subject_id, alps_left, alps_right, alps_bi, result.status),
-            )
+            if alps_method == "Both":
+                lab_left = f"{result.alps_lab_left:.4f}" if result.alps_lab_left is not None else ""
+                lab_right = (
+                    f"{result.alps_lab_right:.4f}" if result.alps_lab_right is not None else ""
+                )
+                lab_bi = (
+                    f"{result.alps_lab_bilateral:.4f}"
+                    if result.alps_lab_bilateral is not None
+                    else ""
+                )
+                pas_left = f"{result.alps_pas_left:.4f}" if result.alps_pas_left is not None else ""
+                pas_right = (
+                    f"{result.alps_pas_right:.4f}" if result.alps_pas_right is not None else ""
+                )
+                pas_bi = (
+                    f"{result.alps_pas_bilateral:.4f}"
+                    if result.alps_pas_bilateral is not None
+                    else ""
+                )
+                tree.insert(
+                    "",
+                    tk.END,
+                    values=(
+                        result.subject_id,
+                        lab_left,
+                        lab_right,
+                        lab_bi,
+                        pas_left,
+                        pas_right,
+                        pas_bi,
+                        result.status,
+                    ),
+                )
+            elif alps_method == "ALPS-LAB":
+                alps_left = (
+                    f"{result.alps_lab_left:.4f}" if result.alps_lab_left is not None else ""
+                )
+                alps_right = (
+                    f"{result.alps_lab_right:.4f}" if result.alps_lab_right is not None else ""
+                )
+                alps_bi = (
+                    f"{result.alps_lab_bilateral:.4f}"
+                    if result.alps_lab_bilateral is not None
+                    else ""
+                )
+                tree.insert(
+                    "",
+                    tk.END,
+                    values=(result.subject_id, alps_left, alps_right, alps_bi, result.status),
+                )
+            else:  # ALPS-PAS
+                alps_left = (
+                    f"{result.alps_pas_left:.4f}" if result.alps_pas_left is not None else ""
+                )
+                alps_right = (
+                    f"{result.alps_pas_right:.4f}" if result.alps_pas_right is not None else ""
+                )
+                alps_bi = (
+                    f"{result.alps_pas_bilateral:.4f}"
+                    if result.alps_pas_bilateral is not None
+                    else ""
+                )
+                tree.insert(
+                    "",
+                    tk.END,
+                    values=(result.subject_id, alps_left, alps_right, alps_bi, result.status),
+                )
 
         self.batch_results_tree = tree  # Store for export
 

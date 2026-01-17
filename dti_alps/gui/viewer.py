@@ -25,10 +25,14 @@ class SubjectData:
     v1_path: Path | None = None
     roi_paths: dict[str, Path] = field(default_factory=dict)
 
-    # ALPS metrics from CSV
-    alps_left: float | None = None
-    alps_right: float | None = None
-    alps_combined: float | None = None
+    # ALPS metrics from CSV - method-specific
+    alps_method: str = ""  # "ALPS-LAB", "ALPS-PAS", or "Both"
+    alps_lab_left: float | None = None
+    alps_lab_right: float | None = None
+    alps_lab_combined: float | None = None
+    alps_pas_left: float | None = None
+    alps_pas_right: float | None = None
+    alps_pas_combined: float | None = None
     status: str = ""
     error: str = ""
 
@@ -118,6 +122,7 @@ class ResultsViewer(tk.Toplevel):
         self.current_view = "axial"  # axial, coronal, sagittal
         self.show_rois = True
         self.zoom_level = 1.0
+        self.alps_method = "ALPS-LAB"  # Detected from CSV
 
         # Image display
         self._photo_image: ImageTk.PhotoImage | None = None
@@ -312,55 +317,124 @@ class ResultsViewer(tk.Toplevel):
 
     def _create_metrics_panel(self, parent):
         """Create ALPS metrics display panel."""
-        metrics_frame = ttk.LabelFrame(parent, text="ALPS Metrics", padding=10)
-        metrics_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.metrics_frame = ttk.LabelFrame(parent, text="ALPS Metrics", padding=10)
+        self.metrics_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # Subject info
-        info_frame = ttk.Frame(metrics_frame)
+        info_frame = ttk.Frame(self.metrics_frame)
         info_frame.pack(fill=tk.X, pady=(0, 10))
 
         ttk.Label(info_frame, text="Subject:", font=("TkDefaultFont", 9, "bold")).pack(side=tk.LEFT)
         self.subject_info_label = ttk.Label(info_frame, text="None selected")
         self.subject_info_label.pack(side=tk.LEFT, padx=5)
 
-        # ALPS values in a grid
-        values_frame = ttk.Frame(metrics_frame)
-        values_frame.pack(fill=tk.X)
+        # Method info
+        ttk.Label(info_frame, text="  Method:", font=("TkDefaultFont", 9, "bold")).pack(
+            side=tk.LEFT, padx=(20, 0)
+        )
+        self.method_label = ttk.Label(info_frame, text="--")
+        self.method_label.pack(side=tk.LEFT, padx=5)
 
-        # Headers
-        ttk.Label(values_frame, text="Left ALPS:", font=("TkDefaultFont", 9)).grid(
-            row=0, column=0, sticky=tk.W, padx=(0, 10)
-        )
-        ttk.Label(values_frame, text="Right ALPS:", font=("TkDefaultFont", 9)).grid(
-            row=0, column=2, sticky=tk.W, padx=(20, 10)
-        )
-        ttk.Label(values_frame, text="Combined:", font=("TkDefaultFont", 9)).grid(
-            row=0, column=4, sticky=tk.W, padx=(20, 10)
-        )
+        # ALPS values container (will be rebuilt based on method)
+        self.values_frame = ttk.Frame(self.metrics_frame)
+        self.values_frame.pack(fill=tk.X)
 
-        # Values
-        self.alps_left_label = ttk.Label(
-            values_frame, text="--", font=("TkDefaultFont", 11, "bold")
-        )
-        self.alps_left_label.grid(row=0, column=1, sticky=tk.W)
-
-        self.alps_right_label = ttk.Label(
-            values_frame, text="--", font=("TkDefaultFont", 11, "bold")
-        )
-        self.alps_right_label.grid(row=0, column=3, sticky=tk.W)
-
-        self.alps_combined_label = ttk.Label(
-            values_frame, text="--", font=("TkDefaultFont", 11, "bold")
-        )
-        self.alps_combined_label.grid(row=0, column=5, sticky=tk.W)
+        # Initialize with default layout
+        self._build_metrics_labels("ALPS-LAB")
 
         # Status
-        status_frame = ttk.Frame(metrics_frame)
+        status_frame = ttk.Frame(self.metrics_frame)
         status_frame.pack(fill=tk.X, pady=(10, 0))
 
         ttk.Label(status_frame, text="Status:").pack(side=tk.LEFT)
         self.status_value_label = ttk.Label(status_frame, text="--")
         self.status_value_label.pack(side=tk.LEFT, padx=5)
+
+    def _build_metrics_labels(self, alps_method: str):
+        """Build metrics labels based on ALPS method."""
+        # Clear existing widgets
+        for widget in self.values_frame.winfo_children():
+            widget.destroy()
+
+        if alps_method == "Both":
+            # ALPS-LAB row
+            ttk.Label(self.values_frame, text="ALPS-LAB:", font=("TkDefaultFont", 9, "bold")).grid(
+                row=0, column=0, sticky=tk.W, padx=(0, 5)
+            )
+            ttk.Label(self.values_frame, text="L:", font=("TkDefaultFont", 9)).grid(
+                row=0, column=1, sticky=tk.W
+            )
+            self.alps_lab_left_label = ttk.Label(
+                self.values_frame, text="--", font=("TkDefaultFont", 10, "bold")
+            )
+            self.alps_lab_left_label.grid(row=0, column=2, sticky=tk.W, padx=(0, 10))
+            ttk.Label(self.values_frame, text="R:", font=("TkDefaultFont", 9)).grid(
+                row=0, column=3, sticky=tk.W
+            )
+            self.alps_lab_right_label = ttk.Label(
+                self.values_frame, text="--", font=("TkDefaultFont", 10, "bold")
+            )
+            self.alps_lab_right_label.grid(row=0, column=4, sticky=tk.W, padx=(0, 10))
+            ttk.Label(self.values_frame, text="Bi:", font=("TkDefaultFont", 9)).grid(
+                row=0, column=5, sticky=tk.W
+            )
+            self.alps_lab_combined_label = ttk.Label(
+                self.values_frame, text="--", font=("TkDefaultFont", 10, "bold")
+            )
+            self.alps_lab_combined_label.grid(row=0, column=6, sticky=tk.W)
+
+            # ALPS-PAS row
+            ttk.Label(self.values_frame, text="ALPS-PAS:", font=("TkDefaultFont", 9, "bold")).grid(
+                row=1, column=0, sticky=tk.W, padx=(0, 5), pady=(5, 0)
+            )
+            ttk.Label(self.values_frame, text="L:", font=("TkDefaultFont", 9)).grid(
+                row=1, column=1, sticky=tk.W, pady=(5, 0)
+            )
+            self.alps_pas_left_label = ttk.Label(
+                self.values_frame, text="--", font=("TkDefaultFont", 10, "bold")
+            )
+            self.alps_pas_left_label.grid(row=1, column=2, sticky=tk.W, padx=(0, 10), pady=(5, 0))
+            ttk.Label(self.values_frame, text="R:", font=("TkDefaultFont", 9)).grid(
+                row=1, column=3, sticky=tk.W, pady=(5, 0)
+            )
+            self.alps_pas_right_label = ttk.Label(
+                self.values_frame, text="--", font=("TkDefaultFont", 10, "bold")
+            )
+            self.alps_pas_right_label.grid(row=1, column=4, sticky=tk.W, padx=(0, 10), pady=(5, 0))
+            ttk.Label(self.values_frame, text="Bi:", font=("TkDefaultFont", 9)).grid(
+                row=1, column=5, sticky=tk.W, pady=(5, 0)
+            )
+            self.alps_pas_combined_label = ttk.Label(
+                self.values_frame, text="--", font=("TkDefaultFont", 10, "bold")
+            )
+            self.alps_pas_combined_label.grid(row=1, column=6, sticky=tk.W, pady=(5, 0))
+        else:
+            # Single method (ALPS-LAB or ALPS-PAS)
+            method_suffix = "LAB" if alps_method == "ALPS-LAB" else "PAS"
+            ttk.Label(
+                self.values_frame, text=f"Left ALPS-{method_suffix}:", font=("TkDefaultFont", 9)
+            ).grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+            ttk.Label(
+                self.values_frame, text=f"Right ALPS-{method_suffix}:", font=("TkDefaultFont", 9)
+            ).grid(row=0, column=2, sticky=tk.W, padx=(20, 10))
+            ttk.Label(self.values_frame, text="Combined:", font=("TkDefaultFont", 9)).grid(
+                row=0, column=4, sticky=tk.W, padx=(20, 10)
+            )
+
+            self.alps_left_label = ttk.Label(
+                self.values_frame, text="--", font=("TkDefaultFont", 11, "bold")
+            )
+            self.alps_left_label.grid(row=0, column=1, sticky=tk.W)
+
+            self.alps_right_label = ttk.Label(
+                self.values_frame, text="--", font=("TkDefaultFont", 11, "bold")
+            )
+            self.alps_right_label.grid(row=0, column=3, sticky=tk.W)
+
+            self.alps_combined_label = ttk.Label(
+                self.values_frame, text="--", font=("TkDefaultFont", 11, "bold")
+            )
+            self.alps_combined_label.grid(row=0, column=5, sticky=tk.W)
 
     def _browse_folder(self):
         """Open folder browser and load results."""
@@ -391,7 +465,8 @@ class ResultsViewer(tk.Toplevel):
             self.subject_tree.delete(item)
 
         # Parse CSV
-        alps_data = self._parse_alps_csv(csv_path)
+        alps_data, alps_method = self._parse_alps_csv(csv_path)
+        self.alps_method = alps_method  # Store for display
 
         # Find subject folders and match with CSV data
         for subject_folder in sorted(folder.iterdir()):
@@ -428,9 +503,13 @@ class ResultsViewer(tk.Toplevel):
             # Add ALPS metrics from CSV
             if subject_id in alps_data:
                 csv_row = alps_data[subject_id]
-                subject_data.alps_left = csv_row.get("alps_left")
-                subject_data.alps_right = csv_row.get("alps_right")
-                subject_data.alps_combined = csv_row.get("alps_combined")
+                subject_data.alps_method = csv_row.get("alps_method", "")
+                subject_data.alps_lab_left = csv_row.get("alps_lab_left")
+                subject_data.alps_lab_right = csv_row.get("alps_lab_right")
+                subject_data.alps_lab_combined = csv_row.get("alps_lab_combined")
+                subject_data.alps_pas_left = csv_row.get("alps_pas_left")
+                subject_data.alps_pas_right = csv_row.get("alps_pas_right")
+                subject_data.alps_pas_combined = csv_row.get("alps_pas_combined")
                 subject_data.status = csv_row.get("status", "")
                 subject_data.error = csv_row.get("error", "")
 
@@ -448,41 +527,96 @@ class ResultsViewer(tk.Toplevel):
             self.subject_tree.selection_set(first_id)
             self._select_subject(first_id)
 
-    def _parse_alps_csv(self, csv_path: Path) -> dict:
-        """Parse alps_results.csv and return dict keyed by subject ID."""
+    def _parse_alps_csv(self, csv_path: Path) -> tuple[dict, str]:
+        """
+        Parse alps_results.csv and return dict keyed by subject ID.
+
+        Returns
+        -------
+        tuple[dict, str]
+            (data dict, alps_method detected from column names)
+        """
         alps_data = {}
+        alps_method = "ALPS-LAB"  # Default
 
         with open(csv_path, newline="") as f:
             reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames or []
+
+            # Detect method from column names
+            if (
+                "Left Hemisphere ALPS-PAS" in fieldnames
+                and "Left Hemisphere ALPS-LAB" in fieldnames
+            ):
+                alps_method = "Both"
+            elif "Left Hemisphere ALPS-PAS" in fieldnames:
+                alps_method = "ALPS-PAS"
+            elif "Left Hemisphere ALPS-LAB" in fieldnames:
+                alps_method = "ALPS-LAB"
+            else:
+                # Legacy format (no method suffix)
+                alps_method = "ALPS-LAB"
+
             for row in reader:
                 subject_id = row.get("Filename", "")
                 if not subject_id:
                     continue
 
-                try:
-                    alps_left = float(row.get("Left Hemisphere ALPS", ""))
-                except (ValueError, TypeError):
-                    alps_left = None
-
-                try:
-                    alps_right = float(row.get("Right Hemisphere ALPS", ""))
-                except (ValueError, TypeError):
-                    alps_right = None
-
-                try:
-                    alps_combined = float(row.get("Combined ALPS", ""))
-                except (ValueError, TypeError):
-                    alps_combined = None
-
-                alps_data[subject_id] = {
-                    "alps_left": alps_left,
-                    "alps_right": alps_right,
-                    "alps_combined": alps_combined,
+                data = {
+                    "alps_method": alps_method,
                     "status": row.get("Status", ""),
                     "error": row.get("Error", ""),
                 }
 
-        return alps_data
+                # Parse ALPS-LAB values
+                if alps_method in ("ALPS-LAB", "Both"):
+                    lab_left_col = (
+                        "Left Hemisphere ALPS-LAB"
+                        if "Left Hemisphere ALPS-LAB" in fieldnames
+                        else "Left Hemisphere ALPS"
+                    )
+                    lab_right_col = (
+                        "Right Hemisphere ALPS-LAB"
+                        if "Right Hemisphere ALPS-LAB" in fieldnames
+                        else "Right Hemisphere ALPS"
+                    )
+                    lab_combined_col = (
+                        "Combined ALPS-LAB"
+                        if "Combined ALPS-LAB" in fieldnames
+                        else "Combined ALPS"
+                    )
+
+                    try:
+                        data["alps_lab_left"] = float(row.get(lab_left_col, ""))
+                    except (ValueError, TypeError):
+                        data["alps_lab_left"] = None
+                    try:
+                        data["alps_lab_right"] = float(row.get(lab_right_col, ""))
+                    except (ValueError, TypeError):
+                        data["alps_lab_right"] = None
+                    try:
+                        data["alps_lab_combined"] = float(row.get(lab_combined_col, ""))
+                    except (ValueError, TypeError):
+                        data["alps_lab_combined"] = None
+
+                # Parse ALPS-PAS values
+                if alps_method in ("ALPS-PAS", "Both"):
+                    try:
+                        data["alps_pas_left"] = float(row.get("Left Hemisphere ALPS-PAS", ""))
+                    except (ValueError, TypeError):
+                        data["alps_pas_left"] = None
+                    try:
+                        data["alps_pas_right"] = float(row.get("Right Hemisphere ALPS-PAS", ""))
+                    except (ValueError, TypeError):
+                        data["alps_pas_right"] = None
+                    try:
+                        data["alps_pas_combined"] = float(row.get("Combined ALPS-PAS", ""))
+                    except (ValueError, TypeError):
+                        data["alps_pas_combined"] = None
+
+                alps_data[subject_id] = data
+
+        return alps_data, alps_method
 
     def _on_subject_select(self, event):
         """Handle subject selection in tree."""
@@ -527,30 +661,77 @@ class ResultsViewer(tk.Toplevel):
         """Update ALPS metrics labels for current subject."""
         if not self.current_subject:
             self.subject_info_label.config(text="None selected")
-            self.alps_left_label.config(text="--")
-            self.alps_right_label.config(text="--")
-            self.alps_combined_label.config(text="--")
+            self.method_label.config(text="--")
             self.status_value_label.config(text="--")
+            # Reset all labels based on current layout
+            self._build_metrics_labels(self.alps_method)
             return
 
         subject = self.current_subject
 
         self.subject_info_label.config(text=subject.subject_id)
+        self.method_label.config(text=subject.alps_method if subject.alps_method else "--")
 
-        if subject.alps_left is not None:
-            self.alps_left_label.config(text=f"{subject.alps_left:.4f}")
-        else:
-            self.alps_left_label.config(text="--")
+        # Rebuild metrics labels if method changed
+        if subject.alps_method != self.alps_method:
+            self.alps_method = subject.alps_method
+            self._build_metrics_labels(self.alps_method)
 
-        if subject.alps_right is not None:
-            self.alps_right_label.config(text=f"{subject.alps_right:.4f}")
-        else:
-            self.alps_right_label.config(text="--")
+        # Update values based on method
+        if self.alps_method == "Both":
+            # Update ALPS-LAB labels
+            if subject.alps_lab_left is not None:
+                self.alps_lab_left_label.config(text=f"{subject.alps_lab_left:.4f}")
+            else:
+                self.alps_lab_left_label.config(text="--")
+            if subject.alps_lab_right is not None:
+                self.alps_lab_right_label.config(text=f"{subject.alps_lab_right:.4f}")
+            else:
+                self.alps_lab_right_label.config(text="--")
+            if subject.alps_lab_combined is not None:
+                self.alps_lab_combined_label.config(text=f"{subject.alps_lab_combined:.4f}")
+            else:
+                self.alps_lab_combined_label.config(text="--")
 
-        if subject.alps_combined is not None:
-            self.alps_combined_label.config(text=f"{subject.alps_combined:.4f}")
-        else:
-            self.alps_combined_label.config(text="--")
+            # Update ALPS-PAS labels
+            if subject.alps_pas_left is not None:
+                self.alps_pas_left_label.config(text=f"{subject.alps_pas_left:.4f}")
+            else:
+                self.alps_pas_left_label.config(text="--")
+            if subject.alps_pas_right is not None:
+                self.alps_pas_right_label.config(text=f"{subject.alps_pas_right:.4f}")
+            else:
+                self.alps_pas_right_label.config(text="--")
+            if subject.alps_pas_combined is not None:
+                self.alps_pas_combined_label.config(text=f"{subject.alps_pas_combined:.4f}")
+            else:
+                self.alps_pas_combined_label.config(text="--")
+        elif self.alps_method == "ALPS-PAS":
+            if subject.alps_pas_left is not None:
+                self.alps_left_label.config(text=f"{subject.alps_pas_left:.4f}")
+            else:
+                self.alps_left_label.config(text="--")
+            if subject.alps_pas_right is not None:
+                self.alps_right_label.config(text=f"{subject.alps_pas_right:.4f}")
+            else:
+                self.alps_right_label.config(text="--")
+            if subject.alps_pas_combined is not None:
+                self.alps_combined_label.config(text=f"{subject.alps_pas_combined:.4f}")
+            else:
+                self.alps_combined_label.config(text="--")
+        else:  # ALPS-LAB
+            if subject.alps_lab_left is not None:
+                self.alps_left_label.config(text=f"{subject.alps_lab_left:.4f}")
+            else:
+                self.alps_left_label.config(text="--")
+            if subject.alps_lab_right is not None:
+                self.alps_right_label.config(text=f"{subject.alps_lab_right:.4f}")
+            else:
+                self.alps_right_label.config(text="--")
+            if subject.alps_lab_combined is not None:
+                self.alps_combined_label.config(text=f"{subject.alps_lab_combined:.4f}")
+            else:
+                self.alps_combined_label.config(text="--")
 
         self.status_value_label.config(text=subject.status if subject.status else "--")
 
