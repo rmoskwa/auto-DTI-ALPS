@@ -391,6 +391,7 @@ def register_fa_to_template(
         return False
 
     # Step 3: Linear registration (FLIRT)
+    # Use skull-stripped FA for FLIRT to get better initial alignment
     log("Running linear registration (FLIRT)...")
     flirt_cmd = [
         str(fsl_bin / "flirt"),
@@ -402,6 +403,17 @@ def register_fa_to_template(
         str(affine_mat),
         "-dof",
         "12",
+        "-cost",
+        "corratio",  # Correlation ratio - good for same-modality
+        "-searchrx",
+        "-30",
+        "30",  # Reduced search range for stability
+        "-searchry",
+        "-30",
+        "30",
+        "-searchrz",
+        "-30",
+        "30",
     ]
     log(f"  Command: {' '.join(flirt_cmd)}")
     if not run_fsl_command(flirt_cmd, log):
@@ -413,13 +425,25 @@ def register_fa_to_template(
         return False
 
     # Step 4: Non-linear registration (FNIRT)
+    # Use NON-skull-stripped FA for FNIRT (per FSL documentation)
+    # Parameters optimized for FA registration with balanced speed/accuracy:
+    # - intmod=none: FA is quantitative, no intensity modulation needed
+    # - jacrange=0.2,5: Constrain Jacobian to prevent extreme warps
+    # - lambda: Stronger regularization for stable warps
+    # - subsamp/miter: Balanced profile (~15-20 min instead of ~30 min)
     log("Running non-linear registration (FNIRT)...")
     fnirt_cmd = [
         str(fsl_bin / "fnirt"),
-        f"--in={fa_brain}",
+        f"--in={fa_nonan}",  # Use non-skull-stripped FA
         f"--ref={jhu_template}",
         f"--aff={affine_mat}",
         f"--cout={warp_coef}",
+        "--intmod=none",  # No intensity modulation for quantitative FA
+        "--jacrange=0.2,5",  # Constrain Jacobian to prevent extreme warps
+        "--lambda=300,150,100,50",  # Stronger regularization
+        "--subsamp=4,2,2,1",  # Balanced: keep subsamp=2 longer for speed
+        "--miter=5,5,3,3",  # Balanced: fewer iterations at full resolution
+        "--warpres=10,10,10",  # 10mm warp resolution (FSL recommended)
     ]
     log(f"  Command: {' '.join(fnirt_cmd)}")
     if not run_fsl_command(fnirt_cmd, log):

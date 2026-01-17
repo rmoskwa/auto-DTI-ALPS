@@ -238,8 +238,10 @@ def register_fa_to_template(
         print(f"ERROR: Skull-stripped FA not created: {fa_brain}")
         return None
 
-    # Use skull-stripped FA for registration
-    subject_fa_for_reg = fa_brain
+    # Use skull-stripped FA for FLIRT (linear registration)
+    # But use NON-skull-stripped FA for FNIRT (per FSL documentation)
+    subject_fa_for_flirt = fa_brain
+    subject_fa_for_fnirt = fa_fixed  # Non-skull-stripped, but NaN-fixed
 
     outputs = {
         "fa_nonan": fa_fixed,
@@ -251,10 +253,11 @@ def register_fa_to_template(
     }
 
     # Step 3: Linear Registration (FLIRT)
+    # Use skull-stripped FA for FLIRT to get better initial alignment
     flirt_cmd = [
         str(fsl_bin / "flirt"),
         "-in",
-        str(subject_fa_for_reg),
+        str(subject_fa_for_flirt),
         "-ref",
         str(jhu_fa_template),
         "-omat",
@@ -263,6 +266,17 @@ def register_fa_to_template(
         str(outputs["registered_fa"]),
         "-dof",
         "12",  # Affine (12 DOF)
+        "-cost",
+        "corratio",  # Correlation ratio - good for same-modality
+        "-searchrx",
+        "-30",
+        "30",  # Reduced search range for stability
+        "-searchry",
+        "-30",
+        "30",
+        "-searchrz",
+        "-30",
+        "30",
     ]
 
     if not run_command(flirt_cmd, "Step 3: Linear Registration (FLIRT)"):
@@ -274,12 +288,22 @@ def register_fa_to_template(
         return None
 
     # Step 4: Non-linear Registration (FNIRT)
+    # Use NON-skull-stripped FA for FNIRT (per FSL documentation)
+    # Add recommended parameters for FA registration:
+    # - intmod=none: FA is quantitative, no intensity modulation needed
+    # - jacrange=0.2,5: Prevent extreme warps (default 0.01,100 allows too much)
+    # - lambda: Stronger regularization for more stable warps
     fnirt_cmd = [
         str(fsl_bin / "fnirt"),
-        f"--in={subject_fa_for_reg}",
+        f"--in={subject_fa_for_fnirt}",
         f"--ref={jhu_fa_template}",
         f"--aff={outputs['affine_mat']}",
         f"--cout={outputs['warp_coef']}",
+        "--intmod=none",  # No intensity modulation for quantitative FA
+        "--jacrange=0.2,5",  # Constrain Jacobian to prevent extreme warps
+        "--lambda=300,150,100,50",  # Stronger regularization
+        "--subsamp=4,2,1,1",  # Standard subsampling
+        "--warpres=10,10,10",  # 10mm warp resolution (FSL recommended)
     ]
 
     if not run_command(fnirt_cmd, "Step 4: Non-linear Registration (FNIRT)"):
