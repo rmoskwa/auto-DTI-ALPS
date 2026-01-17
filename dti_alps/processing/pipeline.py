@@ -67,6 +67,8 @@ class PipelineState:
     # Stage 7: ROI placement parameters
     # ROI sphere radius for template-based ROI placement (mm)
     roi_sphere_radius: float = 2.0
+    # FA threshold for filtering CSF voxels from ROIs
+    fa_threshold: float = config.FA_THRESHOLD
 
     # Output settings
     output_dir: str = ""
@@ -138,6 +140,7 @@ class BatchConfig:
 
     # ROI placement parameters
     roi_sphere_radius: float = 2.0  # Sphere radius in mm for template-based ROI placement
+    fa_threshold: float = config.FA_THRESHOLD  # FA threshold for filtering CSF voxels
 
     # Output settings
     output_dir: str = ""
@@ -507,6 +510,12 @@ class PipelineRunner:
             dyy = tensor_data[:, :, :, config.TENSOR_DYY_INDEX]
             dzz = tensor_data[:, :, :, config.TENSOR_DZZ_INDEX]
 
+            # Load FA map for thresholding (to filter out CSF voxels)
+            self._log(f"Loading FA map: {self.state.fa_path}")
+            fa_img = nib.load(self.state.fa_path)
+            fa_data = fa_img.get_fdata()
+            self._log(f"  Applying FA threshold > {self.state.fa_threshold} to filter CSF voxels")
+
             # Load registered ROI masks
             self._log("Loading registered ROI masks...")
             masks = {}
@@ -522,14 +531,36 @@ class PipelineRunner:
                 proj_mask = masks[f"{side}_proj"]
                 assoc_mask = masks[f"{side}_assoc"]
 
-                proj_idx = np.where(proj_mask > 0)
-                assoc_idx = np.where(assoc_mask > 0)
+                # Get voxel indices with FA threshold applied
+                proj_idx_raw = np.where(proj_mask > 0)
+                assoc_idx_raw = np.where(assoc_mask > 0)
 
-                # Log ROI sizes
+                # Apply FA > threshold filter to exclude CSF voxels
+                proj_fa_mask = fa_data[proj_idx_raw] > self.state.fa_threshold
+                assoc_fa_mask = fa_data[assoc_idx_raw] > self.state.fa_threshold
+
+                proj_idx = tuple(arr[proj_fa_mask] for arr in proj_idx_raw)
+                assoc_idx = tuple(arr[assoc_fa_mask] for arr in assoc_idx_raw)
+
+                # Log ROI sizes before and after FA filtering
+                proj_voxels_raw = len(proj_idx_raw[0])
+                assoc_voxels_raw = len(assoc_idx_raw[0])
                 proj_voxels = len(proj_idx[0])
                 assoc_voxels = len(assoc_idx[0])
-                self._log(f"  {side.capitalize()} projection ROI: {proj_voxels} voxels")
-                self._log(f"  {side.capitalize()} association ROI: {assoc_voxels} voxels")
+                self._log(
+                    f"  {side.capitalize()} projection ROI: "
+                    f"{proj_voxels}/{proj_voxels_raw} voxels (after FA filter)"
+                )
+                self._log(
+                    f"  {side.capitalize()} association ROI: "
+                    f"{assoc_voxels}/{assoc_voxels_raw} voxels (after FA filter)"
+                )
+
+                # Warn if too many voxels were filtered out
+                if proj_voxels == 0:
+                    self._log(f"  WARNING: No voxels in {side} projection ROI after FA filtering!")
+                if assoc_voxels == 0:
+                    self._log(f"  WARNING: No voxels in {side} association ROI after FA filtering!")
 
                 # Projection ROI: Dxx (perivascular) and Dyy (perpendicular)
                 results[f"Dxx_proj_{side}"] = np.mean(dxx[proj_idx])
@@ -803,6 +834,7 @@ class BatchRunner:
             keep_intermediates=batch_config.keep_intermediates,
             # ROI placement parameters
             roi_sphere_radius=batch_config.roi_sphere_radius,
+            fa_threshold=batch_config.fa_threshold,
             # Output settings
             output_dir=subject_output_dir,
             output_prefix=subject_files.subject_id,

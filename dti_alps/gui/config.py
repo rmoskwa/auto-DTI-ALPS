@@ -30,6 +30,7 @@ DEFAULT_RPE_SCHEME = "none"
 
 # Registration-based ROI placement parameters
 DEFAULT_ROI_SPHERE_RADIUS = 2.0  # Sphere radius in mm for ROI placement
+FA_THRESHOLD = 0.2  # Minimum FA value for ROI voxels (filters out CSF)
 
 # Parameter ranges for validation
 ROI_SPHERE_RADIUS_RANGE = (1.0, 6.0)  # Range for ROI sphere radius

@@ -1033,6 +1033,24 @@ class DTIALPSApplication(tk.Tk):
             foreground="gray",
         ).grid(row=row, column=2, sticky=tk.W, padx=10)
 
+        # FA threshold for CSF filtering
+        row = 1
+        ttk.Label(param_frame, text="FA Threshold:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self.fa_threshold_var = tk.DoubleVar(value=config.FA_THRESHOLD)
+        ttk.Spinbox(
+            param_frame,
+            from_=0.0,
+            to=1.0,
+            increment=0.05,
+            textvariable=self.fa_threshold_var,
+            width=5,
+        ).grid(row=row, column=1, sticky=tk.W, padx=5)
+        ttk.Label(
+            param_frame,
+            text="Minimum FA value for ROI voxels (filters out CSF)",
+            foreground="gray",
+        ).grid(row=row, column=2, sticky=tk.W, padx=10)
+
         # Info about the process
         info_frame = ttk.LabelFrame(frame, text="Registration Process", padding=10)
         info_frame.pack(fill=tk.X, pady=10)
@@ -1219,6 +1237,7 @@ class DTIALPSApplication(tk.Tk):
             tensor2metric_options=tensor2metric_options,
             # ROI placement parameters
             roi_sphere_radius=self.roi_sphere_radius_var.get(),
+            fa_threshold=self.fa_threshold_var.get(),
             # Output
             output_dir=self.output_dir_var.get(),
         )
