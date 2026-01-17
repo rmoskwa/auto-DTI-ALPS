@@ -30,12 +30,20 @@ class PipelineState:
     reverse_pe_path: str | None = None
     json_sidecar_path: str | None = None
 
-    # Stage 2: Preprocessing parameters (core)
+    # Stage 2: Denoising parameters
+    run_denoising: bool = True
+    dwidenoise_options: dict[str, Any] = field(default_factory=dict)
+
+    # Stage 3: Gibbs ringing removal parameters
+    run_degibbs: bool = True
+    mrdegibbs_options: dict[str, Any] = field(default_factory=dict)
+
+    # Stage 4: Preprocessing parameters (core)
     pe_direction: str = config.DEFAULT_PE_DIRECTION
     readout_time: float = config.DEFAULT_READOUT_TIME
     rpe_scheme: str = config.DEFAULT_RPE_SCHEME
 
-    # Stage 2: dwifslpreproc CLI options dict
+    # Stage 4: dwifslpreproc CLI options dict
     # Keys are option names (e.g., "-eddy_mask"), values are option values or True for flags
     dwifslpreproc_options: dict[str, Any] = field(default_factory=dict)
 
@@ -71,6 +79,8 @@ class PipelineState:
     output_prefix: str = "subject"
 
     # Intermediate outputs (set during processing)
+    denoised_dwi_path: str | None = None
+    degibbs_dwi_path: str | None = None
     preprocessed_dwi_path: str | None = None
     tensor_path: str | None = None
     fa_path: str | None = None
@@ -90,6 +100,8 @@ class PipelineState:
 
     def setup_output_paths(self) -> None:
         """Set up all intermediate output file paths."""
+        self.denoised_dwi_path = self.get_output_path("dwi_denoised.nii.gz")
+        self.degibbs_dwi_path = self.get_output_path("dwi_degibbs.nii.gz")
         self.preprocessed_dwi_path = self.get_output_path("dwi_preproc.nii.gz")
         self.tensor_path = self.get_output_path("tensor.nii.gz")
         self.fa_path = self.get_output_path("FA.nii.gz")
@@ -104,6 +116,14 @@ class BatchConfig:
     These parameters are applied uniformly to all subjects unless
     auto-extraction is enabled (e.g., readout_time from JSON sidecars).
     """
+
+    # Denoising parameters
+    run_denoising: bool = True
+    dwidenoise_options: dict[str, Any] = field(default_factory=dict)
+
+    # Gibbs ringing removal parameters
+    run_degibbs: bool = True
+    mrdegibbs_options: dict[str, Any] = field(default_factory=dict)
 
     # Preprocessing parameters
     pe_direction: str = config.DEFAULT_PE_DIRECTION
@@ -322,6 +342,60 @@ class PipelineRunner:
             self._log(f"ERROR: Unexpected error in {stage_name}: {str(e)}")
             return False
 
+    def run_denoising(self) -> bool:
+        """
+        Run dwidenoise for thermal noise removal.
+
+        Returns
+        -------
+        bool
+            True if successful
+        """
+        if not self.state.run_denoising:
+            self._log("Denoising disabled, skipping...")
+            return True
+
+        self._update_stage("denoise", "running")
+        self._log("Starting denoising with dwidenoise...")
+
+        cmd = commands.build_dwidenoise_cmd(self.state)
+        success = self._run_command(cmd, "dwidenoise")
+
+        if success:
+            self._log("Denoising completed successfully")
+            self._update_stage("denoise", "complete")
+        else:
+            self._update_stage("denoise", "failed")
+
+        return success
+
+    def run_degibbs(self) -> bool:
+        """
+        Run mrdegibbs for Gibbs ringing removal.
+
+        Returns
+        -------
+        bool
+            True if successful
+        """
+        if not self.state.run_degibbs:
+            self._log("Gibbs ringing removal disabled, skipping...")
+            return True
+
+        self._update_stage("degibbs", "running")
+        self._log("Starting Gibbs ringing removal with mrdegibbs...")
+
+        cmd = commands.build_mrdegibbs_cmd(self.state)
+        success = self._run_command(cmd, "mrdegibbs")
+
+        if success:
+            self._log("Gibbs ringing removal completed successfully")
+            self._update_stage("degibbs", "complete")
+        else:
+            self._update_stage("degibbs", "failed")
+
+        return success
+
     def run_preprocessing(self) -> bool:
         """
         Run dwifslpreproc for DWI preprocessing.
@@ -527,13 +601,27 @@ class PipelineRunner:
         # Set up output paths
         self.state.setup_output_paths()
 
-        # Stage 1: Preprocessing
+        # Stage 1: Denoising (optional)
+        if self.state.run_denoising:
+            if not self.run_denoising():
+                return False
+            if self.cancelled:
+                return False
+
+        # Stage 2: Gibbs ringing removal (optional)
+        if self.state.run_degibbs:
+            if not self.run_degibbs():
+                return False
+            if self.cancelled:
+                return False
+
+        # Stage 3: Preprocessing
         if not self.run_preprocessing():
             return False
         if self.cancelled:
             return False
 
-        # Stage 2: DTI fitting
+        # Stage 4: DTI fitting
         if not self.run_dti_fitting():
             return False
         if self.cancelled:
@@ -704,6 +792,12 @@ class BatchRunner:
             bvals_path=subject_files.bval_path,
             json_sidecar_path=subject_files.json_sidecar_path,
             reverse_pe_path=subject_files.reverse_pe_path,
+            # Denoising parameters
+            run_denoising=batch_config.run_denoising,
+            dwidenoise_options=dict(batch_config.dwidenoise_options),
+            # Gibbs ringing removal parameters
+            run_degibbs=batch_config.run_degibbs,
+            mrdegibbs_options=dict(batch_config.mrdegibbs_options),
             # Preprocessing parameters
             pe_direction=pe_direction,
             readout_time=readout_time,

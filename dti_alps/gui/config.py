@@ -59,11 +59,38 @@ JSON_FILETYPES = [("JSON files", "*.json"), ("All files", "*.*")]
 # Pipeline stages
 PIPELINE_STAGES = [
     ("data", "Data Input"),
+    ("dwidenoise", "dwidenoise"),
+    ("mrdegibbs", "mrdegibbs"),
     ("dwifslpreproc", "dwifslpreproc"),
     ("dwi2tensor", "dwi2tensor"),
     ("tensor2metric", "tensor2metric"),
     ("roi", "ROI Detection"),
     ("results", "Results"),
+]
+
+# CLI option definitions for dwidenoise
+# Format: (option_name, option_type, description, default_value)
+# option_type: "file", "dir", "string", "int", "flag", "prefix", "choice"
+DWIDENOISE_OPTIONS = [
+    ("-mask", "file", "Processing mask (recommended)", None),
+    ("-extent", "string", "Patch size (e.g., 5,5,5)", None),
+    ("-noise", "output", "Output noise level map", None),
+    ("-datatype", "choice", "Precision for computation", None),
+    ("-estimator", "choice", "Noise estimator algorithm", None),
+    ("-nthreads", "int", "Thread count", None),
+]
+
+# Choices for dwidenoise options
+DWIDENOISE_DATATYPE_CHOICES = ["float32", "float64"]
+DWIDENOISE_ESTIMATOR_CHOICES = ["Exp1", "Exp2"]
+
+# CLI option definitions for mrdegibbs
+MRDEGIBBS_OPTIONS = [
+    ("-axes", "string", "Slice axes (default: 0,1)", None),
+    ("-nshifts", "int", "Subpixel shifts (default: 20)", None),
+    ("-minW", "int", "Left TV window border (default: 1)", None),
+    ("-maxW", "int", "Right TV window border (default: 3)", None),
+    ("-nthreads", "int", "Thread count", None),
 ]
 
 # CLI option definitions for dwifslpreproc

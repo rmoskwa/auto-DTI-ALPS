@@ -40,6 +40,65 @@ def _append_options_from_dict(cmd: list[str], options: dict) -> None:
             cmd.extend([option_name, str(value)])
 
 
+def build_dwidenoise_cmd(state: "PipelineState") -> list[str]:
+    """
+    Build dwidenoise command for thermal noise removal.
+
+    Parameters
+    ----------
+    state : PipelineState
+        Pipeline configuration
+
+    Returns
+    -------
+    list of str
+        Command and arguments
+    """
+    cmd = ["dwidenoise"]
+
+    # Input DWI
+    cmd.append(state.dwi_path)
+
+    # Output denoised DWI
+    cmd.append(state.denoised_dwi_path)
+
+    # Append options from dict
+    _append_options_from_dict(cmd, state.dwidenoise_options)
+
+    return cmd
+
+
+def build_mrdegibbs_cmd(state: "PipelineState") -> list[str]:
+    """
+    Build mrdegibbs command for Gibbs ringing removal.
+
+    Parameters
+    ----------
+    state : PipelineState
+        Pipeline configuration
+
+    Returns
+    -------
+    list of str
+        Command and arguments
+    """
+    cmd = ["mrdegibbs"]
+
+    # Input: use denoised output if denoising was run, otherwise raw DWI
+    if state.denoised_dwi_path and state.run_denoising:
+        cmd.append(state.denoised_dwi_path)
+    else:
+        cmd.append(state.dwi_path)
+
+    # Output degibbs DWI
+    cmd.append(state.degibbs_dwi_path)
+
+    # Append options from dict
+    _append_options_from_dict(cmd, state.mrdegibbs_options)
+
+    return cmd
+
+
 def build_dwifslpreproc_cmd(state: "PipelineState") -> list[str]:
     """
     Build dwifslpreproc command for DWI preprocessing.
@@ -56,8 +115,15 @@ def build_dwifslpreproc_cmd(state: "PipelineState") -> list[str]:
     """
     cmd = ["dwifslpreproc"]
 
-    # Input and output
-    cmd.append(state.dwi_path)
+    # Input: use degibbs output if available, then denoised, otherwise raw DWI
+    if state.degibbs_dwi_path and state.run_degibbs:
+        input_dwi = state.degibbs_dwi_path
+    elif state.denoised_dwi_path and state.run_denoising:
+        input_dwi = state.denoised_dwi_path
+    else:
+        input_dwi = state.dwi_path
+
+    cmd.append(input_dwi)
     cmd.append(state.preprocessed_dwi_path)
 
     # Gradient table (FSL format)
@@ -197,7 +263,7 @@ def check_mrtrix3_available() -> tuple:
     """
     import shutil
 
-    required_commands = ["dwifslpreproc", "dwi2tensor", "tensor2metric"]
+    required_commands = ["dwidenoise", "mrdegibbs", "dwifslpreproc", "dwi2tensor", "tensor2metric"]
     missing = []
 
     for cmd in required_commands:

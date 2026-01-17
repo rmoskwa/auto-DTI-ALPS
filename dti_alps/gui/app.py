@@ -191,6 +191,8 @@ class DTIALPSApplication(tk.Tk):
         # Create all stage frames (hidden initially)
         self.stage_frames = {}
         self._create_data_frame()
+        self._create_dwidenoise_frame()
+        self._create_mrdegibbs_frame()
         self._create_dwifslpreproc_frame()
         self._create_dwi2tensor_frame()
         self._create_tensor2metric_frame()
@@ -430,6 +432,141 @@ class DTIALPSApplication(tk.Tk):
         scheme = self.rpe_var.get()
         desc = config.RPE_SCHEMES.get(scheme, "")
         self.rpe_desc_label.config(text=desc)
+
+    def _create_dwidenoise_frame(self):
+        """Create dwidenoise options frame (Stage 2)."""
+        frame = ttk.Frame(self.content_frame)
+        self.stage_frames["dwidenoise"] = frame
+
+        # Info text
+        info_label = ttk.Label(
+            frame,
+            text="Thermal noise removal using Marchenko-Pastur PCA denoising.",
+            justify=tk.LEFT,
+        )
+        info_label.pack(anchor=tk.W, pady=(0, 10))
+
+        # Enable/disable checkbox
+        enable_frame = ttk.Frame(frame)
+        enable_frame.pack(fill=tk.X, pady=5)
+
+        self.run_denoising_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            enable_frame,
+            text="Enable denoising (recommended)",
+            variable=self.run_denoising_var,
+        ).pack(side=tk.LEFT)
+
+        # Options frame
+        options_frame = ttk.LabelFrame(frame, text="dwidenoise Options", padding=10)
+        options_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Column headers
+        ttk.Label(options_frame, text="", width=3).grid(row=0, column=0)
+        ttk.Label(options_frame, text="Option", width=18, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=1, sticky=tk.W
+        )
+        ttk.Label(options_frame, text="Value", width=35, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=2, sticky=tk.W
+        )
+        ttk.Label(options_frame, text="", width=8).grid(row=0, column=3)
+        ttk.Label(options_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=4, sticky=tk.W
+        )
+
+        ttk.Separator(options_frame, orient=tk.HORIZONTAL).grid(
+            row=1, column=0, columnspan=5, sticky=tk.EW, pady=5
+        )
+
+        # Create option rows from config
+        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.DWIDENOISE_OPTIONS):
+            filetypes = None
+            choices = None
+            if opt_type == "file" and "mask" in opt_name:
+                filetypes = config.NIFTI_FILETYPES
+            elif opt_type == "output":
+                filetypes = config.NIFTI_FILETYPES
+            elif opt_type == "choice":
+                if opt_name == "-datatype":
+                    choices = config.DWIDENOISE_DATATYPE_CHOICES
+                elif opt_name == "-estimator":
+                    choices = config.DWIDENOISE_ESTIMATOR_CHOICES
+
+            self._create_cli_option_row(
+                options_frame,
+                opt_name,
+                opt_type,
+                opt_desc,
+                row=i + 2,
+                stage_prefix="dwidenoise",
+                filetypes=filetypes,
+                choices=choices,
+            )
+
+        options_frame.columnconfigure(2, weight=1)
+
+    def _create_mrdegibbs_frame(self):
+        """Create mrdegibbs options frame (Stage 3)."""
+        frame = ttk.Frame(self.content_frame)
+        self.stage_frames["mrdegibbs"] = frame
+
+        # Info text
+        info_label = ttk.Label(
+            frame,
+            text="Gibbs ringing artifact removal using local subvoxel-shifts.",
+            justify=tk.LEFT,
+        )
+        info_label.pack(anchor=tk.W, pady=(0, 10))
+
+        # Enable/disable checkbox
+        enable_frame = ttk.Frame(frame)
+        enable_frame.pack(fill=tk.X, pady=5)
+
+        self.run_degibbs_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            enable_frame,
+            text="Enable Gibbs ringing removal (recommended)",
+            variable=self.run_degibbs_var,
+        ).pack(side=tk.LEFT)
+
+        # Options frame
+        options_frame = ttk.LabelFrame(frame, text="mrdegibbs Options", padding=10)
+        options_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Column headers
+        ttk.Label(options_frame, text="", width=3).grid(row=0, column=0)
+        ttk.Label(options_frame, text="Option", width=18, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=1, sticky=tk.W
+        )
+        ttk.Label(options_frame, text="Value", width=35, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=2, sticky=tk.W
+        )
+        ttk.Label(options_frame, text="", width=8).grid(row=0, column=3)
+        ttk.Label(options_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=4, sticky=tk.W
+        )
+
+        ttk.Separator(options_frame, orient=tk.HORIZONTAL).grid(
+            row=1, column=0, columnspan=5, sticky=tk.EW, pady=5
+        )
+
+        # Create option rows from config
+        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.MRDEGIBBS_OPTIONS):
+            filetypes = None
+            choices = None
+
+            self._create_cli_option_row(
+                options_frame,
+                opt_name,
+                opt_type,
+                opt_desc,
+                row=i + 2,
+                stage_prefix="mrdegibbs",
+                filetypes=filetypes,
+                choices=choices,
+            )
+
+        options_frame.columnconfigure(2, weight=1)
 
     def _create_cli_option_row(
         self,
@@ -1110,12 +1247,21 @@ class DTIALPSApplication(tk.Tk):
                 readout_time = config.DEFAULT_READOUT_TIME
 
         # Collect CLI options from each stage
+        dwidenoise_options = self._collect_cli_options("dwidenoise")
+        mrdegibbs_options = self._collect_cli_options("mrdegibbs")
         dwifslpreproc_options = self._collect_cli_options("dwifslpreproc")
         dwi2tensor_options = self._collect_cli_options("dwi2tensor")
         tensor2metric_options = self._collect_cli_options("tensor2metric")
 
         # Create batch config
         batch_config = BatchConfig(
+            # Denoising parameters
+            run_denoising=self.run_denoising_var.get(),
+            dwidenoise_options=dwidenoise_options,
+            # Gibbs ringing removal parameters
+            run_degibbs=self.run_degibbs_var.get(),
+            mrdegibbs_options=mrdegibbs_options,
+            # Preprocessing parameters
             pe_direction=self.pe_dir_var.get(),
             auto_pe_direction=self.pe_auto_var.get(),
             readout_time=readout_time,
@@ -1293,6 +1439,8 @@ class DTIALPSApplication(tk.Tk):
     def _update_stage_status(self, stage, status):
         """Update stage indicator (logs status changes)."""
         stage_names = {
+            "denoise": "Denoising",
+            "degibbs": "Gibbs Ringing Removal",
             "preproc": "Preprocessing",
             "dti": "DTI Fitting",
             "roi": "ROI Detection",
@@ -1311,7 +1459,7 @@ class DTIALPSApplication(tk.Tk):
             return
 
         # Switch to results stage (stage 6, index 5)
-        self._show_stage(5)
+        self._show_stage(7)
 
         # Update results frame
         frame = self.stage_frames["results"]
@@ -1409,7 +1557,7 @@ class DTIALPSApplication(tk.Tk):
     def _show_batch_results(self, batch_state: BatchState):
         """Display batch processing results."""
         # Switch to results stage (stage 6, index 5)
-        self._show_stage(5)
+        self._show_stage(7)
 
         # Update results frame
         frame = self.stage_frames["results"]
