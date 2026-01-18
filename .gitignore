@@ -6,6 +6,9 @@ __pycache__/
 *.pyc
 CLAUDE.md
 dti_alps.egg-info
+
+# ----------------------------------
+# For personal testing
+# ----------------------------------
 JHU-ICBM-FA-1mm.nii.gz
 templates/test_shapes/*
-tests/test_roi_shapes.py
