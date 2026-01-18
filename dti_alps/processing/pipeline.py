@@ -285,34 +285,52 @@ class PipelineRunner:
         """
         Run FA-to-template registration to transform ROI masks to native space.
 
+        Uses the registration backend specified in state.registration_backend
+        (defaults to 'fsl').
+
         Returns
         -------
         bool
             True if successful
         """
         self._update_stage("registration", "running")
-        self._log("Starting FA-to-template registration and ROI transformation...")
 
-        # Check FSL registration tools
-        fsl_ok, missing = registration.check_fsl_registration_available()
-        if not fsl_ok:
-            self._log(f"ERROR: Missing FSL tools: {', '.join(missing)}")
-            self._log("Please ensure FSL is installed and FSLDIR is set")
+        # Get registration backend
+        backend_name = self.state.registration_backend
+        self._log(f"Starting FA-to-template registration using {backend_name} backend...")
+
+        try:
+            backend = registration.get_backend(backend_name)
+        except ValueError as e:
+            self._log(f"ERROR: {e}")
+            self._update_stage("registration", "failed")
+            return False
+
+        # Check if required tools are available
+        available, missing = backend.check_available()
+        if not available:
+            self._log(f"ERROR: Missing {backend_name} tools: {', '.join(missing)}")
+            if backend_name == "fsl":
+                self._log("Please ensure FSL is installed and FSLDIR is set")
             self._update_stage("registration", "failed")
             return False
 
         # Run registration
-        success = registration.register_fa_to_template(
+        result = backend.register(
             state=self.state,
             log_callback=self._log,
         )
 
-        if success:
+        if result.success:
+            # Update state with results
+            self.state.roi_mask_paths = result.roi_mask_paths
+            self.state.roi_centers = result.roi_centers
             self._update_stage("registration", "complete")
         else:
+            self._log(f"ERROR: Registration failed: {result.error_message}")
             self._update_stage("registration", "failed")
 
-        return success
+        return result.success
 
     def run_alps_calculation(self) -> bool:
         """

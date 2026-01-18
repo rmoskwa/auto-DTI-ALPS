@@ -71,6 +71,8 @@ class PipelineState:
     alps_method: str = "ALPS-LAB"
     # Enable ROI refinement to optimize fiber purity (search ±2 X/Y, ±1 Z voxels)
     refine_roi_placement: bool = True
+    # Registration backend to use for FA-to-template registration ('fsl', 'ants' in future)
+    registration_backend: str = "fsl"
 
     # Output settings
     output_dir: str = ""
@@ -154,6 +156,7 @@ class BatchConfig:
     roi_sphere_radius: float = 2.0  # Sphere radius in mm for template-based ROI placement
     fa_threshold: float = config.FA_THRESHOLD  # FA threshold for filtering CSF voxels
     alps_method: str = "ALPS-LAB"  # ALPS calculation method (ALPS-LAB or ALPS-PAS)
+    registration_backend: str = "fsl"  # Registration backend ('fsl', 'ants' in future)
 
     # Output settings
     output_dir: str = ""
