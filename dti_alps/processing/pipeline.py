@@ -41,8 +41,9 @@ class PipelineRunner:
     2. Gibbs ringing removal with mrdegibbs (optional)
     3. Preprocessing with dwifslpreproc
     4. DTI tensor fitting with dwi2tensor + tensor2metric (FA, V1)
-    5. Registration - FA to JHU template, ROI masks to native space
-    6. ALPS index calculation
+    5. Registration - FA to JHU template (BET2, FLIRT, FNIRT, INVWARP)
+    6. ROI Placement - Transform templates to native space, create spherical ROIs
+    7. ALPS index calculation
     """
 
     def __init__(
@@ -283,10 +284,10 @@ class PipelineRunner:
 
     def run_registration(self) -> bool:
         """
-        Run FA-to-template registration to transform ROI masks to native space.
+        Run FA-to-template registration to create inverse warp.
 
         Uses the registration backend specified in state.registration_backend
-        (defaults to 'fsl').
+        (defaults to 'fsl'). Creates the inverse warp needed for ROI placement.
 
         Returns
         -------
@@ -315,8 +316,46 @@ class PipelineRunner:
             self._update_stage("registration", "failed")
             return False
 
-        # Run registration
+        # Run registration (creates inverse warp)
         result = backend.register(
+            state=self.state,
+            log_callback=self._log,
+        )
+
+        if result.success:
+            self._update_stage("registration", "complete")
+        else:
+            self._log(f"ERROR: Registration failed: {result.error_message}")
+            self._update_stage("registration", "failed")
+
+        return result.success
+
+    def run_roi_placement(self) -> bool:
+        """
+        Transform ROI templates to native space and create spherical ROIs.
+
+        Requires that registration has been run first (inverse_warp_path must exist).
+
+        Returns
+        -------
+        bool
+            True if successful
+        """
+        self._update_stage("roi", "running")
+
+        # Get registration backend
+        backend_name = self.state.registration_backend
+        self._log("Starting ROI placement...")
+
+        try:
+            backend = registration.get_backend(backend_name)
+        except ValueError as e:
+            self._log(f"ERROR: {e}")
+            self._update_stage("roi", "failed")
+            return False
+
+        # Run ROI placement
+        result = backend.place_rois(
             state=self.state,
             log_callback=self._log,
         )
@@ -325,10 +364,10 @@ class PipelineRunner:
             # Update state with results
             self.state.roi_mask_paths = result.roi_mask_paths
             self.state.roi_centers = result.roi_centers
-            self._update_stage("registration", "complete")
+            self._update_stage("roi", "complete")
         else:
-            self._log(f"ERROR: Registration failed: {result.error_message}")
-            self._update_stage("registration", "failed")
+            self._log(f"ERROR: ROI placement failed: {result.error_message}")
+            self._update_stage("roi", "failed")
 
         return result.success
 
@@ -410,13 +449,19 @@ class PipelineRunner:
         if self.cancelled:
             return False
 
-        # Stage 5: Registration (FA to JHU template, ROIs to native space)
+        # Stage 5: Registration (FA to JHU template)
         if not self.run_registration():
             return False
         if self.cancelled:
             return False
 
-        # Stage 6: ALPS calculation
+        # Stage 6: ROI Placement (transform templates to native space)
+        if not self.run_roi_placement():
+            return False
+        if self.cancelled:
+            return False
+
+        # Stage 7: ALPS calculation
         if not self.run_alps_calculation():
             return False
 

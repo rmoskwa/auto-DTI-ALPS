@@ -18,6 +18,7 @@ import numpy as np
 from .base import (
     RegistrationBackend,
     RegistrationResult,
+    ROIPlacementResult,
     calculate_roi_quality,
     create_sphere_mask,
     find_mask_centroid,
@@ -95,7 +96,7 @@ class FSLRegistration(RegistrationBackend):
         log_callback: Callable[[str], None] | None = None,
     ) -> RegistrationResult:
         """
-        Register subject FA to JHU template and transform ROI masks to native space.
+        Register subject FA to JHU template and create inverse warp.
 
         Steps:
         1. Fix NaN values in FA image
@@ -103,7 +104,6 @@ class FSLRegistration(RegistrationBackend):
         3. Linear registration (FLIRT)
         4. Non-linear registration (FNIRT)
         5. Create inverse warp (INVWARP)
-        6. Apply inverse warp to all 4 ROI masks (APPLYWARP)
 
         Parameters
         ----------
@@ -115,7 +115,7 @@ class FSLRegistration(RegistrationBackend):
         Returns
         -------
         RegistrationResult
-            Result containing ROI paths and centroids
+            Result containing inverse warp path
         """
         log = log_callback or (lambda x: None)
 
@@ -124,8 +124,6 @@ class FSLRegistration(RegistrationBackend):
         if not fsl_bin:
             return RegistrationResult(
                 success=False,
-                roi_mask_paths={},
-                roi_centers={},
                 error_message="FSL bin directory not found",
             )
 
@@ -133,27 +131,12 @@ class FSLRegistration(RegistrationBackend):
         if not jhu_template:
             return RegistrationResult(
                 success=False,
-                roi_mask_paths={},
-                roi_centers={},
                 error_message="JHU-ICBM-FA-1mm.nii.gz template not found",
-            )
-
-        roi_templates = get_roi_template_paths()
-        if not roi_templates:
-            return RegistrationResult(
-                success=False,
-                roi_mask_paths={},
-                roi_centers={},
-                error_message="ROI template files not found in templates/ directory",
             )
 
         # Set up output paths
         reg_dir = Path(state.output_dir) / "registration"
         reg_dir.mkdir(parents=True, exist_ok=True)
-
-        # Also create rois directory for final ROI masks
-        roi_dir = Path(state.output_dir) / "rois"
-        roi_dir.mkdir(parents=True, exist_ok=True)
 
         prefix = state.output_prefix
         fa_nonan = reg_dir / f"{prefix}_FA_nonan.nii.gz"
@@ -162,13 +145,16 @@ class FSLRegistration(RegistrationBackend):
         warp_coef = reg_dir / f"{prefix}_subject2jhu_warp_coef.nii.gz"
         inverse_warp = reg_dir / f"{prefix}_jhu2subject_warp_coef.nii.gz"
 
+        # Get user-configured options (with defaults)
+        bet2_opts = getattr(state, "bet2_options", {})
+        flirt_opts = getattr(state, "flirt_options", {})
+        fnirt_opts = getattr(state, "fnirt_options", {})
+
         # Step 1: Fix NaN values (bet2 may fail on NaN)
         log("Preparing FA image (fixing NaN values if present)...")
         if not self._fix_nan_in_nifti(state.fa_path, str(fa_nonan)):
             return RegistrationResult(
                 success=False,
-                roi_mask_paths={},
-                roi_centers={},
                 error_message="Failed to prepare FA image",
             )
 
@@ -178,25 +164,29 @@ class FSLRegistration(RegistrationBackend):
             str(fsl_bin / "bet2"),
             str(fa_nonan),
             str(fa_brain),
-            "-f",
-            "0.3",  # Fractional intensity threshold (lower = larger brain)
         ]
+        # Add BET2 options (use defaults if not specified)
+        f_val = bet2_opts.get("-f", "0.3")
+        bet_cmd.extend(["-f", str(f_val)])
+        if "-g" in bet2_opts and bet2_opts["-g"]:
+            bet_cmd.extend(["-g", str(bet2_opts["-g"])])
+
         log(f"  Command: {' '.join(bet_cmd)}")
         if not self._run_fsl_command(bet_cmd, log):
             return RegistrationResult(
                 success=False,
-                roi_mask_paths={},
-                roi_centers={},
                 error_message="BET2 skull stripping failed",
             )
 
         if not fa_brain.exists():
             return RegistrationResult(
                 success=False,
-                roi_mask_paths={},
-                roi_centers={},
                 error_message="Skull-stripped FA not created",
             )
+
+        # Update state with registration paths
+        state.fa_brain_path = str(fa_brain)
+        state.affine_mat_path = str(affine_mat)
 
         # Step 3: Linear registration (FLIRT)
         log("Running linear registration (FLIRT)...")
@@ -208,34 +198,40 @@ class FSLRegistration(RegistrationBackend):
             str(jhu_template),
             "-omat",
             str(affine_mat),
-            "-dof",
-            "12",
-            "-cost",
-            "corratio",  # Correlation ratio - good for same-modality
-            "-searchrx",
-            "-30",
-            "30",  # Reduced search range for stability
-            "-searchry",
-            "-30",
-            "30",
-            "-searchrz",
-            "-30",
-            "30",
         ]
+        # Add FLIRT options (use defaults if not specified)
+        dof = flirt_opts.get("-dof", "12")
+        flirt_cmd.extend(["-dof", str(dof)])
+
+        cost = flirt_opts.get("-cost", "corratio")
+        flirt_cmd.extend(["-cost", str(cost)])
+
+        # Search ranges - parse "min max" format
+        searchrx = flirt_opts.get("-searchrx", "-30 30").split()
+        if len(searchrx) == 2:
+            flirt_cmd.extend(["-searchrx", searchrx[0], searchrx[1]])
+
+        searchry = flirt_opts.get("-searchry", "-30 30").split()
+        if len(searchry) == 2:
+            flirt_cmd.extend(["-searchry", searchry[0], searchry[1]])
+
+        searchrz = flirt_opts.get("-searchrz", "-30 30").split()
+        if len(searchrz) == 2:
+            flirt_cmd.extend(["-searchrz", searchrz[0], searchrz[1]])
+
+        if "-interp" in flirt_opts and flirt_opts["-interp"]:
+            flirt_cmd.extend(["-interp", str(flirt_opts["-interp"])])
+
         log(f"  Command: {' '.join(flirt_cmd)}")
         if not self._run_fsl_command(flirt_cmd, log):
             return RegistrationResult(
                 success=False,
-                roi_mask_paths={},
-                roi_centers={},
                 error_message="FLIRT failed",
             )
 
         if not affine_mat.exists():
             return RegistrationResult(
                 success=False,
-                roi_mask_paths={},
-                roi_centers={},
                 error_message="Affine matrix not created",
             )
 
@@ -247,29 +243,41 @@ class FSLRegistration(RegistrationBackend):
             f"--ref={jhu_template}",
             f"--aff={affine_mat}",
             f"--cout={warp_coef}",
-            "--intmod=none",  # No intensity modulation for quantitative FA
-            "--jacrange=0.2,5",  # Constrain Jacobian to prevent extreme warps
-            "--lambda=300,150,100,50",  # Stronger regularization
-            "--subsamp=4,2,2,1",  # Balanced: keep subsamp=2 longer for speed
-            "--miter=5,5,3,3",  # Balanced: fewer iterations at full resolution
-            "--warpres=10,10,10",  # 10mm warp resolution (FSL recommended)
         ]
+        # Add FNIRT options (use defaults if not specified)
+        intmod = fnirt_opts.get("--intmod", "none")
+        fnirt_cmd.append(f"--intmod={intmod}")
+
+        jacrange = fnirt_opts.get("--jacrange", "0.2,5")
+        fnirt_cmd.append(f"--jacrange={jacrange}")
+
+        lambda_val = fnirt_opts.get("--lambda", "300,150,100,50")
+        fnirt_cmd.append(f"--lambda={lambda_val}")
+
+        subsamp = fnirt_opts.get("--subsamp", "4,2,2,1")
+        fnirt_cmd.append(f"--subsamp={subsamp}")
+
+        miter = fnirt_opts.get("--miter", "5,5,3,3")
+        fnirt_cmd.append(f"--miter={miter}")
+
+        warpres = fnirt_opts.get("--warpres", "10,10,10")
+        fnirt_cmd.append(f"--warpres={warpres}")
+
         log(f"  Command: {' '.join(fnirt_cmd)}")
         if not self._run_fsl_command(fnirt_cmd, log):
             return RegistrationResult(
                 success=False,
-                roi_mask_paths={},
-                roi_centers={},
                 error_message="FNIRT failed",
             )
 
         if not warp_coef.exists():
             return RegistrationResult(
                 success=False,
-                roi_mask_paths={},
-                roi_centers={},
                 error_message="Warp coefficients not created",
             )
+
+        # Update state with warp path
+        state.warp_coef_path = str(warp_coef)
 
         # Step 5: Create inverse warp
         log("Creating inverse warp (INVWARP)...")
@@ -283,26 +291,90 @@ class FSLRegistration(RegistrationBackend):
         if not self._run_fsl_command(invwarp_cmd, log):
             return RegistrationResult(
                 success=False,
-                roi_mask_paths={},
-                roi_centers={},
                 error_message="INVWARP failed",
             )
 
         if not inverse_warp.exists():
             return RegistrationResult(
                 success=False,
-                roi_mask_paths={},
-                roi_centers={},
                 error_message="Inverse warp not created",
             )
 
-        # Step 6: Apply inverse warp to all ROI masks and find centroids
+        # Update state with inverse warp path
+        state.inverse_warp_path = str(inverse_warp)
+
+        log("Registration completed successfully")
+        return RegistrationResult(
+            success=True,
+            inverse_warp_path=str(inverse_warp),
+        )
+
+    def place_rois(
+        self,
+        state: "PipelineState",
+        log_callback: Callable[[str], None] | None = None,
+    ) -> ROIPlacementResult:
+        """
+        Transform ROI templates to native space and create spherical ROIs.
+
+        Requires that register() has been run first (inverse_warp_path must exist).
+
+        Parameters
+        ----------
+        state : PipelineState
+            Pipeline state with inverse_warp_path and ROI parameters
+        log_callback : callable, optional
+            Function to call with log messages
+
+        Returns
+        -------
+        ROIPlacementResult
+            Result containing ROI paths and centroids
+        """
+        log = log_callback or (lambda x: None)
+
+        # Get FSL paths
+        fsl_bin = self._get_fsl_bin_dir()
+        if not fsl_bin:
+            return ROIPlacementResult(
+                success=False,
+                roi_mask_paths={},
+                roi_centers={},
+                error_message="FSL bin directory not found",
+            )
+
+        # Check inverse warp exists
+        inverse_warp = state.inverse_warp_path
+        if not inverse_warp or not Path(inverse_warp).exists():
+            return ROIPlacementResult(
+                success=False,
+                roi_mask_paths={},
+                roi_centers={},
+                error_message="Inverse warp not found. Run registration first.",
+            )
+
+        roi_templates = get_roi_template_paths()
+        if not roi_templates:
+            return ROIPlacementResult(
+                success=False,
+                roi_mask_paths={},
+                roi_centers={},
+                error_message="ROI template files not found in templates/ directory",
+            )
+
+        # Set up output paths
+        reg_dir = Path(state.output_dir) / "registration"
+        reg_dir.mkdir(parents=True, exist_ok=True)
+
+        roi_dir = Path(state.output_dir) / "rois"
+        roi_dir.mkdir(parents=True, exist_ok=True)
+
         log("Transforming ROI masks to native space...")
 
         result = self._transform_rois_to_native(
             state=state,
             fsl_bin=fsl_bin,
-            inverse_warp=inverse_warp,
+            inverse_warp=Path(inverse_warp),
             roi_templates=roi_templates,
             reg_dir=reg_dir,
             roi_dir=roi_dir,
@@ -320,7 +392,7 @@ class FSLRegistration(RegistrationBackend):
         reg_dir: Path,
         roi_dir: Path,
         log: Callable[[str], None],
-    ) -> RegistrationResult:
+    ) -> ROIPlacementResult:
         """Transform ROI templates to native space and create spherical ROIs."""
         # Load reference image for shape and voxel size
         ref_img = nib.load(state.fa_path)
@@ -364,7 +436,7 @@ class FSLRegistration(RegistrationBackend):
                 "--interp=nn",
             ]
             if not self._run_fsl_command(applywarp_cmd, log):
-                return RegistrationResult(
+                return ROIPlacementResult(
                     success=False,
                     roi_mask_paths={},
                     roi_centers={},
@@ -372,7 +444,7 @@ class FSLRegistration(RegistrationBackend):
                 )
 
             if not roi_transformed.exists():
-                return RegistrationResult(
+                return ROIPlacementResult(
                     success=False,
                     roi_mask_paths={},
                     roi_centers={},
@@ -385,7 +457,7 @@ class FSLRegistration(RegistrationBackend):
 
             centroid = find_mask_centroid(transformed_data)
             if centroid is None:
-                return RegistrationResult(
+                return ROIPlacementResult(
                     success=False,
                     roi_mask_paths={},
                     roi_centers={},
@@ -449,13 +521,13 @@ class FSLRegistration(RegistrationBackend):
 
             roi_native_paths[roi_name] = str(roi_sphere)
 
-        log("Registration and ROI creation completed successfully")
+        log("ROI placement completed successfully")
         log(f"  Left projection ROI: {roi_native_paths['left_proj']}")
         log(f"  Left association ROI: {roi_native_paths['left_assoc']}")
         log(f"  Right projection ROI: {roi_native_paths['right_proj']}")
         log(f"  Right association ROI: {roi_native_paths['right_assoc']}")
 
-        return RegistrationResult(
+        return ROIPlacementResult(
             success=True,
             roi_mask_paths=roi_native_paths,
             roi_centers=roi_centroids,

@@ -21,18 +21,38 @@ if TYPE_CHECKING:
 @dataclass
 class RegistrationResult:
     """
-    Result of a registration operation.
+    Result of a registration operation (registration step only).
 
     Attributes
     ----------
     success : bool
         Whether registration completed successfully
+    inverse_warp_path : str
+        Path to inverse warp field for transforming templates to native space
+    error_message : str, optional
+        Error description if registration failed
+    """
+
+    success: bool
+    inverse_warp_path: str | None = None
+    error_message: str | None = None
+
+
+@dataclass
+class ROIPlacementResult:
+    """
+    Result of ROI placement operation.
+
+    Attributes
+    ----------
+    success : bool
+        Whether ROI placement completed successfully
     roi_mask_paths : dict[str, str]
         Paths to final ROI masks in native space
     roi_centers : dict[str, tuple[int, int, int]]
         Centroid coordinates for each ROI
     error_message : str, optional
-        Error description if registration failed
+        Error description if placement failed
     """
 
     success: bool
@@ -86,25 +106,55 @@ class RegistrationBackend(ABC):
         log_callback: Callable[[str], None] | None = None,
     ) -> RegistrationResult:
         """
-        Register subject FA to template and transform ROIs to native space.
+        Register subject FA to template and create inverse warp.
 
-        This is the main entry point for registration. Implementations should:
-        1. Register subject FA to template (linear + nonlinear)
-        2. Create inverse transformation
-        3. Transform ROI templates to native space
-        4. Create spherical ROIs at transformed centroids
-        5. Optionally refine ROI placement using fiber orientation
+        This step performs:
+        1. Skull stripping (if needed)
+        2. Linear registration to template
+        3. Non-linear registration refinement
+        4. Inverse warp creation for template-to-native transformation
 
         Parameters
         ----------
         state : PipelineState
-            Pipeline state with FA path and configuration
+            Pipeline state with FA path and registration options
         log_callback : callable, optional
             Function to call with log messages
 
         Returns
         -------
         RegistrationResult
+            Result containing inverse warp path
+        """
+        pass
+
+    @abstractmethod
+    def place_rois(
+        self,
+        state: "PipelineState",
+        log_callback: Callable[[str], None] | None = None,
+    ) -> "ROIPlacementResult":
+        """
+        Transform ROI templates to native space and create spherical ROIs.
+
+        This step performs:
+        1. Apply inverse warp to ROI templates
+        2. Find centroid of each transformed mask
+        3. Optionally refine placement using fiber orientation
+        4. Create spherical ROIs at final centroids
+
+        Requires that register() has been run first (inverse_warp_path must exist).
+
+        Parameters
+        ----------
+        state : PipelineState
+            Pipeline state with inverse_warp_path and ROI parameters
+        log_callback : callable, optional
+            Function to call with log messages
+
+        Returns
+        -------
+        ROIPlacementResult
             Result containing ROI paths and centroids
         """
         pass

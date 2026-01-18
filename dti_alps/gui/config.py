@@ -57,6 +57,7 @@ PIPELINE_STAGES = [
     ("dwifslpreproc", "dwifslpreproc"),
     ("dwi2tensor", "dwi2tensor"),
     ("tensor2metric", "tensor2metric"),
+    ("registration", "Registration"),
     ("roi", "ROI Placement"),
     ("results", "Results"),
 ]
@@ -131,6 +132,41 @@ TENSOR2METRIC_OPTIONS = [
 
 # Choices for tensor2metric -modulate option
 TENSOR2METRIC_MODULATE_CHOICES = ["none", "FA", "eigval"]
+
+# Registration parameters (FSL FLIRT/FNIRT)
+# BET2 options
+BET2_OPTIONS = [
+    ("-f", "string", "Fractional intensity threshold (0->1, smaller=larger brain)", "0.3"),
+    ("-g", "string", "Vertical gradient (-1->1, positive=larger at bottom)", None),
+]
+
+# FLIRT options
+FLIRT_OPTIONS = [
+    ("-dof", "choice", "Degrees of freedom for transformation", "12"),
+    ("-cost", "choice", "Cost function for registration", "corratio"),
+    ("-searchrx", "string", "Search range in x-rotation (min max degrees)", "-30 30"),
+    ("-searchry", "string", "Search range in y-rotation (min max degrees)", "-30 30"),
+    ("-searchrz", "string", "Search range in z-rotation (min max degrees)", "-30 30"),
+    ("-interp", "choice", "Interpolation method", None),
+]
+
+# Choices for FLIRT options
+FLIRT_DOF_CHOICES = ["6", "7", "9", "12"]
+FLIRT_COST_CHOICES = ["corratio", "mutualinfo", "normcorr", "normmi", "leastsq"]
+FLIRT_INTERP_CHOICES = ["trilinear", "nearestneighbour", "sinc", "spline"]
+
+# FNIRT options
+FNIRT_OPTIONS = [
+    ("--intmod", "choice", "Intensity modulation model", "none"),
+    ("--jacrange", "string", "Jacobian range (min,max) to constrain warps", "0.2,5"),
+    ("--lambda", "string", "Regularization weights (comma-separated)", "300,150,100,50"),
+    ("--subsamp", "string", "Subsampling levels (comma-separated)", "4,2,2,1"),
+    ("--miter", "string", "Max iterations per level (comma-separated)", "5,5,3,3"),
+    ("--warpres", "string", "Warp resolution in mm (x,y,z)", "10,10,10"),
+]
+
+# Choices for FNIRT options
+FNIRT_INTMOD_CHOICES = ["none", "global_linear", "local_linear"]
 
 # MRtrix3 tensor volume indices
 # dwi2tensor outputs: D11, D22, D33, D12, D13, D23

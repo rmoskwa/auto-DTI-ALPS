@@ -198,6 +198,7 @@ class DTIALPSApplication(tk.Tk):
         self._create_dwifslpreproc_frame()
         self._create_dwi2tensor_frame()
         self._create_tensor2metric_frame()
+        self._create_registration_frame()
         self._create_roi_frame()
         self._create_results_frame()
 
@@ -996,16 +997,153 @@ class DTIALPSApplication(tk.Tk):
 
         options_frame.columnconfigure(2, weight=1)
 
+    def _create_registration_frame(self):
+        """Create registration parameters frame (Stage 7)."""
+        frame = ttk.Frame(self.content_frame)
+        self.stage_frames["registration"] = frame
+
+        # Info text
+        info_label = ttk.Label(
+            frame,
+            text="Configure parameters for FA-to-template registration.\n"
+            "This step registers the subject FA map to the JHU-ICBM template\n"
+            "using FSL tools (BET2 for skull stripping, FLIRT and FNIRT for registration).",
+            justify=tk.LEFT,
+        )
+        info_label.pack(anchor=tk.W, pady=(0, 10))
+
+        # Scrollable frame for options
+        canvas = tk.Canvas(frame, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # BET2 options
+        bet2_frame = ttk.LabelFrame(scrollable_frame, text="BET2 (Skull Stripping)", padding=10)
+        bet2_frame.pack(fill=tk.X, pady=5, padx=5)
+
+        # Column headers for BET2
+        ttk.Label(bet2_frame, text="", width=3).grid(row=0, column=0)
+        ttk.Label(bet2_frame, text="Option", width=12, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=1, sticky=tk.W
+        )
+        ttk.Label(bet2_frame, text="Value", width=20, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=2, sticky=tk.W
+        )
+        ttk.Label(bet2_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=3, sticky=tk.W
+        )
+
+        ttk.Separator(bet2_frame, orient=tk.HORIZONTAL).grid(
+            row=1, column=0, columnspan=4, sticky=tk.EW, pady=5
+        )
+
+        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.BET2_OPTIONS):
+            self._create_cli_option_row(
+                bet2_frame,
+                opt_name,
+                opt_type,
+                opt_desc,
+                row=i + 2,
+                stage_prefix="bet2",
+            )
+
+        # FLIRT options
+        flirt_frame = ttk.LabelFrame(
+            scrollable_frame, text="FLIRT (Linear Registration)", padding=10
+        )
+        flirt_frame.pack(fill=tk.X, pady=5, padx=5)
+
+        # Column headers for FLIRT
+        ttk.Label(flirt_frame, text="", width=3).grid(row=0, column=0)
+        ttk.Label(flirt_frame, text="Option", width=12, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=1, sticky=tk.W
+        )
+        ttk.Label(flirt_frame, text="Value", width=20, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=2, sticky=tk.W
+        )
+        ttk.Label(flirt_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=3, sticky=tk.W
+        )
+
+        ttk.Separator(flirt_frame, orient=tk.HORIZONTAL).grid(
+            row=1, column=0, columnspan=4, sticky=tk.EW, pady=5
+        )
+
+        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.FLIRT_OPTIONS):
+            choices = None
+            if opt_name == "-dof":
+                choices = config.FLIRT_DOF_CHOICES
+            elif opt_name == "-cost":
+                choices = config.FLIRT_COST_CHOICES
+            elif opt_name == "-interp":
+                choices = config.FLIRT_INTERP_CHOICES
+
+            self._create_cli_option_row(
+                flirt_frame,
+                opt_name,
+                opt_type,
+                opt_desc,
+                row=i + 2,
+                stage_prefix="flirt",
+                choices=choices,
+            )
+
+        # FNIRT options
+        fnirt_frame = ttk.LabelFrame(
+            scrollable_frame, text="FNIRT (Non-linear Registration)", padding=10
+        )
+        fnirt_frame.pack(fill=tk.X, pady=5, padx=5)
+
+        # Column headers for FNIRT
+        ttk.Label(fnirt_frame, text="", width=3).grid(row=0, column=0)
+        ttk.Label(fnirt_frame, text="Option", width=12, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=1, sticky=tk.W
+        )
+        ttk.Label(fnirt_frame, text="Value", width=20, font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=2, sticky=tk.W
+        )
+        ttk.Label(fnirt_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=3, sticky=tk.W
+        )
+
+        ttk.Separator(fnirt_frame, orient=tk.HORIZONTAL).grid(
+            row=1, column=0, columnspan=4, sticky=tk.EW, pady=5
+        )
+
+        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.FNIRT_OPTIONS):
+            choices = None
+            if opt_name == "--intmod":
+                choices = config.FNIRT_INTMOD_CHOICES
+
+            self._create_cli_option_row(
+                fnirt_frame,
+                opt_name,
+                opt_type,
+                opt_desc,
+                row=i + 2,
+                stage_prefix="fnirt",
+                choices=choices,
+            )
+
     def _create_roi_frame(self):
-        """Create ROI placement parameters frame (Stage 7)."""
+        """Create ROI placement parameters frame (Stage 8)."""
         frame = ttk.Frame(self.content_frame)
         self.stage_frames["roi"] = frame
 
         info_label = ttk.Label(
             frame,
-            text="Configure parameters for template-based ROI placement.\n"
-            "ROIs are placed by registering the subject FA to the JHU template\n"
-            "and transforming predefined ROI masks to native subject space.",
+            text="Configure parameters for ROI placement.\n"
+            "ROI templates are transformed to native space using the inverse warp\n"
+            "from registration, then spherical ROIs are created at the centroids.",
             justify=tk.LEFT,
         )
         info_label.pack(anchor=tk.W, pady=10)
@@ -1069,17 +1207,25 @@ class DTIALPSApplication(tk.Tk):
             foreground="gray",
         ).grid(row=row, column=2, sticky=tk.W, padx=10)
 
+        # ROI refinement option
+        row = 3
+        self.refine_roi_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            param_frame,
+            text="Enable ROI refinement (±2 X/Y, ±1 Z voxels)",
+            variable=self.refine_roi_var,
+        ).grid(row=row, column=0, columnspan=3, sticky=tk.W, pady=5)
+
         # Info about the process
-        info_frame = ttk.LabelFrame(frame, text="Registration Process", padding=10)
+        info_frame = ttk.LabelFrame(frame, text="ROI Placement Process", padding=10)
         info_frame.pack(fill=tk.X, pady=10)
 
         process_text = (
-            "The ROI placement process involves:\n\n"
-            "1. Skull stripping the FA map (FSL BET2)\n"
-            "2. Linear registration to JHU-ICBM-FA template (FSL FLIRT)\n"
-            "3. Non-linear registration refinement (FSL FNIRT)\n"
-            "4. Inverse transformation of template ROI masks to native space\n"
-            "5. Creation of spherical ROIs at transformed mask centroids\n\n"
+            "The ROI placement process (after registration) involves:\n\n"
+            "1. Transform ROI templates to native space using inverse warp\n"
+            "2. Find centroid of each transformed mask\n"
+            "3. Optionally refine placement using fiber orientation (V1)\n"
+            "4. Create spherical ROIs at final centroid positions\n\n"
             "ROI masks created:\n"
             "  - Left/Right Projection (superior corona radiata)\n"
             "  - Left/Right Association (superior longitudinal fasciculus)"
@@ -1087,7 +1233,7 @@ class DTIALPSApplication(tk.Tk):
         ttk.Label(info_frame, text=process_text, justify=tk.LEFT).pack(anchor=tk.W)
 
     def _create_results_frame(self):
-        """Create results display frame (Stage 6)."""
+        """Create results display frame (Stage 9)."""
         frame = ttk.Frame(self.content_frame)
         self.stage_frames["results"] = frame
 
@@ -1235,6 +1381,9 @@ class DTIALPSApplication(tk.Tk):
         dwifslpreproc_options = self._collect_cli_options("dwifslpreproc")
         dwi2tensor_options = self._collect_cli_options("dwi2tensor")
         tensor2metric_options = self._collect_cli_options("tensor2metric")
+        bet2_options = self._collect_cli_options("bet2")
+        flirt_options = self._collect_cli_options("flirt")
+        fnirt_options = self._collect_cli_options("fnirt")
 
         # Create batch config
         batch_config = BatchConfig(
@@ -1253,6 +1402,10 @@ class DTIALPSApplication(tk.Tk):
             dwifslpreproc_options=dwifslpreproc_options,
             dwi2tensor_options=dwi2tensor_options,
             tensor2metric_options=tensor2metric_options,
+            # Registration parameters
+            bet2_options=bet2_options,
+            flirt_options=flirt_options,
+            fnirt_options=fnirt_options,
             # ROI placement parameters
             roi_sphere_radius=self.roi_sphere_radius_var.get(),
             fa_threshold=self.fa_threshold_var.get(),
@@ -1462,7 +1615,8 @@ class DTIALPSApplication(tk.Tk):
             "degibbs": "Gibbs Ringing Removal",
             "preproc": "Preprocessing",
             "dti": "DTI Fitting",
-            "roi": "ROI Detection",
+            "registration": "Registration",
+            "roi": "ROI Placement",
             "results": "Calculating ALPS",
         }
 
@@ -1478,7 +1632,7 @@ class DTIALPSApplication(tk.Tk):
             return
 
         # Switch to results stage (stage 6, index 5)
-        self._show_stage(7)
+        self._show_stage(8)
 
         # Update results frame
         frame = self.stage_frames["results"]
@@ -1576,7 +1730,7 @@ class DTIALPSApplication(tk.Tk):
     def _show_batch_results(self, batch_state: BatchState):
         """Display batch processing results with method-specific column names."""
         # Switch to results stage (stage 6, index 5)
-        self._show_stage(7)
+        self._show_stage(8)
 
         # Update results frame
         frame = self.stage_frames["results"]

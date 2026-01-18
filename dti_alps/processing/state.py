@@ -62,7 +62,15 @@ class PipelineState:
     # Stage 6: tensor2metric CLI options dict
     tensor2metric_options: dict[str, Any] = field(default_factory=dict)
 
-    # Stage 7: ROI placement parameters
+    # Stage 7: Registration parameters (FSL FLIRT/FNIRT)
+    bet2_options: dict[str, Any] = field(default_factory=dict)
+    flirt_options: dict[str, Any] = field(default_factory=dict)
+    fnirt_options: dict[str, Any] = field(default_factory=dict)
+
+    # Registration backend to use for FA-to-template registration ('fsl', 'ants' in future)
+    registration_backend: str = "fsl"
+
+    # Stage 8: ROI placement parameters
     # ROI sphere radius for template-based ROI placement (mm)
     roi_sphere_radius: float = 3.0
     # FA threshold for filtering CSF voxels from ROIs
@@ -71,8 +79,6 @@ class PipelineState:
     alps_method: str = "ALPS-LAB"
     # Enable ROI refinement to optimize fiber purity (search ±2 X/Y, ±1 Z voxels)
     refine_roi_placement: bool = True
-    # Registration backend to use for FA-to-template registration ('fsl', 'ants' in future)
-    registration_backend: str = "fsl"
 
     # Output settings
     output_dir: str = ""
@@ -91,7 +97,13 @@ class PipelineState:
     v2_path: str | None = None
     v3_path: str | None = None
 
-    # ROI masks in native space (set by registration step)
+    # Registration intermediate outputs
+    fa_brain_path: str | None = None  # Skull-stripped FA
+    affine_mat_path: str | None = None  # FLIRT affine matrix
+    warp_coef_path: str | None = None  # FNIRT warp coefficients
+    inverse_warp_path: str | None = None  # Inverse warp for ROI transformation
+
+    # ROI masks in native space (set by ROI placement step)
     # Keys: 'left_proj', 'left_assoc', 'right_proj', 'right_assoc'
     roi_mask_paths: dict[str, str] = field(default_factory=dict)
 
@@ -116,6 +128,16 @@ class PipelineState:
         self.l3_path = self.get_output_path("L3.nii.gz")
         self.v2_path = self.get_output_path("V2.nii.gz")
         self.v3_path = self.get_output_path("V3.nii.gz")
+        # Registration outputs (in registration subdirectory)
+        reg_dir = os.path.join(self.output_dir, "registration")
+        self.fa_brain_path = os.path.join(reg_dir, f"{self.output_prefix}_FA_brain.nii.gz")
+        self.affine_mat_path = os.path.join(reg_dir, f"{self.output_prefix}_subject2jhu_affine.mat")
+        self.warp_coef_path = os.path.join(
+            reg_dir, f"{self.output_prefix}_subject2jhu_warp_coef.nii.gz"
+        )
+        self.inverse_warp_path = os.path.join(
+            reg_dir, f"{self.output_prefix}_jhu2subject_warp_coef.nii.gz"
+        )
 
 
 @dataclass
@@ -152,11 +174,16 @@ class BatchConfig:
     generate_qc: bool = False
     keep_intermediates: bool = False
 
+    # Registration parameters (FSL FLIRT/FNIRT)
+    bet2_options: dict[str, Any] = field(default_factory=dict)
+    flirt_options: dict[str, Any] = field(default_factory=dict)
+    fnirt_options: dict[str, Any] = field(default_factory=dict)
+    registration_backend: str = "fsl"  # Registration backend ('fsl', 'ants' in future)
+
     # ROI placement parameters
     roi_sphere_radius: float = 2.0  # Sphere radius in mm for template-based ROI placement
     fa_threshold: float = config.FA_THRESHOLD  # FA threshold for filtering CSF voxels
     alps_method: str = "ALPS-LAB"  # ALPS calculation method (ALPS-LAB or ALPS-PAS)
-    registration_backend: str = "fsl"  # Registration backend ('fsl', 'ants' in future)
 
     # Output settings
     output_dir: str = ""

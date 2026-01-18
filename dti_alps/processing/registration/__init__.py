@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 from .base import (
     RegistrationBackend,
     RegistrationResult,
+    ROIPlacementResult,
     calculate_roi_quality,
     create_sphere_mask,
     find_mask_centroid,
@@ -48,6 +49,7 @@ __all__ = [
     # Abstract interface
     "RegistrationBackend",
     "RegistrationResult",
+    "ROIPlacementResult",
     # Factory function
     "get_backend",
     # FSL implementation
@@ -126,8 +128,7 @@ def register_fa_to_template(
     Register subject FA to JHU template and transform ROI masks to native space.
 
     This function provides backward compatibility with the original API.
-    It uses the FSL backend by default, or the backend specified in
-    state.registration_backend if available.
+    It runs both registration and ROI placement in sequence.
 
     Parameters
     ----------
@@ -139,7 +140,7 @@ def register_fa_to_template(
     Returns
     -------
     bool
-        True if registration succeeded
+        True if registration and ROI placement succeeded
     """
     # Get backend name from state, defaulting to FSL
     backend_name = getattr(state, "registration_backend", "fsl")
@@ -148,11 +149,16 @@ def register_fa_to_template(
     backend = get_backend(backend_name)
 
     # Run registration
-    result = backend.register(state, log_callback)
+    reg_result = backend.register(state, log_callback)
+    if not reg_result.success:
+        return False
+
+    # Run ROI placement
+    roi_result = backend.place_rois(state, log_callback)
 
     # Update state with results (for backward compatibility)
-    if result.success:
-        state.roi_mask_paths = result.roi_mask_paths
-        state.roi_centers = result.roi_centers
+    if roi_result.success:
+        state.roi_mask_paths = roi_result.roi_mask_paths
+        state.roi_centers = roi_result.roi_centers
 
-    return result.success
+    return roi_result.success

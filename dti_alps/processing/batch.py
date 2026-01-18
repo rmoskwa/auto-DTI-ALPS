@@ -128,11 +128,15 @@ class BatchRunner:
             topup_options=batch_config.topup_options,
             generate_qc=batch_config.generate_qc,
             keep_intermediates=batch_config.keep_intermediates,
+            # Registration parameters
+            bet2_options=dict(batch_config.bet2_options),
+            flirt_options=dict(batch_config.flirt_options),
+            fnirt_options=dict(batch_config.fnirt_options),
+            registration_backend=batch_config.registration_backend,
             # ROI placement parameters
             roi_sphere_radius=batch_config.roi_sphere_radius,
             fa_threshold=batch_config.fa_threshold,
             alps_method=batch_config.alps_method,
-            registration_backend=batch_config.registration_backend,
             # Output settings
             output_dir=subject_output_dir,
             output_prefix=subject_files.subject_id,
