@@ -219,6 +219,159 @@ def find_mask_centroid(mask_data: np.ndarray) -> tuple[int, int, int] | None:
     return centroid
 
 
+def calculate_roi_quality(
+    v1_data: np.ndarray,
+    fa_data: np.ndarray,
+    mask: np.ndarray,
+    fiber_type: str,
+) -> tuple[float, float, float, float]:
+    """
+    Calculate ROI quality based on fiber purity, direction strength, and FA.
+
+    The quality score rewards ROIs that:
+    1. Have high fiber purity (% of voxels with correct dominant direction)
+    2. Have strong directional alignment (mean magnitude of target V1 component)
+    3. Have high FA values (strong fiber signal)
+
+    Parameters
+    ----------
+    v1_data : np.ndarray
+        Primary eigenvector data (x, y, z, 3)
+    fa_data : np.ndarray
+        Fractional anisotropy data (x, y, z)
+    mask : np.ndarray
+        Binary ROI mask
+    fiber_type : str
+        Either 'proj' (Z-dominant) or 'assoc' (Y-dominant)
+
+    Returns
+    -------
+    tuple of (purity, direction_strength, mean_fa, combined_score)
+        purity: fraction of voxels with correct fiber orientation
+        direction_strength: mean magnitude of target V1 component
+        mean_fa: mean FA value in ROI
+        combined_score: purity * direction_strength * mean_fa
+    """
+    coords = np.where(mask)
+    if len(coords[0]) == 0:
+        return 0.0, 0.0, 0.0, 0.0
+
+    n_correct = 0
+    direction_strengths = []
+    fa_values = []
+
+    for i in range(len(coords[0])):
+        x, y, z = coords[0][i], coords[1][i], coords[2][i]
+        v1 = v1_data[x, y, z, :]
+        fa = fa_data[x, y, z]
+        abs_v1 = np.abs(v1)
+
+        fa_values.append(fa)
+
+        if fiber_type == "proj":
+            # Projection fibers: Z-dominant (superior-inferior)
+            is_correct = abs_v1[2] > abs_v1[1] and abs_v1[2] > abs_v1[0]
+            direction_strength = abs_v1[2]
+        else:
+            # Association fibers: Y-dominant (anterior-posterior)
+            is_correct = abs_v1[1] > abs_v1[2] and abs_v1[1] > abs_v1[0]
+            direction_strength = abs_v1[1]
+
+        if is_correct:
+            n_correct += 1
+        direction_strengths.append(direction_strength)
+
+    purity = n_correct / len(coords[0])
+    mean_direction_strength = np.mean(direction_strengths)
+    mean_fa = np.mean(fa_values)
+
+    # Combined score rewards ROIs with high purity, strong direction, and high FA
+    combined_score = purity * mean_direction_strength * mean_fa
+
+    return purity, mean_direction_strength, mean_fa, combined_score
+
+
+def refine_roi_placement(
+    original_centroid: tuple[int, int, int],
+    v1_data: np.ndarray,
+    fa_data: np.ndarray,
+    shape: tuple[int, int, int],
+    voxel_size: tuple[float, float, float],
+    fiber_type: str,
+    radius_mm: float = 3.0,
+    search_xy: int = 2,
+    search_z: int = 1,
+) -> tuple[tuple[int, int, int], float, float]:
+    """
+    Refine ROI placement by searching nearby positions for better fiber purity.
+
+    Starting from the template-based centroid, search a small neighborhood
+    (±search_xy voxels in X/Y, ±search_z voxels in Z) to find the position
+    that maximizes the combined quality score (purity * direction * FA).
+
+    Parameters
+    ----------
+    original_centroid : tuple of int
+        Initial centroid from template registration (x, y, z)
+    v1_data : np.ndarray
+        Primary eigenvector data (x, y, z, 3)
+    fa_data : np.ndarray
+        Fractional anisotropy data (x, y, z)
+    shape : tuple of int
+        Shape of the image volume
+    voxel_size : tuple of float
+        Voxel dimensions in mm
+    fiber_type : str
+        Either 'proj' (Z-dominant) or 'assoc' (Y-dominant)
+    radius_mm : float
+        Sphere radius in millimeters
+    search_xy : int
+        Search range in X and Y directions (voxels)
+    search_z : int
+        Search range in Z direction (voxels)
+
+    Returns
+    -------
+    tuple of (best_center, best_purity, best_score)
+        best_center: optimal centroid position
+        best_purity: fiber purity at optimal position
+        best_score: combined quality score at optimal position
+    """
+    best_center = original_centroid
+    best_score = -1.0
+    best_purity = 0.0
+
+    for dx in range(-search_xy, search_xy + 1):
+        for dy in range(-search_xy, search_xy + 1):
+            for dz in range(-search_z, search_z + 1):
+                test_center = (
+                    original_centroid[0] + dx,
+                    original_centroid[1] + dy,
+                    original_centroid[2] + dz,
+                )
+
+                # Ensure center is within bounds
+                if not (
+                    0 <= test_center[0] < shape[0]
+                    and 0 <= test_center[1] < shape[1]
+                    and 0 <= test_center[2] < shape[2]
+                ):
+                    continue
+
+                # Create sphere at test position
+                sphere = create_sphere_mask(shape, test_center, radius_mm, voxel_size)
+
+                # Calculate quality metrics
+                purity, _, _, score = calculate_roi_quality(v1_data, fa_data, sphere, fiber_type)
+
+                if score > best_score:
+                    best_score = score
+                    best_center = test_center
+                    best_purity = purity
+
+    return best_center, best_purity, best_score
+
+
 def fix_nan_in_nifti(input_path: str, output_path: str) -> bool:
     """
     Replace NaN values with 0 in a NIfTI image.
@@ -477,11 +630,25 @@ def register_fa_to_template(
     # Load reference image for shape and voxel size
     ref_img = nib.load(state.fa_path)
     ref_shape = ref_img.shape[:3]
+    fa_data = ref_img.get_fdata()
     voxel_size = ref_img.header.get_zooms()[:3]
 
-    # Get sphere radius from state (default 2.0mm)
-    sphere_radius = getattr(state, "roi_sphere_radius", 2.0)
+    # Get sphere radius from state (default 3.0mm)
+    sphere_radius = getattr(state, "roi_sphere_radius", 3.0)
     log(f"  Sphere radius: {sphere_radius} mm")
+
+    # Check if ROI refinement is enabled
+    do_refinement = getattr(state, "refine_roi_placement", True)
+    v1_data = None
+    if do_refinement:
+        log("  ROI refinement enabled (±2 X/Y, ±1 Z voxels)")
+        # Load V1 data for fiber orientation analysis
+        if state.v1_path and os.path.exists(state.v1_path):
+            v1_img = nib.load(state.v1_path)
+            v1_data = v1_img.get_fdata()
+        else:
+            log("  WARNING: V1 data not available, skipping refinement")
+            do_refinement = False
 
     roi_centroids = {}
     roi_native_paths = {}
@@ -516,10 +683,48 @@ def register_fa_to_template(
             log(f"ERROR: No voxels found in transformed {roi_name}")
             return False
 
-        roi_centroids[roi_name] = centroid
-        log(f"    Centroid: {centroid}")
+        log(f"    Template centroid: {centroid}")
 
-        # Create spherical ROI at centroid
+        # Determine fiber type from ROI name
+        fiber_type = "proj" if "proj" in roi_name else "assoc"
+
+        # Apply refinement if enabled
+        if do_refinement and v1_data is not None:
+            # Calculate original purity
+            orig_sphere = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
+            orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_sphere, fiber_type)
+
+            # Refine placement
+            refined_centroid, refined_purity, _ = refine_roi_placement(
+                centroid,
+                v1_data,
+                fa_data,
+                ref_shape,
+                voxel_size,
+                fiber_type,
+                radius_mm=sphere_radius,
+                search_xy=2,
+                search_z=1,
+            )
+
+            # Calculate offset
+            offset = (
+                refined_centroid[0] - centroid[0],
+                refined_centroid[1] - centroid[1],
+                refined_centroid[2] - centroid[2],
+            )
+
+            if offset != (0, 0, 0):
+                log(f"    Refined centroid: {refined_centroid} (offset: {offset})")
+                log(f"    Purity: {orig_purity * 100:.0f}% -> {refined_purity * 100:.0f}%")
+            else:
+                log(f"    No refinement needed (purity: {refined_purity * 100:.0f}%)")
+
+            centroid = refined_centroid
+
+        roi_centroids[roi_name] = centroid
+
+        # Create spherical ROI at (possibly refined) centroid
         sphere_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
         n_voxels = int(np.sum(sphere_mask))
         log(f"    Created sphere with {n_voxels} voxels")

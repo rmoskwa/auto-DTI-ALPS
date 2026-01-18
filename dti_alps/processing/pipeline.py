@@ -66,11 +66,13 @@ class PipelineState:
 
     # Stage 7: ROI placement parameters
     # ROI sphere radius for template-based ROI placement (mm)
-    roi_sphere_radius: float = 2.0
+    roi_sphere_radius: float = 3.0
     # FA threshold for filtering CSF voxels from ROIs
     fa_threshold: float = config.FA_THRESHOLD
     # ALPS calculation method (ALPS-LAB or ALPS-PAS)
     alps_method: str = "ALPS-LAB"
+    # Enable ROI refinement to optimize fiber purity (search ±2 X/Y, ±1 Z voxels)
+    refine_roi_placement: bool = True
 
     # Output settings
     output_dir: str = ""

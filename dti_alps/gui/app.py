@@ -41,6 +41,7 @@ class DTIALPSApplication(tk.Tk):
         self.pipeline_state = PipelineState()
         self.worker = None
         self.result_queue = None
+        self.log_file = None  # File handle for log output
 
         # Batch processing state
         self.subject_files_list: list[SubjectFiles] = []
@@ -1313,6 +1314,10 @@ class DTIALPSApplication(tk.Tk):
 
         # Switch to console view
         self._show_console()
+
+        # Initialize log file in output directory
+        self._init_log_file(output_dir)
+
         self._log("Starting batch processing...")
 
         # Create batch worker
@@ -1339,6 +1344,7 @@ class DTIALPSApplication(tk.Tk):
         if self.worker and self.worker.is_alive():
             self.after(100, self._check_results)
         else:
+            self._close_log_file()
             self.run_btn.config(state=tk.NORMAL)
 
     def _handle_result(self, msg):
@@ -1404,16 +1410,50 @@ class DTIALPSApplication(tk.Tk):
         elif msg_type == "error":
             self._log(f"Error: {data}")
 
+    def _init_log_file(self, output_dir: str):
+        """Initialize log file in the output directory."""
+        import os
+        from datetime import datetime
+
+        os.makedirs(output_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_path = os.path.join(output_dir, f"dti_alps_{timestamp}.log")
+        try:
+            self.log_file = open(log_path, "w", encoding="utf-8")
+            self._log(f"Log file created: {log_path}")
+        except OSError as e:
+            self._log(f"Warning: Could not create log file: {e}")
+            self.log_file = None
+
+    def _close_log_file(self):
+        """Close the log file if open."""
+        if self.log_file:
+            try:
+                self.log_file.close()
+            except OSError:
+                pass
+            self.log_file = None
+
     def _log(self, message):
-        """Append message to log."""
+        """Append message to log (GUI console and file)."""
         from datetime import datetime
 
         timestamp = datetime.now().strftime("[%H:%M:%S]")
+        log_line = f"{timestamp} {message}\n"
 
+        # Write to GUI console
         self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, f"{timestamp} {message}\n")
+        self.log_text.insert(tk.END, log_line)
         self.log_text.see(tk.END)
         self.log_text.config(state=tk.DISABLED)
+
+        # Write to log file if open
+        if self.log_file:
+            try:
+                self.log_file.write(log_line)
+                self.log_file.flush()
+            except OSError:
+                pass
 
     def _update_stage_status(self, stage, status):
         """Update stage indicator (logs status changes)."""
