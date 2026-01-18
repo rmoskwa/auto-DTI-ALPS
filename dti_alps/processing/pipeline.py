@@ -17,12 +17,13 @@ from .alps_calculation import run_alps_calculation
 
 # Re-export classes for backward compatibility
 from .batch import BatchRunner
-from .state import BatchConfig, BatchState, PipelineState, SubjectResult
+from .state import BatchConfig, BatchState, OutputConfig, PipelineState, SubjectResult
 from .workers import BatchWorker, PipelineWorker
 
 __all__ = [
     "PipelineState",
     "BatchConfig",
+    "OutputConfig",
     "SubjectResult",
     "BatchState",
     "PipelineRunner",
@@ -465,8 +466,99 @@ class PipelineRunner:
         if not self.run_alps_calculation():
             return False
 
+        # Cleanup unwanted output files based on output_config
+        self._cleanup_unwanted_outputs()
+
         self._log("Pipeline completed successfully!")
         return True
+
+    def _cleanup_unwanted_outputs(self) -> None:
+        """
+        Remove output files that the user chose not to keep.
+
+        Uses the output_config from state to determine which files to delete.
+        """
+        output_config = self.state.output_config
+        files_to_delete: list[str] = []
+
+        # Collect files to delete based on output_config settings
+        # Preprocessing outputs
+        if not output_config.denoised_dwi and self.state.denoised_dwi_path:
+            files_to_delete.append(self.state.denoised_dwi_path)
+
+        if not output_config.degibbs_dwi and self.state.degibbs_dwi_path:
+            files_to_delete.append(self.state.degibbs_dwi_path)
+
+        if not output_config.preprocessed_dwi and self.state.preprocessed_dwi_path:
+            files_to_delete.append(self.state.preprocessed_dwi_path)
+
+        if not output_config.preprocessed_bvecs:
+            # Delete bvecs and bvals files
+            bvecs_path = self.state.get_output_path("bvecs_preproc")
+            bvals_path = self.state.get_output_path("bvals_preproc")
+            files_to_delete.extend([bvecs_path, bvals_path])
+
+        # DTI outputs
+        if not output_config.tensor and self.state.tensor_path:
+            files_to_delete.append(self.state.tensor_path)
+
+        if not output_config.fa_map and self.state.fa_path:
+            files_to_delete.append(self.state.fa_path)
+
+        if not output_config.eigenvector_maps:
+            # Delete V1, V2, V3, L1, L2, L3 eigenvector/eigenvalue maps
+            if self.state.v1_path:
+                files_to_delete.append(self.state.v1_path)
+            if self.state.v2_path:
+                files_to_delete.append(self.state.v2_path)
+            if self.state.v3_path:
+                files_to_delete.append(self.state.v3_path)
+            if self.state.l1_path:
+                files_to_delete.append(self.state.l1_path)
+            if self.state.l2_path:
+                files_to_delete.append(self.state.l2_path)
+            if self.state.l3_path:
+                files_to_delete.append(self.state.l3_path)
+
+        # Registration outputs
+        if not output_config.fa_brain and self.state.fa_brain_path:
+            files_to_delete.append(self.state.fa_brain_path)
+
+        if not output_config.affine_matrix and self.state.affine_mat_path:
+            files_to_delete.append(self.state.affine_mat_path)
+
+        if not output_config.warp_coefficients and self.state.warp_coef_path:
+            files_to_delete.append(self.state.warp_coef_path)
+
+        if not output_config.inverse_warp and self.state.inverse_warp_path:
+            files_to_delete.append(self.state.inverse_warp_path)
+
+        # ROI masks
+        if not output_config.roi_masks and self.state.roi_mask_paths:
+            for roi_path in self.state.roi_mask_paths.values():
+                files_to_delete.append(roi_path)
+
+        # Delete the files
+        deleted_count = 0
+        for file_path in files_to_delete:
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    deleted_count += 1
+                except OSError as e:
+                    self._log(f"Warning: Could not delete {file_path}: {e}")
+
+        if deleted_count > 0:
+            self._log(f"Cleaned up {deleted_count} unwanted output file(s)")
+
+        # Try to remove empty registration directory if all registration files deleted
+        reg_dir = os.path.join(self.state.output_dir, "registration")
+        if os.path.exists(reg_dir):
+            try:
+                if not os.listdir(reg_dir):
+                    os.rmdir(reg_dir)
+            except OSError:
+                pass  # Directory not empty or other error, ignore
 
     def cancel(self) -> None:
         """Request pipeline cancellation."""

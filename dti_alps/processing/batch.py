@@ -140,6 +140,7 @@ class BatchRunner:
             # Output settings
             output_dir=subject_output_dir,
             output_prefix=subject_files.subject_id,
+            output_config=batch_config.output_config,
         )
 
         return state

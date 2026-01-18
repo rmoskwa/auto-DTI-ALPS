@@ -254,10 +254,11 @@ def build_tensor2metric_cmd(state: "PipelineState") -> list[str]:
 
 def build_tensor2metric_alps_pas_cmds(state: "PipelineState") -> list[list[str]]:
     """
-    Build tensor2metric commands to extract L2, L3, V2, V3 for ALPS-PAS method.
+    Build tensor2metric commands to extract L1, L2, L3, V2, V3 for ALPS-PAS method.
 
     The ALPS-PAS method uses eigenvalues (L2, L3) sorted by eigenvector X-alignment
-    rather than raw tensor diagonal components (Dxx, Dyy, Dzz).
+    rather than raw tensor diagonal components (Dxx, Dyy, Dzz). L1 is also extracted
+    for completeness.
 
     Parameters
     ----------
@@ -267,9 +268,11 @@ def build_tensor2metric_alps_pas_cmds(state: "PipelineState") -> list[list[str]]
     Returns
     -------
     list of list of str
-        List of commands to execute (L2, L3, V2, V3 extraction)
+        List of commands to execute (L1, L2, L3, V2, V3 extraction)
     """
     return [
+        # Extract first eigenvalue (L1)
+        ["tensor2metric", state.tensor_path, "-value", state.l1_path, "-num", "1"],
         # Extract second eigenvalue (L2)
         ["tensor2metric", state.tensor_path, "-value", state.l2_path, "-num", "2"],
         # Extract third eigenvalue (L3)

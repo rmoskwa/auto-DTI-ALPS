@@ -14,6 +14,7 @@ from ..processing.pipeline import (
     BatchRunner,
     BatchState,
     BatchWorker,
+    OutputConfig,
     PipelineState,
 )
 from . import config
@@ -179,6 +180,23 @@ class DTIALPSApplication(tk.Tk):
             btn.pack(pady=2, padx=5, fill=tk.X)
             self.stage_buttons.append(btn)
 
+        # Separator before Output Setup
+        ttk.Separator(self.sidebar, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10, padx=5)
+
+        # Output Setup section (separate from pipeline stages)
+        output_setup_label = ttk.Label(
+            self.sidebar, text="Output Settings", font=("TkDefaultFont", 10, "bold")
+        )
+        output_setup_label.pack(pady=(0, 5))
+
+        self.output_setup_btn = ttk.Button(
+            self.sidebar,
+            text="Output Setup",
+            command=self._show_output_setup,
+            width=20,
+        )
+        self.output_setup_btn.pack(pady=2, padx=5, fill=tk.X)
+
         # Right content area
         right_frame = ttk.Frame(main_frame)
         right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -200,6 +218,7 @@ class DTIALPSApplication(tk.Tk):
         self._create_tensor2metric_frame()
         self._create_registration_frame()
         self._create_roi_frame()
+        self._create_output_setup_frame()
         self._create_results_frame()
 
         # Storage for CLI option variables (checkbox vars and entry vars)
@@ -257,10 +276,11 @@ class DTIALPSApplication(tk.Tk):
 
     def _show_console(self):
         """Show the Main Console view."""
-        # Update button states - deselect all stage buttons
+        # Update button states - deselect all stage buttons and output setup
         for btn in self.stage_buttons:
             btn.state(["!pressed"])
         self.console_btn.state(["pressed"])
+        self.output_setup_btn.state(["!pressed"])
 
         # Hide all stage frames
         for stage_frame in self.stage_frames.values():
@@ -271,6 +291,27 @@ class DTIALPSApplication(tk.Tk):
 
         # Update frame title
         self.content_frame.config(text="Main Console")
+
+    def _show_output_setup(self):
+        """Show the Output Setup view."""
+        # Update button states - deselect console and all stage buttons
+        self.console_btn.state(["!pressed"])
+        for btn in self.stage_buttons:
+            btn.state(["!pressed"])
+        self.output_setup_btn.state(["pressed"])
+
+        # Hide console frame and all stage frames
+        self.console_frame.pack_forget()
+        for frame in self.stage_frames.values():
+            frame.pack_forget()
+
+        # Show output setup frame
+        frame = self.stage_frames.get("output_setup")
+        if frame:
+            frame.pack(fill=tk.BOTH, expand=True)
+
+        # Update frame title
+        self.content_frame.config(text="Output Setup")
 
     def _create_data_frame(self):
         """Create batch data input frame (Stage 1)."""
@@ -1232,6 +1273,187 @@ class DTIALPSApplication(tk.Tk):
         )
         ttk.Label(info_frame, text=process_text, justify=tk.LEFT).pack(anchor=tk.W)
 
+    def _create_output_setup_frame(self):
+        """Create output setup frame for configuring which files to save."""
+        frame = ttk.Frame(self.content_frame)
+        self.stage_frames["output_setup"] = frame
+
+        # Info text
+        info_label = ttk.Label(
+            frame,
+            text="Configure which output files to keep after processing.\n"
+            "By default, all intermediate and final outputs are saved.\n"
+            "Uncheck files you don't need to save disk space.",
+            justify=tk.LEFT,
+        )
+        info_label.pack(anchor=tk.W, pady=(0, 10))
+
+        # Store output option variables
+        self.output_option_vars: dict[str, tk.BooleanVar] = {}
+
+        # Create scrollable frame for options
+        canvas = tk.Canvas(frame, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Preprocessing outputs section
+        preproc_frame = ttk.LabelFrame(scrollable_frame, text="Preprocessing Outputs", padding=10)
+        preproc_frame.pack(fill=tk.X, pady=5, padx=5)
+
+        preproc_outputs = [
+            ("denoised_dwi", "Denoised DWI", "DWI after thermal noise removal (dwidenoise)"),
+            ("degibbs_dwi", "Degibbs DWI", "DWI after Gibbs ringing removal (mrdegibbs)"),
+            (
+                "preprocessed_dwi",
+                "Preprocessed DWI",
+                "Final preprocessed DWI (dwifslpreproc)",
+            ),
+            (
+                "preprocessed_bvecs",
+                "Preprocessed bvecs/bvals",
+                "Corrected gradient directions and b-values",
+            ),
+        ]
+        self._create_output_options(preproc_frame, preproc_outputs)
+
+        # DTI outputs section
+        dti_frame = ttk.LabelFrame(scrollable_frame, text="DTI Outputs", padding=10)
+        dti_frame.pack(fill=tk.X, pady=5, padx=5)
+
+        dti_outputs = [
+            ("tensor", "Diffusion Tensor", "Fitted diffusion tensor image"),
+            ("fa_map", "FA Map", "Fractional anisotropy map"),
+            (
+                "eigenvector_maps",
+                "Eigenvector/eigenvalue maps",
+                "V1, V2, V3, L1, L2, L3 maps",
+            ),
+        ]
+        self._create_output_options(dti_frame, dti_outputs)
+
+        # Registration outputs section
+        reg_frame = ttk.LabelFrame(scrollable_frame, text="Registration Outputs", padding=10)
+        reg_frame.pack(fill=tk.X, pady=5, padx=5)
+
+        reg_outputs = [
+            ("fa_brain", "Skull-stripped FA", "FA image after BET2 skull stripping"),
+            ("affine_matrix", "Affine Matrix", "FLIRT linear transformation matrix"),
+            (
+                "warp_coefficients",
+                "Warp Coefficients",
+                "FNIRT non-linear warp coefficients",
+            ),
+            ("inverse_warp", "Inverse Warp", "Inverse warp for ROI transformation"),
+        ]
+        self._create_output_options(reg_frame, reg_outputs)
+
+        # ROI and Results outputs section
+        roi_frame = ttk.LabelFrame(scrollable_frame, text="ROI & Results Outputs", padding=10)
+        roi_frame.pack(fill=tk.X, pady=5, padx=5)
+
+        roi_outputs = [
+            ("roi_masks", "ROI Masks", "Spherical ROI masks in native space"),
+            ("log_file", "Processing Log", "Detailed log of pipeline execution"),
+        ]
+        self._create_output_options(roi_frame, roi_outputs)
+
+        # Quick action buttons
+        btn_frame = ttk.Frame(scrollable_frame)
+        btn_frame.pack(fill=tk.X, pady=10, padx=5)
+
+        ttk.Button(btn_frame, text="Select All", command=self._select_all_outputs).pack(
+            side=tk.LEFT, padx=5
+        )
+        ttk.Button(btn_frame, text="Deselect All", command=self._deselect_all_outputs).pack(
+            side=tk.LEFT, padx=5
+        )
+
+        # Note about results CSV
+        note_frame = ttk.Frame(scrollable_frame)
+        note_frame.pack(fill=tk.X, pady=5, padx=5)
+
+        note_text = "Note: The ALPS results CSV is always saved."
+        ttk.Label(note_frame, text=note_text, foreground="gray", justify=tk.LEFT).pack(anchor=tk.W)
+
+    def _create_output_options(
+        self, parent: ttk.Frame, options: list[tuple[str, str, str]]
+    ) -> None:
+        """
+        Create checkbox rows for output file options.
+
+        Parameters
+        ----------
+        parent : ttk.Frame
+            Parent frame to add widgets to
+        options : list
+            List of (key, display_name, description) tuples
+        """
+        for key, display_name, description in options:
+            row_frame = ttk.Frame(parent)
+            row_frame.pack(fill=tk.X, pady=2)
+
+            # Checkbox with variable
+            var = tk.BooleanVar(value=True)
+            self.output_option_vars[key] = var
+
+            chk = ttk.Checkbutton(row_frame, text=display_name, variable=var, width=30)
+            chk.pack(side=tk.LEFT, padx=5)
+
+            # Description label
+            desc_label = ttk.Label(row_frame, text=description, foreground="gray")
+            desc_label.pack(side=tk.LEFT, padx=10)
+
+    def _select_all_outputs(self):
+        """Select all output file options."""
+        for var in self.output_option_vars.values():
+            var.set(True)
+
+    def _deselect_all_outputs(self):
+        """Deselect all output file options."""
+        for var in self.output_option_vars.values():
+            var.set(False)
+
+    def _collect_output_config(self) -> OutputConfig:
+        """Collect output configuration from UI checkboxes."""
+        return OutputConfig(
+            denoised_dwi=self.output_option_vars.get(
+                "denoised_dwi", tk.BooleanVar(value=True)
+            ).get(),
+            degibbs_dwi=self.output_option_vars.get("degibbs_dwi", tk.BooleanVar(value=True)).get(),
+            preprocessed_dwi=self.output_option_vars.get(
+                "preprocessed_dwi", tk.BooleanVar(value=True)
+            ).get(),
+            preprocessed_bvecs=self.output_option_vars.get(
+                "preprocessed_bvecs", tk.BooleanVar(value=True)
+            ).get(),
+            tensor=self.output_option_vars.get("tensor", tk.BooleanVar(value=True)).get(),
+            fa_map=self.output_option_vars.get("fa_map", tk.BooleanVar(value=True)).get(),
+            eigenvector_maps=self.output_option_vars.get(
+                "eigenvector_maps", tk.BooleanVar(value=True)
+            ).get(),
+            fa_brain=self.output_option_vars.get("fa_brain", tk.BooleanVar(value=True)).get(),
+            affine_matrix=self.output_option_vars.get(
+                "affine_matrix", tk.BooleanVar(value=True)
+            ).get(),
+            warp_coefficients=self.output_option_vars.get(
+                "warp_coefficients", tk.BooleanVar(value=True)
+            ).get(),
+            inverse_warp=self.output_option_vars.get(
+                "inverse_warp", tk.BooleanVar(value=True)
+            ).get(),
+            roi_masks=self.output_option_vars.get("roi_masks", tk.BooleanVar(value=True)).get(),
+            log_file=self.output_option_vars.get("log_file", tk.BooleanVar(value=True)).get(),
+        )
+
     def _create_results_frame(self):
         """Create results display frame (Stage 9)."""
         frame = ttk.Frame(self.content_frame)
@@ -1298,8 +1520,9 @@ class DTIALPSApplication(tk.Tk):
         """Show the specified pipeline stage."""
         self.current_stage = stage_idx
 
-        # Update button states - deselect console button
+        # Update button states - deselect console and output setup buttons
         self.console_btn.state(["!pressed"])
+        self.output_setup_btn.state(["!pressed"])
 
         # Update stage button states
         for i, btn in enumerate(self.stage_buttons):
@@ -1412,6 +1635,7 @@ class DTIALPSApplication(tk.Tk):
             alps_method=self.alps_method_var.get(),
             # Output
             output_dir=self.output_dir_var.get(),
+            output_config=self._collect_output_config(),
         )
 
         # Create batch state
@@ -1570,22 +1794,35 @@ class DTIALPSApplication(tk.Tk):
 
         os.makedirs(output_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_path = os.path.join(output_dir, f"dti_alps_{timestamp}.log")
+        self.log_file_path = os.path.join(output_dir, f"dti_alps_{timestamp}.log")
         try:
-            self.log_file = open(log_path, "w", encoding="utf-8")
-            self._log(f"Log file created: {log_path}")
+            self.log_file = open(self.log_file_path, "w", encoding="utf-8")
+            self._log(f"Log file created: {self.log_file_path}")
         except OSError as e:
             self._log(f"Warning: Could not create log file: {e}")
             self.log_file = None
+            self.log_file_path = None
 
     def _close_log_file(self):
-        """Close the log file if open."""
+        """Close the log file if open, and delete if not wanted."""
+        import os
+
         if self.log_file:
             try:
                 self.log_file.close()
             except OSError:
                 pass
             self.log_file = None
+
+        # Check if log file should be deleted based on output_config
+        if hasattr(self, "log_file_path") and self.log_file_path:
+            output_config = self._collect_output_config()
+            if not output_config.log_file and os.path.exists(self.log_file_path):
+                try:
+                    os.remove(self.log_file_path)
+                except OSError:
+                    pass
+            self.log_file_path = None
 
     def _log(self, message):
         """Append message to log (GUI console and file)."""

@@ -16,6 +16,62 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class OutputConfig:
+    """
+    Configuration for which output files to keep after pipeline execution.
+
+    By default, all outputs are kept. Users can disable specific outputs
+    to save disk space.
+    """
+
+    # Preprocessing outputs
+    denoised_dwi: bool = True  # DWI after dwidenoise
+    degibbs_dwi: bool = True  # DWI after mrdegibbs
+    preprocessed_dwi: bool = True  # DWI after dwifslpreproc
+    preprocessed_bvecs: bool = True  # Corrected bvecs/bvals
+
+    # DTI outputs
+    tensor: bool = True  # Diffusion tensor image
+    fa_map: bool = True  # Fractional anisotropy map
+    eigenvector_maps: bool = True  # V1, V2, V3, L2, L3 eigenvector/eigenvalue maps
+
+    # Registration outputs
+    fa_brain: bool = True  # Skull-stripped FA
+    affine_matrix: bool = True  # FLIRT affine matrix
+    warp_coefficients: bool = True  # FNIRT warp coefficients
+    inverse_warp: bool = True  # Inverse warp for ROI transformation
+
+    # ROI outputs
+    roi_masks: bool = True  # Spherical ROI masks
+
+    # Log file
+    log_file: bool = True  # Processing log
+
+    def to_dict(self) -> dict[str, bool]:
+        """Convert to dictionary for serialization."""
+        return {
+            "denoised_dwi": self.denoised_dwi,
+            "degibbs_dwi": self.degibbs_dwi,
+            "preprocessed_dwi": self.preprocessed_dwi,
+            "preprocessed_bvecs": self.preprocessed_bvecs,
+            "tensor": self.tensor,
+            "fa_map": self.fa_map,
+            "eigenvector_maps": self.eigenvector_maps,
+            "fa_brain": self.fa_brain,
+            "affine_matrix": self.affine_matrix,
+            "warp_coefficients": self.warp_coefficients,
+            "inverse_warp": self.inverse_warp,
+            "roi_masks": self.roi_masks,
+            "log_file": self.log_file,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, bool]) -> "OutputConfig":
+        """Create from dictionary."""
+        return cls(**{k: v for k, v in data.items() if hasattr(cls, k)})
+
+
+@dataclass
 class PipelineState:
     """
     Holds all input parameters and intermediate results for the DTI-ALPS pipeline.
@@ -83,6 +139,7 @@ class PipelineState:
     # Output settings
     output_dir: str = ""
     output_prefix: str = "subject"
+    output_config: OutputConfig = field(default_factory=OutputConfig)
 
     # Intermediate outputs (set during processing)
     denoised_dwi_path: str | None = None
@@ -91,7 +148,8 @@ class PipelineState:
     tensor_path: str | None = None
     fa_path: str | None = None
     v1_path: str | None = None
-    # ALPS-PAS specific outputs (eigenvalue and eigenvector maps)
+    # Eigenvalue and eigenvector maps
+    l1_path: str | None = None
     l2_path: str | None = None
     l3_path: str | None = None
     v2_path: str | None = None
@@ -123,7 +181,8 @@ class PipelineState:
         self.tensor_path = self.get_output_path("tensor.nii.gz")
         self.fa_path = self.get_output_path("FA.nii.gz")
         self.v1_path = self.get_output_path("V1.nii.gz")
-        # ALPS-PAS specific outputs
+        # Eigenvalue and eigenvector maps
+        self.l1_path = self.get_output_path("L1.nii.gz")
         self.l2_path = self.get_output_path("L2.nii.gz")
         self.l3_path = self.get_output_path("L3.nii.gz")
         self.v2_path = self.get_output_path("V2.nii.gz")
@@ -187,6 +246,7 @@ class BatchConfig:
 
     # Output settings
     output_dir: str = ""
+    output_config: OutputConfig = field(default_factory=OutputConfig)
 
 
 @dataclass

@@ -62,6 +62,39 @@ PIPELINE_STAGES = [
     ("results", "Results"),
 ]
 
+# Output file options - what files the pipeline can save
+# Format: (output_key, display_name, description, default_enabled)
+OUTPUT_FILE_OPTIONS = [
+    # Preprocessing outputs
+    ("denoised_dwi", "Denoised DWI", "DWI after thermal noise removal (dwidenoise)", True),
+    ("degibbs_dwi", "Degibbs DWI", "DWI after Gibbs ringing removal (mrdegibbs)", True),
+    ("preprocessed_dwi", "Preprocessed DWI", "Final preprocessed DWI (dwifslpreproc)", True),
+    (
+        "preprocessed_bvecs",
+        "Preprocessed bvecs/bvals",
+        "Corrected gradient directions and b-values",
+        True,
+    ),
+    # DTI outputs
+    ("tensor", "Diffusion Tensor", "Fitted diffusion tensor image", True),
+    ("fa_map", "FA Map", "Fractional anisotropy map", True),
+    (
+        "eigenvector_maps",
+        "Eigenvector/eigenvalue maps",
+        "V1, V2, V3, L1, L2, L3 maps",
+        True,
+    ),
+    # Registration outputs
+    ("fa_brain", "Skull-stripped FA", "FA image after BET2 skull stripping", True),
+    ("affine_matrix", "Affine Matrix", "FLIRT linear transformation matrix", True),
+    ("warp_coefficients", "Warp Coefficients", "FNIRT non-linear warp coefficients", True),
+    ("inverse_warp", "Inverse Warp", "Inverse warp for ROI transformation", True),
+    # ROI outputs
+    ("roi_masks", "ROI Masks", "Spherical ROI masks in native space", True),
+    # Log file
+    ("log_file", "Processing Log", "Detailed log of pipeline execution", True),
+]
+
 # CLI option definitions for dwidenoise
 # Format: (option_name, option_type, description, default_value)
 # option_type: "file", "dir", "string", "int", "flag", "prefix", "choice"
