@@ -231,6 +231,44 @@ def create_sphere_mask(
     return dist_sq <= radius_mm**2
 
 
+def create_square_v9_mask(
+    shape: tuple[int, int, int],
+    center_voxel: tuple[int, int, int],
+) -> np.ndarray:
+    """
+    Create a 3x3 square binary mask (9 voxels) in the axial plane.
+
+    The mask is a 3x3 block centered at the given voxel coordinates,
+    all in the same axial (Z) slice. This provides a simple, reproducible
+    ROI shape that is less sensitive to voxel size variations.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Shape of the output array (x, y, z)
+    center_voxel : tuple of int
+        Center of square in voxel coordinates (x, y, z)
+
+    Returns
+    -------
+    np.ndarray
+        Binary mask with 3x3 square (9 voxels)
+    """
+    mask = np.zeros(shape, dtype=bool)
+
+    cx, cy, cz = center_voxel
+
+    # Create 3x3 block in axial plane (±1 in X and Y, same Z)
+    for dx in range(-1, 2):
+        for dy in range(-1, 2):
+            x, y, z = cx + dx, cy + dy, cz
+            # Ensure within bounds
+            if 0 <= x < shape[0] and 0 <= y < shape[1] and 0 <= z < shape[2]:
+                mask[x, y, z] = True
+
+    return mask
+
+
 def find_mask_centroid(mask_data: np.ndarray) -> tuple[int, int, int] | None:
     """
     Find the centroid of non-zero voxels in a mask, rounded to nearest integer.
