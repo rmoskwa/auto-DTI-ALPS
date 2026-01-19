@@ -364,7 +364,7 @@ def reanalyze_subject(
                     search_y=2,
                     search_z=1,
                     reference_centroid=proj_centroid,
-                    max_y_drift=2,
+                    max_y_drift=1,
                 )
 
                 if refined_centroid != centroid:

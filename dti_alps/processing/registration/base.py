@@ -380,7 +380,7 @@ def refine_roi_placement(
     search_y: int = 2,
     search_z: int = 1,
     reference_centroid: tuple[int, int, int] | None = None,
-    max_y_drift: int = 2,
+    max_y_drift: int = 1,
 ) -> tuple[tuple[int, int, int], float, float]:
     """
     Refine ROI placement by searching nearby positions for better fiber purity.
@@ -421,7 +421,7 @@ def refine_roi_placement(
         If provided, the Y-coordinate drift from this reference is constrained.
     max_y_drift : int
         Maximum allowed Y-coordinate difference from reference_centroid (voxels).
-        Only used when reference_centroid is provided. Default 2.
+        Only used when reference_centroid is provided. Default 1.
 
     Returns
     -------
