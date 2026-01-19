@@ -11,6 +11,16 @@ ROI Reanalysis (post-processing with different ROI shapes):
     python -m dti_alps --reanalyze /path/to/output --sphere 3.0
     python -m dti_alps --reanalyze /path/to/output --squarev9
     python -m dti_alps --reanalyze /path/to/output --sphere 2.5 --refine
+
+Output naming:
+    Without --refine: rois_{shape}/ and alps_results_{shape}.csv
+    With --refine:    rois_{shape}_refined/ and alps_results_{shape}_refined.csv
+
+    Examples:
+        --squarev9          -> rois_squarev9/, alps_results_squarev9.csv
+        --squarev9 --refine -> rois_squarev9_refined/, alps_results_squarev9_refined.csv
+        --sphere 2.5        -> rois_sphere2p5/, alps_results_sphere2p5.csv
+        --sphere 2.5 --refine -> rois_sphere2p5_refined/, alps_results_sphere2p5_refined.csv
 """
 
 import argparse

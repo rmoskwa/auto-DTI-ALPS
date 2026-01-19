@@ -248,11 +248,13 @@ def reanalyze_subject(
             v1_data = nib.load(v1_path).get_fdata()
 
         # Create output directory for new ROIs
-        roi_dir_name = f"rois_{roi_shape.name}"
+        # Include _refined suffix if refinement is enabled
+        roi_suffix = f"{roi_shape.name}_refined" if enable_refinement else roi_shape.name
+        roi_dir_name = f"rois_{roi_suffix}"
         roi_dir = subject_dir / roi_dir_name
         roi_dir.mkdir(parents=True, exist_ok=True)
 
-        log(f"  Creating {roi_shape.name} ROIs...")
+        log(f"  Creating {roi_suffix} ROIs...")
 
         # Transform and create ROIs
         roi_mask_paths = {}
@@ -508,7 +510,9 @@ def run_reanalysis(
             log(f"    FAILED: {result.error_message}")
 
     # Write CSV results
-    csv_filename = f"alps_results_{roi_shape.name}.csv"
+    # Include _refined suffix if refinement is enabled
+    roi_suffix = f"{roi_shape.name}_refined" if enable_refinement else roi_shape.name
+    csv_filename = f"alps_results_{roi_suffix}.csv"
     csv_path = os.path.join(output_dir, csv_filename)
 
     log(f"\nWriting results to {csv_path}...")

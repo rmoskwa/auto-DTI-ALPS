@@ -166,16 +166,21 @@ def discover_roi_options(output_folder: Path) -> list[str]:
 
 def get_roi_display_name(roi_type: str) -> str:
     """Convert ROI type to human-readable display name."""
-    if roi_type == "rois":
-        return "Default (sphere 3mm)"
-    elif roi_type.startswith("sphere"):
+    # Check for _refined suffix
+    is_refined = roi_type.endswith("_refined")
+    base_type = roi_type[:-8] if is_refined else roi_type
+    refined_suffix = " (r)" if is_refined else ""
+
+    if base_type == "rois":
+        return f"Sphere 3mm{refined_suffix}"
+    elif base_type.startswith("sphere"):
         # e.g., "sphere2p5" -> "Sphere 2.5mm"
-        radius = roi_type[6:].replace("p", ".")
-        return f"Sphere {radius}mm"
-    elif roi_type == "squarev9":
-        return "Square 3x3 (9 voxels)"
+        radius = base_type[6:].replace("p", ".")
+        return f"Sphere {radius}mm{refined_suffix}"
+    elif base_type == "squarev9":
+        return f"Square 3x3{refined_suffix}"
     else:
-        return roi_type.replace("_", " ").title()
+        return base_type.replace("_", " ").title() + refined_suffix
 
 
 def get_csv_path_for_roi_type(output_folder: Path, roi_type: str) -> Path:
