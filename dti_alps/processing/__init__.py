@@ -13,6 +13,7 @@ This package provides modular components for the DTI-ALPS processing pipeline:
 - discovery: Subject file discovery
 - validators: Input validation
 - b0_extraction: B0 extraction and brain mask utilities
+- report: Quality report generation
 """
 
 # State classes
@@ -34,6 +35,9 @@ from .batch import BatchRunner
 
 # Pipeline execution
 from .pipeline import PipelineRunner
+
+# Report generation
+from .report import generate_reports, run_report
 from .state import BatchConfig, BatchState, PipelineState, SubjectResult
 
 # Background workers
@@ -63,4 +67,7 @@ __all__ = [
     "extract_and_average_b0",
     "create_brain_mask_from_dwi",
     "apply_mask_to_image",
+    # Report generation
+    "generate_reports",
+    "run_report",
 ]

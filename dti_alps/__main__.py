@@ -6,6 +6,7 @@ Usage:
     python -m dti_alps --gui                     # Launch GUI explicitly
     python -m dti_alps --viewer                  # Launch Results Viewer
     python -m dti_alps --viewer /path/to/output  # Launch viewer with folder
+    python -m dti_alps --report /path/to/output  # Generate quality reports
 
 ROI Reanalysis (post-processing with different ROI shapes):
     python -m dti_alps --reanalyze /path/to/output --sphere 3.0
@@ -21,6 +22,14 @@ Output naming:
         --squarev9 --refine -> rois_squarev9_refined/, alps_results_squarev9_refined.csv
         --sphere 2.5        -> rois_sphere2p5/, alps_results_sphere2p5.csv
         --sphere 2.5 --refine -> rois_sphere2p5_refined/, alps_results_sphere2p5_refined.csv
+
+Quality Report Generation:
+    python -m dti_alps --report /path/to/output
+        Generates quality_report_{shape}.csv for each ROI shape found.
+        Reports include:
+        - Directional Alignment (V1): How well fibers align with expected direction
+        - Angular Dispersion (V1): Standard deviation of fiber angles
+        - Fractional Anisotropy: Mean FA within each ROI
 """
 
 import argparse
@@ -134,7 +143,7 @@ def _run_reanalysis() -> None:
 
 
 def main():
-    """Main entry point that dispatches to GUI, viewer, or reanalysis."""
+    """Main entry point that dispatches to GUI, viewer, report, or reanalysis."""
     # Check for reanalysis mode first (needs argparse)
     if len(sys.argv) >= 2 and sys.argv[1] == "--reanalyze":
         _run_reanalysis()
@@ -147,6 +156,19 @@ def main():
         # Check if output folder path was provided
         output_folder = sys.argv[2] if len(sys.argv) > 2 else None
         launch_viewer(output_folder)
+        return
+
+    # Check if report mode
+    if len(sys.argv) >= 2 and sys.argv[1] == "--report":
+        from .processing.report import run_report
+
+        if len(sys.argv) < 3:
+            print("ERROR: --report requires an output directory path")
+            print("Usage: python -m dti_alps --report /path/to/output")
+            sys.exit(1)
+
+        output_folder = sys.argv[2]
+        run_report(output_folder)
         return
 
     # Check for help on reanalysis
