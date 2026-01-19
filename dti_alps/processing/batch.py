@@ -133,7 +133,7 @@ class BatchRunner:
             fnirt_options=dict(batch_config.fnirt_options),
             registration_backend=batch_config.registration_backend,
             # ROI placement parameters
-            roi_sphere_radius=batch_config.roi_sphere_radius,
+            roi_shapes=list(batch_config.roi_shapes),
             fa_threshold=batch_config.fa_threshold,
             alps_method=batch_config.alps_method,
             refine_roi_placement=batch_config.refine_roi_placement,

@@ -130,13 +130,16 @@ class PipelineState:
     registration_backend: str = "fsl"
 
     # Stage 8: ROI placement parameters
-    # ROI sphere radius for template-based ROI placement (mm)
-    roi_sphere_radius: float = 3.0
+    # ROI shapes to create - list of dicts with 'type' and optional 'radius'
+    # e.g., [{'type': 'sphere', 'radius': 3.0}, {'type': 'squarev9'}]
+    roi_shapes: list[dict[str, Any]] = field(
+        default_factory=lambda: [{"type": "sphere", "radius": 3.0}]
+    )
     # FA threshold for filtering CSF voxels from ROIs
     fa_threshold: float = config.FA_THRESHOLD
     # ALPS calculation method (ALPS-LAB or ALPS-PAS)
-    alps_method: str = "ALPS-LAB"
-    # Enable ROI refinement to optimize fiber purity (search ±2 X/Y, ±1 Z voxels)
+    alps_method: str = "Both"
+    # Enable ROI refinement to optimize fiber purity (search ±3 X, ±2 Y, ±1 Z voxels)
     refine_roi_placement: bool = True
 
     # Output settings
@@ -246,10 +249,13 @@ class BatchConfig:
     registration_backend: str = "fsl"  # Registration backend ('fsl', 'ants' in future)
 
     # ROI placement parameters
-    roi_sphere_radius: float = 2.0  # Sphere radius in mm for template-based ROI placement
+    # ROI shapes to create - list of dicts with 'type' and optional 'radius'
+    roi_shapes: list[dict[str, Any]] = field(
+        default_factory=lambda: [{"type": "sphere", "radius": 3.0}]
+    )
     fa_threshold: float = config.FA_THRESHOLD  # FA threshold for filtering CSF voxels
-    alps_method: str = "ALPS-LAB"  # ALPS calculation method (ALPS-LAB or ALPS-PAS)
-    refine_roi_placement: bool = True  # Enable ROI refinement (±2 X/Y, ±1 Z voxels)
+    alps_method: str = "Both"  # ALPS calculation method (ALPS-LAB, ALPS-PAS, or Both)
+    refine_roi_placement: bool = True  # Enable ROI refinement (±3 X, ±2 Y, ±1 Z voxels)
 
     # Output settings
     output_dir: str = ""

@@ -29,6 +29,7 @@ from .base import (
     ROIPlacementResult,
     calculate_roi_quality,
     create_sphere_mask,
+    create_square_v9_mask,
     find_mask_centroid,
     get_roi_template_paths,
     refine_roi_placement,
@@ -425,22 +426,64 @@ class FSLRegistration(RegistrationBackend):
         reg_dir = Path(state.output_dir) / "registration"
         reg_dir.mkdir(parents=True, exist_ok=True)
 
-        roi_dir = Path(state.output_dir) / "rois"
-        roi_dir.mkdir(parents=True, exist_ok=True)
-
         log("Transforming ROI masks to native space...")
 
-        result = self._transform_rois_to_native(
-            state=state,
-            fsl_bin=fsl_bin,
-            inverse_warp=Path(inverse_warp),
-            roi_templates=roi_templates,
-            reg_dir=reg_dir,
-            roi_dir=roi_dir,
-            log=log,
-        )
+        # Get ROI shapes from state (default to sphere 3mm if not set)
+        roi_shapes = getattr(state, "roi_shapes", [{"type": "sphere", "radius": 3.0}])
+        if not roi_shapes:
+            roi_shapes = [{"type": "sphere", "radius": 3.0}]
 
-        return result
+        # Check if refinement is enabled
+        do_refinement = getattr(state, "refine_roi_placement", True)
+
+        # Process each ROI shape
+        all_results = {}
+        for shape_config in roi_shapes:
+            shape_type = shape_config.get("type", "sphere")
+            sphere_radius = shape_config.get("radius", 3.0) if shape_type == "sphere" else None
+
+            # Create descriptive directory name
+            if shape_type == "sphere":
+                # Format: sphere3, sphere2p5, sphere3p5
+                r_str = str(sphere_radius).replace(".", "p").rstrip("0").rstrip("p")
+                shape_name = f"sphere{r_str}"
+            else:
+                shape_name = shape_type  # squarev9
+
+            # Add _refined suffix if refinement is enabled
+            if do_refinement:
+                dir_name = f"rois_{shape_name}_refined"
+            else:
+                dir_name = f"rois_{shape_name}"
+
+            roi_dir = Path(state.output_dir) / dir_name
+            roi_dir.mkdir(parents=True, exist_ok=True)
+
+            log(
+                f"Creating {shape_name} ROIs (refinement: {'enabled' if do_refinement else 'disabled'})..."
+            )
+
+            result = self._transform_rois_to_native(
+                state=state,
+                fsl_bin=fsl_bin,
+                inverse_warp=Path(inverse_warp),
+                roi_templates=roi_templates,
+                reg_dir=reg_dir,
+                roi_dir=roi_dir,
+                shape_type=shape_type,
+                sphere_radius=sphere_radius,
+                log=log,
+            )
+
+            if not result.success:
+                return result
+
+            all_results[dir_name] = result
+
+        # Return the first result (for backward compatibility with single-shape callers)
+        # The roi_mask_paths will be from the first shape processed
+        first_result = list(all_results.values())[0]
+        return first_result
 
     def _transform_rois_to_native(
         self,
@@ -450,9 +493,11 @@ class FSLRegistration(RegistrationBackend):
         roi_templates: dict[str, Path],
         reg_dir: Path,
         roi_dir: Path,
+        shape_type: str,
+        sphere_radius: float | None,
         log: Callable[[str], None],
     ) -> ROIPlacementResult:
-        """Transform ROI templates to native space and create spherical ROIs."""
+        """Transform ROI templates to native space and create ROI masks."""
         # Load reference image for shape and voxel size
         ref_img = nib.load(state.fa_path)
         ref_shape = ref_img.shape[:3]
@@ -461,16 +506,18 @@ class FSLRegistration(RegistrationBackend):
 
         prefix = state.output_prefix
 
-        # Get sphere radius from state (default 3.0mm)
-        sphere_radius = getattr(state, "roi_sphere_radius", 3.0)
-        log(f"  Sphere radius: {sphere_radius} mm")
+        # Log ROI shape info
+        if shape_type == "sphere":
+            log(f"  Shape: sphere, radius: {sphere_radius} mm")
+        else:
+            log(f"  Shape: {shape_type}")
 
         # Check if ROI refinement is enabled
         do_refinement = getattr(state, "refine_roi_placement", True)
         v1_data = None
         if do_refinement:
             log("  ROI refinement enabled (±3 X, ±2 Y, ±1 Z voxels)")
-            log("  Association ROIs constrained to ±2 Y voxels from projection ROI")
+            log("  Association ROIs constrained to ±1 Y voxels from projection ROI")
             # Load V1 data for fiber orientation analysis
             if state.v1_path and os.path.exists(state.v1_path):
                 v1_img = nib.load(state.v1_path)
@@ -534,9 +581,12 @@ class FSLRegistration(RegistrationBackend):
             centroid = template_centroids[roi_name]
 
             if do_refinement and v1_data is not None:
-                # Calculate original purity
-                orig_sphere = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
-                orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_sphere, "proj")
+                # Calculate original purity using appropriate mask
+                if shape_type == "sphere":
+                    orig_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
+                else:
+                    orig_mask = create_square_v9_mask(ref_shape, centroid)
+                orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_mask, "proj")
 
                 # Refine placement (no reference constraint for projection ROIs)
                 refined_centroid, refined_purity, _ = refine_roi_placement(
@@ -546,7 +596,7 @@ class FSLRegistration(RegistrationBackend):
                     ref_shape,
                     voxel_size,
                     "proj",
-                    radius_mm=sphere_radius,
+                    radius_mm=sphere_radius or 3.0,  # Use 3mm for squarev9 refinement search
                     search_x=3,
                     search_y=2,
                     search_z=1,
@@ -570,17 +620,18 @@ class FSLRegistration(RegistrationBackend):
 
             roi_centroids[roi_name] = centroid
 
-            # Create and save spherical ROI
-            sphere_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
-            n_voxels = int(np.sum(sphere_mask))
-            log(f"    Created {roi_name} sphere with {n_voxels} voxels")
+            # Create and save ROI mask based on shape type
+            if shape_type == "sphere":
+                roi_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
+            else:
+                roi_mask = create_square_v9_mask(ref_shape, centroid)
+            n_voxels = int(np.sum(roi_mask))
+            log(f"    Created {roi_name} with {n_voxels} voxels")
 
-            roi_sphere = roi_dir / f"{prefix}_{roi_name}.nii.gz"
-            sphere_img = nib.Nifti1Image(
-                sphere_mask.astype(np.float32), ref_img.affine, ref_img.header
-            )
-            nib.save(sphere_img, str(roi_sphere))
-            roi_native_paths[roi_name] = str(roi_sphere)
+            roi_path = roi_dir / f"{prefix}_{roi_name}.nii.gz"
+            roi_img = nib.Nifti1Image(roi_mask.astype(np.float32), ref_img.affine, ref_img.header)
+            nib.save(roi_img, str(roi_path))
+            roi_native_paths[roi_name] = str(roi_path)
 
         # Third pass: Refine association ROIs with Y-constraint from paired projection ROI
         # This ensures proj and assoc ROIs stay aligned to sample same X-direction diffusion
@@ -589,9 +640,12 @@ class FSLRegistration(RegistrationBackend):
             proj_centroid = roi_centroids[proj_name]
 
             if do_refinement and v1_data is not None:
-                # Calculate original purity
-                orig_sphere = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
-                orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_sphere, "assoc")
+                # Calculate original purity using appropriate mask
+                if shape_type == "sphere":
+                    orig_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
+                else:
+                    orig_mask = create_square_v9_mask(ref_shape, centroid)
+                orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_mask, "assoc")
 
                 # Refine placement with Y-constraint relative to projection ROI
                 refined_centroid, refined_purity, _ = refine_roi_placement(
@@ -601,7 +655,7 @@ class FSLRegistration(RegistrationBackend):
                     ref_shape,
                     voxel_size,
                     "assoc",
-                    radius_mm=sphere_radius,
+                    radius_mm=sphere_radius or 3.0,  # Use 3mm for squarev9 refinement search
                     search_x=3,
                     search_y=2,
                     search_z=1,
@@ -629,17 +683,18 @@ class FSLRegistration(RegistrationBackend):
 
             roi_centroids[roi_name] = centroid
 
-            # Create and save spherical ROI
-            sphere_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
-            n_voxels = int(np.sum(sphere_mask))
-            log(f"    Created {roi_name} sphere with {n_voxels} voxels")
+            # Create and save ROI mask based on shape type
+            if shape_type == "sphere":
+                roi_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
+            else:
+                roi_mask = create_square_v9_mask(ref_shape, centroid)
+            n_voxels = int(np.sum(roi_mask))
+            log(f"    Created {roi_name} with {n_voxels} voxels")
 
-            roi_sphere = roi_dir / f"{prefix}_{roi_name}.nii.gz"
-            sphere_img = nib.Nifti1Image(
-                sphere_mask.astype(np.float32), ref_img.affine, ref_img.header
-            )
-            nib.save(sphere_img, str(roi_sphere))
-            roi_native_paths[roi_name] = str(roi_sphere)
+            roi_path = roi_dir / f"{prefix}_{roi_name}.nii.gz"
+            roi_img = nib.Nifti1Image(roi_mask.astype(np.float32), ref_img.affine, ref_img.header)
+            nib.save(roi_img, str(roi_path))
+            roi_native_paths[roi_name] = str(roi_path)
 
         log("ROI placement completed successfully")
         log(f"  Left projection ROI: {roi_native_paths['left_proj']}")

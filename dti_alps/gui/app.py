@@ -1253,25 +1253,35 @@ class DTIALPSApplication(tk.Tk):
         param_frame = ttk.LabelFrame(frame, text="ROI Placement Parameters", padding=10)
         param_frame.pack(fill=tk.X, pady=5)
 
-        # ROI sphere radius
+        # ROI shape selection
         row = 0
-        ttk.Label(param_frame, text="ROI Sphere Radius (mm):").grid(
-            row=row, column=0, sticky=tk.W, pady=5
-        )
-        self.roi_sphere_radius_var = tk.DoubleVar(value=config.DEFAULT_ROI_SPHERE_RADIUS)
-        ttk.Spinbox(
-            param_frame,
-            from_=1.0,
-            to=6.0,
-            increment=0.5,
-            textvariable=self.roi_sphere_radius_var,
-            width=5,
-        ).grid(row=row, column=1, sticky=tk.W, padx=5)
-        ttk.Label(
-            param_frame,
-            text="Radius of spherical ROIs created at template-defined locations",
-            foreground="gray",
-        ).grid(row=row, column=2, sticky=tk.W, padx=10)
+        ttk.Label(param_frame, text="ROI Shapes:").grid(row=row, column=0, sticky=tk.NW, pady=5)
+
+        # Frame for ROI shape checkboxes
+        roi_shapes_frame = ttk.Frame(param_frame)
+        roi_shapes_frame.grid(row=row, column=1, columnspan=2, sticky=tk.W, padx=5)
+
+        # ROI shape checkbox variables
+        self.roi_shape_vars = {
+            "sphere2p5": tk.BooleanVar(value=False),
+            "sphere3": tk.BooleanVar(value=True),  # Default selected
+            "sphere3p5": tk.BooleanVar(value=False),
+            "squarev9": tk.BooleanVar(value=False),
+        }
+
+        # Create checkboxes for each ROI shape
+        ttk.Checkbutton(
+            roi_shapes_frame, text="Sphere 2.5mm", variable=self.roi_shape_vars["sphere2p5"]
+        ).pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Checkbutton(
+            roi_shapes_frame, text="Sphere 3mm", variable=self.roi_shape_vars["sphere3"]
+        ).pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Checkbutton(
+            roi_shapes_frame, text="Sphere 3.5mm", variable=self.roi_shape_vars["sphere3p5"]
+        ).pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Checkbutton(
+            roi_shapes_frame, text="Square 3x3", variable=self.roi_shape_vars["squarev9"]
+        ).pack(side=tk.LEFT)
 
         # FA threshold for CSF filtering
         row = 1
@@ -1313,7 +1323,7 @@ class DTIALPSApplication(tk.Tk):
         self.refine_roi_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             param_frame,
-            text="Enable ROI refinement (±2 X/Y, ±1 Z voxels)",
+            text="Enable ROI refinement (±3 X, ±2 Y, ±1 Z voxels; ±1 Y drift between proj/assoc)",
             variable=self.refine_roi_var,
         ).grid(row=row, column=0, columnspan=3, sticky=tk.W, pady=5)
 
@@ -1608,6 +1618,36 @@ class DTIALPSApplication(tk.Tk):
         stage_name = config.PIPELINE_STAGES[stage_idx][1]
         self.content_frame.config(text=f"Stage {stage_idx + 1}: {stage_name}")
 
+    def _collect_roi_shapes(self) -> list[dict[str, any]]:
+        """
+        Collect selected ROI shapes from checkboxes into a list of shape dicts.
+
+        Returns
+        -------
+        list of dict
+            List of ROI shape configurations, e.g.,
+            [{'type': 'sphere', 'radius': 3.0}, {'type': 'squarev9'}]
+        """
+        shapes = []
+
+        # Map checkbox keys to shape configurations
+        shape_configs = {
+            "sphere2p5": {"type": "sphere", "radius": 2.5},
+            "sphere3": {"type": "sphere", "radius": 3.0},
+            "sphere3p5": {"type": "sphere", "radius": 3.5},
+            "squarev9": {"type": "squarev9"},
+        }
+
+        for key, var in self.roi_shape_vars.items():
+            if var.get():
+                shapes.append(shape_configs[key])
+
+        # If nothing selected, default to sphere 3mm
+        if not shapes:
+            shapes.append({"type": "sphere", "radius": 3.0})
+
+        return shapes
+
     def _collect_cli_options(self, stage_prefix: str) -> dict[str, any]:
         """
         Collect enabled CLI options from a stage into a dictionary.
@@ -1690,7 +1730,7 @@ class DTIALPSApplication(tk.Tk):
             flirt_options=flirt_options,
             fnirt_options=fnirt_options,
             # ROI placement parameters
-            roi_sphere_radius=self.roi_sphere_radius_var.get(),
+            roi_shapes=self._collect_roi_shapes(),
             fa_threshold=self.fa_threshold_var.get(),
             alps_method=self.alps_method_var.get(),
             refine_roi_placement=self.refine_roi_var.get(),
