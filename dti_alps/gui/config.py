@@ -219,6 +219,7 @@ COLORS = {
     "success": "#28A745",
     "error": "#DC3545",
     "warning": "#FFC107",
+    "processing": "#5C4D9A",  # Purple for processing state
 }
 
 # Tooltips for UI elements

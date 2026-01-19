@@ -48,6 +48,18 @@ class DTIALPSApplication(tk.Tk):
         self.subject_files_list: list[SubjectFiles] = []
         self.batch_state: BatchState | None = None
 
+        # Stage button visual state tracking
+        # Maps stage name from pipeline to button index(es)
+        self._stage_to_button_indices = {
+            "denoise": [1],  # dwidenoise
+            "degibbs": [2],  # mrdegibbs
+            "preproc": [3],  # dwifslpreproc
+            "dti": [4, 5],  # dwi2tensor, tensor2metric
+            "registration": [6],  # Registration
+            "roi": [7],  # ROI Placement
+            "results": [8],  # Results
+        }
+
         # Configure styles
         self._setup_styles()
 
@@ -74,6 +86,37 @@ class DTIALPSApplication(tk.Tk):
             "Primary.TButton",
             background=[("disabled", "#cccccc"), ("active", "#4a9f4a"), ("!disabled", "#5cb85c")],
             foreground=[("disabled", "#666666"), ("!disabled", "white")],
+        )
+
+        # Stage button styles for visual status indication
+        # Processing stage - purple background
+        style.configure(
+            "Processing.TButton",
+            background=config.COLORS["processing"],
+            foreground="white",
+        )
+        style.map(
+            "Processing.TButton",
+            background=[
+                ("active", "#4A3D7A"),  # Darker purple when pressed/hovered
+                ("!disabled", config.COLORS["processing"]),
+            ],
+            foreground=[("!disabled", "white")],
+        )
+
+        # Completed stage - green background
+        style.configure(
+            "Completed.TButton",
+            background=config.COLORS["success"],
+            foreground="white",
+        )
+        style.map(
+            "Completed.TButton",
+            background=[
+                ("active", "#1E7B34"),  # Darker green when pressed/hovered
+                ("!disabled", config.COLORS["success"]),
+            ],
+            foreground=[("!disabled", "white")],
         )
 
     def _create_menu(self):
@@ -251,6 +294,11 @@ class DTIALPSApplication(tk.Tk):
 
         self.console_tree.column("subject_id", width=200)
         self.console_tree.column("status", width=150)
+
+        # Configure tags for status coloring
+        self.console_tree.tag_configure("processing", foreground=config.COLORS["processing"])
+        self.console_tree.tag_configure("completed", foreground=config.COLORS["success"])
+        self.console_tree.tag_configure("failed", foreground=config.COLORS["error"])
 
         # Scrollbar for treeview
         tree_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.console_tree.yview)
@@ -1689,6 +1737,9 @@ class DTIALPSApplication(tk.Tk):
         for subject_files in self.subject_files_list:
             self.console_tree.insert("", tk.END, values=(subject_files.subject_id, "Pending"))
 
+        # Reset stage button styles for new batch
+        self._reset_stage_button_styles()
+
         # Switch to console view
         self._show_console()
 
@@ -1741,10 +1792,13 @@ class DTIALPSApplication(tk.Tk):
             index, subject_id = data
             total = len(self.subject_files_list)
             self._log(f"Processing {index + 1}/{total}: {subject_id}")
-            # Update console tree status
+            # Update console tree status with processing tag (purple)
             items = self.console_tree.get_children()
             if index < len(items):
                 self.console_tree.set(items[index], "status", "Processing")
+                self.console_tree.item(items[index], tags=("processing",))
+            # Reset stage button styles for each new subject
+            self._reset_stage_button_styles()
         elif msg_type == "subject_complete":
             index, result = data
             total = len(self.subject_files_list)
@@ -1752,11 +1806,15 @@ class DTIALPSApplication(tk.Tk):
 
             self._log(f"Completed {completed}/{total} subjects")
 
-            # Update console tree status
+            # Update console tree status with appropriate tag (green/red)
             items = self.console_tree.get_children()
             if index < len(items):
-                status = "Completed" if result.status == "completed" else "Failed"
-                self.console_tree.set(items[index], "status", status)
+                if result.status == "completed":
+                    self.console_tree.set(items[index], "status", "Completed")
+                    self.console_tree.item(items[index], tags=("completed",))
+                else:
+                    self.console_tree.set(items[index], "status", "Failed")
+                    self.console_tree.item(items[index], tags=("failed",))
         elif msg_type == "batch_complete":
             batch_state = data
             self._log(
@@ -1845,8 +1903,13 @@ class DTIALPSApplication(tk.Tk):
             except OSError:
                 pass
 
+    def _reset_stage_button_styles(self):
+        """Reset all stage buttons to default style."""
+        for btn in self.stage_buttons:
+            btn.configure(style="TButton")
+
     def _update_stage_status(self, stage, status):
-        """Update stage indicator (logs status changes)."""
+        """Update stage indicator (logs status changes and updates button colors)."""
         stage_names = {
             "denoise": "Denoising",
             "degibbs": "Gibbs Ringing Removal",
@@ -1862,6 +1925,15 @@ class DTIALPSApplication(tk.Tk):
             self._log(f"Running: {stage_name}")
         elif status == "complete":
             self._log(f"Completed: {stage_name}")
+
+        # Update stage button colors
+        button_indices = self._stage_to_button_indices.get(stage, [])
+        for btn_idx in button_indices:
+            if 0 <= btn_idx < len(self.stage_buttons):
+                if status == "running":
+                    self.stage_buttons[btn_idx].configure(style="Processing.TButton")
+                elif status == "complete":
+                    self.stage_buttons[btn_idx].configure(style="Completed.TButton")
 
     def _show_results(self, alps_results):
         """Display ALPS results."""
