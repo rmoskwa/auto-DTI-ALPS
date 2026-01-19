@@ -1096,7 +1096,7 @@ class DTIALPSApplication(tk.Tk):
             frame,
             text="Configure parameters for FA-to-template registration.\n"
             "This step registers the subject FA map to the JHU-ICBM template\n"
-            "using FSL tools (BET2 for skull stripping, FLIRT and FNIRT for registration).",
+            "using dwi2mask for brain extraction and FSL tools (FLIRT/FNIRT) for registration.",
             justify=tk.LEFT,
         )
         info_label.pack(anchor=tk.W, pady=(0, 10))
@@ -1115,35 +1115,47 @@ class DTIALPSApplication(tk.Tk):
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # BET2 options
-        bet2_frame = ttk.LabelFrame(scrollable_frame, text="BET2 (Skull Stripping)", padding=10)
-        bet2_frame.pack(fill=tk.X, pady=5, padx=5)
+        # dwi2mask info panel (brain extraction)
+        dwi2mask_frame = ttk.LabelFrame(
+            scrollable_frame, text="Brain Extraction (dwi2mask)", padding=10
+        )
+        dwi2mask_frame.pack(fill=tk.X, pady=5, padx=5)
 
-        # Column headers for BET2
-        ttk.Label(bet2_frame, text="", width=3).grid(row=0, column=0)
-        ttk.Label(bet2_frame, text="Option", width=12, font=("TkDefaultFont", 9, "bold")).grid(
+        # Info text about dwi2mask
+        dwi2mask_info = ttk.Label(
+            dwi2mask_frame,
+            text="Brain extraction is performed automatically using MRtrix3's dwi2mask.\n"
+            "This method extracts a brain mask directly from the preprocessed DWI data,\n"
+            "which is more reliable for diffusion images than traditional T1-based methods.\n\n"
+            "The brain mask is then applied to the FA map before registration.",
+            justify=tk.LEFT,
+        )
+        dwi2mask_info.pack(anchor=tk.W, pady=5)
+
+        # Technical details
+        details_frame = ttk.Frame(dwi2mask_frame)
+        details_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(details_frame, text="Input:", font=("TkDefaultFont", 9, "bold"), width=12).grid(
+            row=0, column=0, sticky=tk.W
+        )
+        ttk.Label(details_frame, text="Preprocessed DWI with bvecs/bvals").grid(
             row=0, column=1, sticky=tk.W
         )
-        ttk.Label(bet2_frame, text="Value", width=20, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=2, sticky=tk.W
+
+        ttk.Label(details_frame, text="Output:", font=("TkDefaultFont", 9, "bold"), width=12).grid(
+            row=1, column=0, sticky=tk.W
         )
-        ttk.Label(bet2_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=3, sticky=tk.W
+        ttk.Label(details_frame, text="Binary brain mask applied to FA").grid(
+            row=1, column=1, sticky=tk.W
         )
 
-        ttk.Separator(bet2_frame, orient=tk.HORIZONTAL).grid(
-            row=1, column=0, columnspan=4, sticky=tk.EW, pady=5
+        ttk.Label(
+            details_frame, text="Validation:", font=("TkDefaultFont", 9, "bold"), width=12
+        ).grid(row=2, column=0, sticky=tk.W)
+        ttk.Label(details_frame, text="Pipeline fails if no b0 volumes found in DWI data").grid(
+            row=2, column=1, sticky=tk.W
         )
-
-        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.BET2_OPTIONS):
-            self._create_cli_option_row(
-                bet2_frame,
-                opt_name,
-                opt_type,
-                opt_desc,
-                row=i + 2,
-                stage_prefix="bet2",
-            )
 
         # FLIRT options
         flirt_frame = ttk.LabelFrame(
@@ -1393,7 +1405,9 @@ class DTIALPSApplication(tk.Tk):
         reg_frame.pack(fill=tk.X, pady=5, padx=5)
 
         reg_outputs = [
-            ("fa_brain", "Skull-stripped FA", "FA image after BET2 skull stripping"),
+            ("b0_image", "Averaged B0 Image", "Mean b0 image extracted from DWI"),
+            ("brain_mask", "Brain Mask", "Brain mask from dwi2mask"),
+            ("fa_brain", "Skull-stripped FA", "FA image after brain mask application"),
             ("affine_matrix", "Affine Matrix", "FLIRT linear transformation matrix"),
             (
                 "warp_coefficients",
@@ -1652,7 +1666,6 @@ class DTIALPSApplication(tk.Tk):
         dwifslpreproc_options = self._collect_cli_options("dwifslpreproc")
         dwi2tensor_options = self._collect_cli_options("dwi2tensor")
         tensor2metric_options = self._collect_cli_options("tensor2metric")
-        bet2_options = self._collect_cli_options("bet2")
         flirt_options = self._collect_cli_options("flirt")
         fnirt_options = self._collect_cli_options("fnirt")
 
@@ -1674,7 +1687,6 @@ class DTIALPSApplication(tk.Tk):
             dwi2tensor_options=dwi2tensor_options,
             tensor2metric_options=tensor2metric_options,
             # Registration parameters
-            bet2_options=bet2_options,
             flirt_options=flirt_options,
             fnirt_options=fnirt_options,
             # ROI placement parameters

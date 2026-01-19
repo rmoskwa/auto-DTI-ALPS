@@ -3,6 +3,9 @@ FSL-based registration backend for DTI-ALPS pipeline.
 
 This module implements the RegistrationBackend interface using FSL tools
 (FLIRT, FNIRT, invwarp, applywarp) for FA-to-template registration.
+
+Brain extraction is performed using MRtrix3's dwi2mask on the preprocessed
+DWI data, which provides more reliable results than BET2 on FA images.
 """
 
 import os
@@ -15,6 +18,11 @@ from typing import TYPE_CHECKING
 import nibabel as nib
 import numpy as np
 
+from ..b0_extraction import (
+    apply_mask_to_image,
+    create_brain_mask_from_dwi,
+    validate_b0_exists,
+)
 from .base import (
     RegistrationBackend,
     RegistrationResult,
@@ -45,19 +53,24 @@ class FSLRegistration(RegistrationBackend):
 
     def check_available(self) -> tuple[bool, list[str]]:
         """
-        Check if FSL registration tools are available.
+        Check if FSL registration tools and MRtrix3 dwi2mask are available.
 
         Returns
         -------
         tuple of (bool, list)
             (all_available, list of missing commands)
         """
-        required_commands = ["bet2", "flirt", "fnirt", "invwarp", "applywarp"]
+        # FSL commands (checked in FSL bin dir and PATH)
+        fsl_commands = ["flirt", "fnirt", "invwarp", "applywarp", "fslmaths"]
+        # MRtrix3 commands (checked in PATH only)
+        mrtrix_commands = ["dwi2mask"]
+
         missing = []
 
         fsl_bin = self._get_fsl_bin_dir()
 
-        for cmd in required_commands:
+        # Check FSL commands
+        for cmd in fsl_commands:
             found = False
             # Check in FSL bin directory
             if fsl_bin and (fsl_bin / cmd).is_file():
@@ -67,6 +80,11 @@ class FSLRegistration(RegistrationBackend):
                 found = True
 
             if not found:
+                missing.append(cmd)
+
+        # Check MRtrix3 commands (PATH only)
+        for cmd in mrtrix_commands:
+            if shutil.which(cmd) is None:
                 missing.append(cmd)
 
         return (len(missing) == 0, missing)
@@ -99,16 +117,18 @@ class FSLRegistration(RegistrationBackend):
         Register subject FA to JHU template and create inverse warp.
 
         Steps:
-        1. Fix NaN values in FA image
-        2. Skull stripping with BET2
-        3. Linear registration (FLIRT)
-        4. Non-linear registration (FNIRT)
-        5. Create inverse warp (INVWARP)
+        1. Validate b0 volumes exist in DWI data
+        2. Create brain mask using dwi2mask on preprocessed DWI
+        3. Fix NaN values in FA image
+        4. Apply brain mask to FA
+        5. Linear registration (FLIRT)
+        6. Non-linear registration (FNIRT)
+        7. Create inverse warp (INVWARP)
 
         Parameters
         ----------
         state : PipelineState
-            Pipeline state with fa_path set
+            Pipeline state with fa_path and preprocessed_dwi_path set
         log_callback : callable, optional
             Function to call with log messages
 
@@ -134,11 +154,29 @@ class FSLRegistration(RegistrationBackend):
                 error_message="JHU-ICBM-FA-1mm.nii.gz template not found",
             )
 
+        # Check that preprocessed DWI exists
+        if not state.preprocessed_dwi_path or not Path(state.preprocessed_dwi_path).exists():
+            return RegistrationResult(
+                success=False,
+                error_message="Preprocessed DWI not found. Run preprocessing first.",
+            )
+
+        # Get bvecs/bvals paths (preprocessed versions)
+        bvecs_preproc = state.get_output_path("bvecs_preproc")
+        bvals_preproc = state.get_output_path("bvals_preproc")
+
+        if not Path(bvecs_preproc).exists() or not Path(bvals_preproc).exists():
+            return RegistrationResult(
+                success=False,
+                error_message="Preprocessed bvecs/bvals not found.",
+            )
+
         # Set up output paths
         reg_dir = Path(state.output_dir) / "registration"
         reg_dir.mkdir(parents=True, exist_ok=True)
 
         prefix = state.output_prefix
+        brain_mask = reg_dir / f"{prefix}_brain_mask.nii.gz"
         fa_nonan = reg_dir / f"{prefix}_FA_nonan.nii.gz"
         fa_brain = reg_dir / f"{prefix}_FA_brain.nii.gz"
         affine_mat = reg_dir / f"{prefix}_subject2jhu_affine.mat"
@@ -146,11 +184,38 @@ class FSLRegistration(RegistrationBackend):
         inverse_warp = reg_dir / f"{prefix}_jhu2subject_warp_coef.nii.gz"
 
         # Get user-configured options (with defaults)
-        bet2_opts = getattr(state, "bet2_options", {})
         flirt_opts = getattr(state, "flirt_options", {})
         fnirt_opts = getattr(state, "fnirt_options", {})
 
-        # Step 1: Fix NaN values (bet2 may fail on NaN)
+        # Step 1: Validate b0 volumes exist
+        log("Validating DWI data contains b0 volumes...")
+        is_valid, message, n_b0 = validate_b0_exists(bvals_preproc)
+        if not is_valid:
+            return RegistrationResult(
+                success=False,
+                error_message=f"B0 validation failed: {message}",
+            )
+        log(f"  {message}")
+
+        # Step 2: Create brain mask using dwi2mask
+        log("Creating brain mask using dwi2mask...")
+        success, msg = create_brain_mask_from_dwi(
+            dwi_path=state.preprocessed_dwi_path,
+            bvecs_path=bvecs_preproc,
+            bvals_path=bvals_preproc,
+            output_mask_path=str(brain_mask),
+            log=log,
+        )
+        if not success:
+            return RegistrationResult(
+                success=False,
+                error_message=f"Brain mask creation failed: {msg}",
+            )
+
+        # Update state with brain mask path
+        state.brain_mask_path = str(brain_mask)
+
+        # Step 3: Fix NaN values in FA image
         log("Preparing FA image (fixing NaN values if present)...")
         if not self._fix_nan_in_nifti(state.fa_path, str(fa_nonan)):
             return RegistrationResult(
@@ -158,24 +223,18 @@ class FSLRegistration(RegistrationBackend):
                 error_message="Failed to prepare FA image",
             )
 
-        # Step 2: Skull stripping with bet2
-        log("Running skull stripping (BET2)...")
-        bet_cmd = [
-            str(fsl_bin / "bet2"),
-            str(fa_nonan),
-            str(fa_brain),
-        ]
-        # Add BET2 options (use defaults if not specified)
-        f_val = bet2_opts.get("-f", "0.3")
-        bet_cmd.extend(["-f", str(f_val)])
-        if "-g" in bet2_opts and bet2_opts["-g"]:
-            bet_cmd.extend(["-g", str(bet2_opts["-g"])])
-
-        log(f"  Command: {' '.join(bet_cmd)}")
-        if not self._run_fsl_command(bet_cmd, log):
+        # Step 4: Apply brain mask to FA
+        log("Applying brain mask to FA image...")
+        success, msg = apply_mask_to_image(
+            input_path=str(fa_nonan),
+            mask_path=str(brain_mask),
+            output_path=str(fa_brain),
+            log=log,
+        )
+        if not success:
             return RegistrationResult(
                 success=False,
-                error_message="BET2 skull stripping failed",
+                error_message=f"Failed to apply brain mask to FA: {msg}",
             )
 
         if not fa_brain.exists():

@@ -36,6 +36,8 @@ class OutputConfig:
     eigenvector_maps: bool = True  # V1, V2, V3, L2, L3 eigenvector/eigenvalue maps
 
     # Registration outputs
+    b0_image: bool = True  # Averaged b0 image
+    brain_mask: bool = True  # Brain mask from dwi2mask
     fa_brain: bool = True  # Skull-stripped FA
     affine_matrix: bool = True  # FLIRT affine matrix
     warp_coefficients: bool = True  # FNIRT warp coefficients
@@ -57,6 +59,8 @@ class OutputConfig:
             "tensor": self.tensor,
             "fa_map": self.fa_map,
             "eigenvector_maps": self.eigenvector_maps,
+            "b0_image": self.b0_image,
+            "brain_mask": self.brain_mask,
             "fa_brain": self.fa_brain,
             "affine_matrix": self.affine_matrix,
             "warp_coefficients": self.warp_coefficients,
@@ -119,7 +123,6 @@ class PipelineState:
     tensor2metric_options: dict[str, Any] = field(default_factory=dict)
 
     # Stage 7: Registration parameters (FSL FLIRT/FNIRT)
-    bet2_options: dict[str, Any] = field(default_factory=dict)
     flirt_options: dict[str, Any] = field(default_factory=dict)
     fnirt_options: dict[str, Any] = field(default_factory=dict)
 
@@ -156,6 +159,8 @@ class PipelineState:
     v3_path: str | None = None
 
     # Registration intermediate outputs
+    b0_path: str | None = None  # Averaged b0 image for brain extraction
+    brain_mask_path: str | None = None  # Brain mask from dwi2mask
     fa_brain_path: str | None = None  # Skull-stripped FA
     affine_mat_path: str | None = None  # FLIRT affine matrix
     warp_coef_path: str | None = None  # FNIRT warp coefficients
@@ -189,6 +194,8 @@ class PipelineState:
         self.v3_path = self.get_output_path("V3.nii.gz")
         # Registration outputs (in registration subdirectory)
         reg_dir = os.path.join(self.output_dir, "registration")
+        self.b0_path = os.path.join(reg_dir, f"{self.output_prefix}_b0_avg.nii.gz")
+        self.brain_mask_path = os.path.join(reg_dir, f"{self.output_prefix}_brain_mask.nii.gz")
         self.fa_brain_path = os.path.join(reg_dir, f"{self.output_prefix}_FA_brain.nii.gz")
         self.affine_mat_path = os.path.join(reg_dir, f"{self.output_prefix}_subject2jhu_affine.mat")
         self.warp_coef_path = os.path.join(
@@ -234,7 +241,6 @@ class BatchConfig:
     keep_intermediates: bool = False
 
     # Registration parameters (FSL FLIRT/FNIRT)
-    bet2_options: dict[str, Any] = field(default_factory=dict)
     flirt_options: dict[str, Any] = field(default_factory=dict)
     fnirt_options: dict[str, Any] = field(default_factory=dict)
     registration_backend: str = "fsl"  # Registration backend ('fsl', 'ants' in future)

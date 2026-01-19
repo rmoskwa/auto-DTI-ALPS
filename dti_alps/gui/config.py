@@ -85,7 +85,9 @@ OUTPUT_FILE_OPTIONS = [
         True,
     ),
     # Registration outputs
-    ("fa_brain", "Skull-stripped FA", "FA image after BET2 skull stripping", True),
+    ("b0_image", "Averaged B0 Image", "Mean b0 image extracted from DWI", True),
+    ("brain_mask", "Brain Mask", "Brain mask from dwi2mask", True),
+    ("fa_brain", "Skull-stripped FA", "FA image after brain mask application", True),
     ("affine_matrix", "Affine Matrix", "FLIRT linear transformation matrix", True),
     ("warp_coefficients", "Warp Coefficients", "FNIRT non-linear warp coefficients", True),
     ("inverse_warp", "Inverse Warp", "Inverse warp for ROI transformation", True),
@@ -167,11 +169,14 @@ TENSOR2METRIC_OPTIONS = [
 TENSOR2METRIC_MODULATE_CHOICES = ["none", "FA", "eigval"]
 
 # Registration parameters (FSL FLIRT/FNIRT)
-# BET2 options
-BET2_OPTIONS = [
-    ("-f", "string", "Fractional intensity threshold (0->1, smaller=larger brain)", "0.3"),
-    ("-g", "string", "Vertical gradient (-1->1, positive=larger at bottom)", None),
-]
+# Brain extraction info (dwi2mask is used automatically, no user-configurable options)
+# dwi2mask creates a brain mask from the preprocessed DWI data, which is then applied to FA
+DWI2MASK_INFO = {
+    "description": "Brain mask extraction using MRtrix3's dwi2mask",
+    "input": "Preprocessed DWI data with bvecs/bvals",
+    "output": "Binary brain mask",
+    "note": "More reliable than BET2 for diffusion data",
+}
 
 # FLIRT options
 FLIRT_OPTIONS = [

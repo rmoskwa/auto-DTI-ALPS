@@ -12,11 +12,22 @@ This package provides modular components for the DTI-ALPS processing pipeline:
 - registration: FSL-based registration
 - discovery: Subject file discovery
 - validators: Input validation
+- b0_extraction: B0 extraction and brain mask utilities
 """
 
 # State classes
 # ALPS calculation
 from .alps_calculation import calculate_alps_lab, calculate_alps_pas, run_alps_calculation
+
+# B0 extraction and brain masking
+from .b0_extraction import (
+    B0ExtractionResult,
+    apply_mask_to_image,
+    create_brain_mask_from_dwi,
+    extract_and_average_b0,
+    parse_bvals,
+    validate_b0_exists,
+)
 
 # Batch processing
 from .batch import BatchRunner
@@ -45,4 +56,11 @@ __all__ = [
     "calculate_alps_lab",
     "calculate_alps_pas",
     "run_alps_calculation",
+    # B0 extraction and brain masking
+    "B0ExtractionResult",
+    "parse_bvals",
+    "validate_b0_exists",
+    "extract_and_average_b0",
+    "create_brain_mask_from_dwi",
+    "apply_mask_to_image",
 ]
