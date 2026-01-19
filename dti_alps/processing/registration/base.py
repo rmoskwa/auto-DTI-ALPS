@@ -338,15 +338,23 @@ def refine_roi_placement(
     voxel_size: tuple[float, float, float],
     fiber_type: str,
     radius_mm: float = 3.0,
-    search_xy: int = 2,
+    search_x: int = 3,
+    search_y: int = 2,
     search_z: int = 1,
+    reference_centroid: tuple[int, int, int] | None = None,
+    max_y_drift: int = 2,
 ) -> tuple[tuple[int, int, int], float, float]:
     """
     Refine ROI placement by searching nearby positions for better fiber purity.
 
     Starting from the template-based centroid, search a small neighborhood
-    (±search_xy voxels in X/Y, ±search_z voxels in Z) to find the position
-    that maximizes the combined quality score (purity * direction * FA).
+    to find the position that maximizes the combined quality score
+    (purity * direction * FA).
+
+    For DTI-ALPS, projection and association ROIs must remain spatially aligned
+    to capture the same underlying X-direction diffusion. When a reference_centroid
+    is provided (typically from the paired ROI), the Y-coordinate drift is
+    constrained to ensure both ROIs sample the same diffusion pathway.
 
     Parameters
     ----------
@@ -364,10 +372,18 @@ def refine_roi_placement(
         Either 'proj' (Z-dominant) or 'assoc' (Y-dominant)
     radius_mm : float
         Sphere radius in millimeters
-    search_xy : int
-        Search range in X and Y directions (voxels)
+    search_x : int
+        Search range in X direction (voxels), default 3
+    search_y : int
+        Search range in Y direction (voxels), default 2
     search_z : int
-        Search range in Z direction (voxels)
+        Search range in Z direction (voxels), default 1
+    reference_centroid : tuple of int, optional
+        Centroid of the paired ROI (e.g., projection ROI when refining association).
+        If provided, the Y-coordinate drift from this reference is constrained.
+    max_y_drift : int
+        Maximum allowed Y-coordinate difference from reference_centroid (voxels).
+        Only used when reference_centroid is provided. Default 2.
 
     Returns
     -------
@@ -380,8 +396,8 @@ def refine_roi_placement(
     best_score = -1.0
     best_purity = 0.0
 
-    for dx in range(-search_xy, search_xy + 1):
-        for dy in range(-search_xy, search_xy + 1):
+    for dx in range(-search_x, search_x + 1):
+        for dy in range(-search_y, search_y + 1):
             for dz in range(-search_z, search_z + 1):
                 test_center = (
                     original_centroid[0] + dx,
@@ -396,6 +412,12 @@ def refine_roi_placement(
                     and 0 <= test_center[2] < shape[2]
                 ):
                     continue
+
+                # If reference centroid provided, constrain Y drift
+                if reference_centroid is not None:
+                    y_drift = abs(test_center[1] - reference_centroid[1])
+                    if y_drift > max_y_drift:
+                        continue
 
                 # Create sphere at test position
                 sphere = create_sphere_mask(shape, test_center, radius_mm, voxel_size)

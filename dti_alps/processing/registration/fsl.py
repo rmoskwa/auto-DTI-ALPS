@@ -469,7 +469,8 @@ class FSLRegistration(RegistrationBackend):
         do_refinement = getattr(state, "refine_roi_placement", True)
         v1_data = None
         if do_refinement:
-            log("  ROI refinement enabled (±2 X/Y, ±1 Z voxels)")
+            log("  ROI refinement enabled (±3 X, ±2 Y, ±1 Z voxels)")
+            log("  Association ROIs constrained to ±2 Y voxels from projection ROI")
             # Load V1 data for fiber orientation analysis
             if state.v1_path and os.path.exists(state.v1_path):
                 v1_img = nib.load(state.v1_path)
@@ -480,9 +481,10 @@ class FSLRegistration(RegistrationBackend):
 
         roi_centroids = {}
         roi_native_paths = {}
+        template_centroids = {}
 
+        # First pass: Transform all ROIs and get template centroids
         for roi_name, roi_template in roi_templates.items():
-            # First transform to get approximate location
             roi_transformed = reg_dir / f"{prefix}_{roi_name}_transformed.nii.gz"
             log(f"  Transforming {roi_name}...")
 
@@ -523,33 +525,33 @@ class FSLRegistration(RegistrationBackend):
                     error_message=f"No voxels found in transformed {roi_name}",
                 )
 
+            template_centroids[roi_name] = centroid
             log(f"    Template centroid: {centroid}")
 
-            # Determine fiber type from ROI name
-            fiber_type = "proj" if "proj" in roi_name else "assoc"
+        # Second pass: Refine projection ROIs first (no constraint)
+        # This establishes the Y-coordinate reference for association ROIs
+        for roi_name in ["left_proj", "right_proj"]:
+            centroid = template_centroids[roi_name]
 
-            # Apply refinement if enabled
             if do_refinement and v1_data is not None:
                 # Calculate original purity
                 orig_sphere = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
-                orig_purity, _, _, _ = calculate_roi_quality(
-                    v1_data, fa_data, orig_sphere, fiber_type
-                )
+                orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_sphere, "proj")
 
-                # Refine placement
+                # Refine placement (no reference constraint for projection ROIs)
                 refined_centroid, refined_purity, _ = refine_roi_placement(
                     centroid,
                     v1_data,
                     fa_data,
                     ref_shape,
                     voxel_size,
-                    fiber_type,
+                    "proj",
                     radius_mm=sphere_radius,
-                    search_xy=2,
+                    search_x=3,
+                    search_y=2,
                     search_z=1,
                 )
 
-                # Calculate offset
                 offset = (
                     refined_centroid[0] - centroid[0],
                     refined_centroid[1] - centroid[1],
@@ -557,27 +559,86 @@ class FSLRegistration(RegistrationBackend):
                 )
 
                 if offset != (0, 0, 0):
-                    log(f"    Refined centroid: {refined_centroid} (offset: {offset})")
+                    log(f"    {roi_name} refined: {refined_centroid} (offset: {offset})")
                     log(f"    Purity: {orig_purity * 100:.0f}% -> {refined_purity * 100:.0f}%")
                 else:
-                    log(f"    No refinement needed (purity: {refined_purity * 100:.0f}%)")
+                    log(
+                        f"    {roi_name} no refinement needed (purity: {refined_purity * 100:.0f}%)"
+                    )
 
                 centroid = refined_centroid
 
             roi_centroids[roi_name] = centroid
 
-            # Create spherical ROI at (possibly refined) centroid
+            # Create and save spherical ROI
             sphere_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
             n_voxels = int(np.sum(sphere_mask))
-            log(f"    Created sphere with {n_voxels} voxels")
+            log(f"    Created {roi_name} sphere with {n_voxels} voxels")
 
-            # Save spherical ROI
             roi_sphere = roi_dir / f"{prefix}_{roi_name}.nii.gz"
             sphere_img = nib.Nifti1Image(
                 sphere_mask.astype(np.float32), ref_img.affine, ref_img.header
             )
             nib.save(sphere_img, str(roi_sphere))
+            roi_native_paths[roi_name] = str(roi_sphere)
 
+        # Third pass: Refine association ROIs with Y-constraint from paired projection ROI
+        # This ensures proj and assoc ROIs stay aligned to sample same X-direction diffusion
+        for roi_name, proj_name in [("left_assoc", "left_proj"), ("right_assoc", "right_proj")]:
+            centroid = template_centroids[roi_name]
+            proj_centroid = roi_centroids[proj_name]
+
+            if do_refinement and v1_data is not None:
+                # Calculate original purity
+                orig_sphere = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
+                orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_sphere, "assoc")
+
+                # Refine placement with Y-constraint relative to projection ROI
+                refined_centroid, refined_purity, _ = refine_roi_placement(
+                    centroid,
+                    v1_data,
+                    fa_data,
+                    ref_shape,
+                    voxel_size,
+                    "assoc",
+                    radius_mm=sphere_radius,
+                    search_x=3,
+                    search_y=2,
+                    search_z=1,
+                    reference_centroid=proj_centroid,
+                    max_y_drift=2,
+                )
+
+                offset = (
+                    refined_centroid[0] - centroid[0],
+                    refined_centroid[1] - centroid[1],
+                    refined_centroid[2] - centroid[2],
+                )
+                y_drift = abs(refined_centroid[1] - proj_centroid[1])
+
+                if offset != (0, 0, 0):
+                    log(f"    {roi_name} refined: {refined_centroid} (offset: {offset})")
+                    log(f"    Purity: {orig_purity * 100:.0f}% -> {refined_purity * 100:.0f}%")
+                    log(f"    Y-drift from {proj_name}: {y_drift} voxels")
+                else:
+                    log(
+                        f"    {roi_name} no refinement needed (purity: {refined_purity * 100:.0f}%)"
+                    )
+
+                centroid = refined_centroid
+
+            roi_centroids[roi_name] = centroid
+
+            # Create and save spherical ROI
+            sphere_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
+            n_voxels = int(np.sum(sphere_mask))
+            log(f"    Created {roi_name} sphere with {n_voxels} voxels")
+
+            roi_sphere = roi_dir / f"{prefix}_{roi_name}.nii.gz"
+            sphere_img = nib.Nifti1Image(
+                sphere_mask.astype(np.float32), ref_img.affine, ref_img.header
+            )
+            nib.save(sphere_img, str(roi_sphere))
             roi_native_paths[roi_name] = str(roi_sphere)
 
         log("ROI placement completed successfully")
