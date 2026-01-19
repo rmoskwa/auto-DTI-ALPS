@@ -25,6 +25,11 @@ class SubjectData:
     v1_path: Path | None = None
     roi_paths: dict[str, Path] = field(default_factory=dict)
 
+    # All available ROI sets keyed by ROI type (e.g., "rois", "squarev9", "sphere2p5")
+    all_roi_paths: dict[str, dict[str, Path]] = field(default_factory=dict)
+    # Currently active ROI type
+    active_roi_type: str = "rois"
+
     # ALPS metrics from CSV - method-specific
     alps_method: str = ""  # "ALPS-LAB", "ALPS-PAS", or "Both"
     alps_lab_left: float | None = None
@@ -54,16 +59,34 @@ class SubjectData:
                 v1_img = nib.load(self.v1_path)
                 self._v1_data = v1_img.get_fdata()
 
-            # Load ROIs
-            for roi_name, roi_path in self.roi_paths.items():
-                if roi_path.exists():
-                    roi_img = nib.load(roi_path)
-                    self._roi_data[roi_name] = roi_img.get_fdata()
+            # Load ROIs for active type
+            self.load_rois_for_type(self.active_roi_type)
 
             return self._fa_data is not None and self._v1_data is not None
         except Exception as e:
             print(f"Error loading images for {self.subject_id}: {e}")
             return False
+
+    def load_rois_for_type(self, roi_type: str):
+        """Load ROI masks for a specific ROI type."""
+        self._roi_data.clear()
+
+        # Get paths for the requested type
+        if roi_type in self.all_roi_paths:
+            paths = self.all_roi_paths[roi_type]
+        elif roi_type == "rois" and self.roi_paths:
+            # Fallback to default roi_paths for backward compatibility
+            paths = self.roi_paths
+        else:
+            return
+
+        for roi_name, roi_path in paths.items():
+            if roi_path.exists():
+                try:
+                    roi_img = nib.load(roi_path)
+                    self._roi_data[roi_name] = roi_img.get_fdata()
+                except Exception as e:
+                    print(f"Error loading ROI {roi_name}: {e}")
 
     def unload_images(self):
         """Release image data from memory."""
@@ -89,6 +112,78 @@ class SubjectData:
         if self._fa_data is not None:
             return self._fa_data.shape
         return None
+
+
+def discover_roi_options(output_folder: Path) -> list[str]:
+    """
+    Discover available ROI options in an output folder.
+
+    Looks for directories named 'rois' (default) and 'rois_*' (reanalysis).
+
+    Parameters
+    ----------
+    output_folder : Path
+        Path to the DTI-ALPS output folder
+
+    Returns
+    -------
+    list[str]
+        List of available ROI type names, e.g., ['rois', 'squarev9', 'sphere2p5']
+    """
+    roi_options = []
+
+    # Look in any subject folder for ROI directories
+    for subject_folder in output_folder.iterdir():
+        if not subject_folder.is_dir():
+            continue
+
+        # Check for default rois/ directory
+        if (subject_folder / "rois").exists():
+            if "rois" not in roi_options:
+                roi_options.append("rois")
+
+        # Check for reanalysis directories (rois_*)
+        for roi_dir in subject_folder.glob("rois_*"):
+            if roi_dir.is_dir():
+                # Extract type name (e.g., "squarev9" from "rois_squarev9")
+                roi_type = roi_dir.name[5:]  # Remove "rois_" prefix
+                if roi_type not in roi_options:
+                    roi_options.append(roi_type)
+
+        # Only need to check one subject folder
+        if roi_options:
+            break
+
+    # Sort with "rois" first, then alphabetically
+    if "rois" in roi_options:
+        roi_options.remove("rois")
+        roi_options = ["rois"] + sorted(roi_options)
+    else:
+        roi_options = sorted(roi_options)
+
+    return roi_options
+
+
+def get_roi_display_name(roi_type: str) -> str:
+    """Convert ROI type to human-readable display name."""
+    if roi_type == "rois":
+        return "Default (sphere 3mm)"
+    elif roi_type.startswith("sphere"):
+        # e.g., "sphere2p5" -> "Sphere 2.5mm"
+        radius = roi_type[6:].replace("p", ".")
+        return f"Sphere {radius}mm"
+    elif roi_type == "squarev9":
+        return "Square 3x3 (9 voxels)"
+    else:
+        return roi_type.replace("_", " ").title()
+
+
+def get_csv_path_for_roi_type(output_folder: Path, roi_type: str) -> Path:
+    """Get the CSV path for a specific ROI type."""
+    if roi_type == "rois":
+        return output_folder / "alps_results.csv"
+    else:
+        return output_folder / f"alps_results_{roi_type}.csv"
 
 
 class ResultsViewer(tk.Toplevel):
@@ -124,6 +219,12 @@ class ResultsViewer(tk.Toplevel):
         self.zoom_level = 1.0
         self.alps_method = "ALPS-LAB"  # Detected from CSV
         self._labels_built_for_method = "ALPS-LAB"  # Track which method labels are built for
+
+        # ROI type selection state
+        self.output_folder: Path | None = None
+        self.available_roi_types: list[str] = []
+        self.current_roi_type: str = "rois"
+        self.alps_data_by_roi_type: dict[str, dict] = {}  # Cache for CSV data per ROI type
 
         # Image display
         self._photo_image: ImageTk.PhotoImage | None = None
@@ -264,6 +365,21 @@ class ResultsViewer(tk.Toplevel):
         """Create slice navigation controls."""
         controls_frame = ttk.LabelFrame(parent, text="Navigation", padding=5)
         controls_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
+
+        # ROI Type selection
+        roi_frame = ttk.Frame(controls_frame)
+        roi_frame.pack(fill=tk.X, pady=(0, 5))
+
+        ttk.Label(roi_frame, text="ROI Type:").pack(side=tk.LEFT)
+        self.roi_type_var = tk.StringVar(value="rois")
+        self.roi_type_combo = ttk.Combobox(
+            roi_frame,
+            textvariable=self.roi_type_var,
+            state="readonly",
+            width=20,
+        )
+        self.roi_type_combo.pack(side=tk.LEFT, padx=5)
+        self.roi_type_combo.bind("<<ComboboxSelected>>", self._on_roi_type_change)
 
         # View selection
         view_frame = ttk.Frame(controls_frame)
@@ -454,12 +570,37 @@ class ResultsViewer(tk.Toplevel):
             messagebox.showerror("Error", f"Folder does not exist:\n{folder}")
             return
 
-        # Look for alps_results.csv
-        csv_path = folder / "alps_results.csv"
+        # Discover available ROI options
+        self.available_roi_types = discover_roi_options(folder)
+        if not self.available_roi_types:
+            # Fallback: check for alps_results.csv even without ROIs
+            if not (folder / "alps_results.csv").exists():
+                messagebox.showerror(
+                    "Error",
+                    f"No ROI directories or alps_results.csv found in:\n{folder}\n\n"
+                    "Is this a valid output folder?",
+                )
+                return
+            self.available_roi_types = ["rois"]
+
+        # Update ROI type combobox
+        display_names = [get_roi_display_name(t) for t in self.available_roi_types]
+        self.roi_type_combo["values"] = display_names
+        self.current_roi_type = self.available_roi_types[0]
+        self.roi_type_var.set(display_names[0])
+
+        # Store output folder
+        self.output_folder = folder
+
+        # Clear cached CSV data
+        self.alps_data_by_roi_type.clear()
+
+        # Load CSV for current ROI type
+        csv_path = get_csv_path_for_roi_type(folder, self.current_roi_type)
         if not csv_path.exists():
             messagebox.showerror(
                 "Error",
-                f"No alps_results.csv found in:\n{folder}\n\nIs this a valid output folder?",
+                f"No results CSV found at:\n{csv_path}\n\nIs this a valid output folder?",
             )
             return
 
@@ -471,6 +612,7 @@ class ResultsViewer(tk.Toplevel):
         # Parse CSV
         alps_data, alps_method = self._parse_alps_csv(csv_path)
         self.alps_method = alps_method  # Store for display
+        self.alps_data_by_roi_type[self.current_roi_type] = alps_data
 
         # Rebuild labels if method changed from initial layout
         if alps_method != self._labels_built_for_method:
@@ -490,14 +632,26 @@ class ResultsViewer(tk.Toplevel):
             if not fa_files or not v1_files:
                 continue  # Skip folders without required files
 
-            # Find ROI files
-            roi_dir = subject_folder / "rois"
-            roi_paths = {}
-            if roi_dir.exists():
-                for roi_type in ["left_proj", "right_proj", "left_assoc", "right_assoc"]:
-                    roi_files = list(roi_dir.glob(f"*_{roi_type}.nii.gz"))
-                    if roi_files:
-                        roi_paths[roi_type] = roi_files[0]
+            # Find ROI files for all available ROI types
+            all_roi_paths: dict[str, dict[str, Path]] = {}
+            for roi_type in self.available_roi_types:
+                if roi_type == "rois":
+                    roi_dir = subject_folder / "rois"
+                else:
+                    roi_dir = subject_folder / f"rois_{roi_type}"
+
+                roi_paths = {}
+                if roi_dir.exists():
+                    for roi_name in ["left_proj", "right_proj", "left_assoc", "right_assoc"]:
+                        roi_files = list(roi_dir.glob(f"*_{roi_name}.nii.gz"))
+                        if roi_files:
+                            roi_paths[roi_name] = roi_files[0]
+
+                if roi_paths:
+                    all_roi_paths[roi_type] = roi_paths
+
+            # Default roi_paths for backward compatibility
+            default_roi_paths = all_roi_paths.get(self.current_roi_type, {})
 
             # Create SubjectData
             subject_data = SubjectData(
@@ -505,7 +659,9 @@ class ResultsViewer(tk.Toplevel):
                 folder_path=subject_folder,
                 fa_path=fa_files[0],
                 v1_path=v1_files[0],
-                roi_paths=roi_paths,
+                roi_paths=default_roi_paths,
+                all_roi_paths=all_roi_paths,
+                active_roi_type=self.current_roi_type,
             )
 
             # Add ALPS metrics from CSV
@@ -925,6 +1081,59 @@ class ResultsViewer(tk.Toplevel):
         y = max(0, (canvas_h - new_h) // 2)
 
         self.canvas.create_image(x, y, anchor=tk.NW, image=self._photo_image)
+
+    def _on_roi_type_change(self, event=None):
+        """Handle ROI type selection change."""
+        if not self.output_folder or not self.available_roi_types:
+            return
+
+        # Get selected display name and find matching roi_type
+        selected_display = self.roi_type_var.get()
+        new_roi_type = None
+        for roi_type in self.available_roi_types:
+            if get_roi_display_name(roi_type) == selected_display:
+                new_roi_type = roi_type
+                break
+
+        if new_roi_type is None or new_roi_type == self.current_roi_type:
+            return
+
+        self.current_roi_type = new_roi_type
+
+        # Load CSV data for this ROI type if not cached
+        if new_roi_type not in self.alps_data_by_roi_type:
+            csv_path = get_csv_path_for_roi_type(self.output_folder, new_roi_type)
+            if csv_path.exists():
+                alps_data, alps_method = self._parse_alps_csv(csv_path)
+                self.alps_data_by_roi_type[new_roi_type] = alps_data
+                self.alps_method = alps_method
+
+                # Rebuild labels if method changed
+                if alps_method != self._labels_built_for_method:
+                    self._build_metrics_labels(alps_method)
+
+        # Update metrics for all subjects from new CSV
+        if new_roi_type in self.alps_data_by_roi_type:
+            alps_data = self.alps_data_by_roi_type[new_roi_type]
+            for subject_id, subject_data in self.subjects.items():
+                subject_data.active_roi_type = new_roi_type
+                if subject_id in alps_data:
+                    csv_row = alps_data[subject_id]
+                    subject_data.alps_method = csv_row.get("alps_method", "")
+                    subject_data.alps_lab_left = csv_row.get("alps_lab_left")
+                    subject_data.alps_lab_right = csv_row.get("alps_lab_right")
+                    subject_data.alps_lab_combined = csv_row.get("alps_lab_combined")
+                    subject_data.alps_pas_left = csv_row.get("alps_pas_left")
+                    subject_data.alps_pas_right = csv_row.get("alps_pas_right")
+                    subject_data.alps_pas_combined = csv_row.get("alps_pas_combined")
+                    subject_data.status = csv_row.get("status", "")
+                    subject_data.error = csv_row.get("error", "")
+
+        # Reload ROIs for current subject and update display
+        if self.current_subject:
+            self.current_subject.load_rois_for_type(new_roi_type)
+            self._update_metrics_display()
+            self._update_display()
 
     def _on_view_change(self):
         """Handle view type change."""
