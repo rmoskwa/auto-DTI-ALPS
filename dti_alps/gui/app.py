@@ -1693,6 +1693,7 @@ class DTIALPSApplication(tk.Tk):
             roi_sphere_radius=self.roi_sphere_radius_var.get(),
             fa_threshold=self.fa_threshold_var.get(),
             alps_method=self.alps_method_var.get(),
+            refine_roi_placement=self.refine_roi_var.get(),
             # Output
             output_dir=self.output_dir_var.get(),
             output_config=self._collect_output_config(),

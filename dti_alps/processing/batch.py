@@ -136,6 +136,7 @@ class BatchRunner:
             roi_sphere_radius=batch_config.roi_sphere_radius,
             fa_threshold=batch_config.fa_threshold,
             alps_method=batch_config.alps_method,
+            refine_roi_placement=batch_config.refine_roi_placement,
             # Output settings
             output_dir=subject_output_dir,
             output_prefix=subject_files.subject_id,

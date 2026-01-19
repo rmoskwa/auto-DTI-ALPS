@@ -249,6 +249,7 @@ class BatchConfig:
     roi_sphere_radius: float = 2.0  # Sphere radius in mm for template-based ROI placement
     fa_threshold: float = config.FA_THRESHOLD  # FA threshold for filtering CSF voxels
     alps_method: str = "ALPS-LAB"  # ALPS calculation method (ALPS-LAB or ALPS-PAS)
+    refine_roi_placement: bool = True  # Enable ROI refinement (±2 X/Y, ±1 Z voxels)
 
     # Output settings
     output_dir: str = ""
