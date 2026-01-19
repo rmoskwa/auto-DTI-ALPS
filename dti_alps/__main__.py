@@ -26,6 +26,24 @@ Output naming:
 import argparse
 import sys
 
+# Sphere radius range (must match config.ROI_SPHERE_RADIUS_RANGE)
+SPHERE_RADIUS_MIN = 1.0
+SPHERE_RADIUS_MAX = 4.0
+
+
+def _validate_sphere_radius(value: str) -> float:
+    """Validate sphere radius is within allowed range."""
+    try:
+        radius = float(value)
+    except ValueError as err:
+        raise argparse.ArgumentTypeError(f"invalid float value: '{value}'") from err
+
+    if radius < SPHERE_RADIUS_MIN or radius > SPHERE_RADIUS_MAX:
+        raise argparse.ArgumentTypeError(
+            f"radius must be between {SPHERE_RADIUS_MIN} and {SPHERE_RADIUS_MAX} mm, got {radius}"
+        )
+    return radius
+
 
 def _parse_reanalysis_args() -> argparse.Namespace:
     """Parse command line arguments for reanalysis mode."""
@@ -59,9 +77,9 @@ Examples:
     shape_group = parser.add_mutually_exclusive_group(required=True)
     shape_group.add_argument(
         "--sphere",
-        type=float,
+        type=_validate_sphere_radius,
         metavar="RADIUS",
-        help="Create spherical ROIs with given radius in millimeters",
+        help=f"Create spherical ROIs with given radius ({SPHERE_RADIUS_MIN}-{SPHERE_RADIUS_MAX} mm)",
     )
     shape_group.add_argument(
         "--squarev9",
