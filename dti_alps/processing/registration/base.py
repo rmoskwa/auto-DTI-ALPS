@@ -477,7 +477,7 @@ def refine_roi_placement(
     radius_mm: float = 3.0,
     search_x: int = 3,
     search_y: int = 2,
-    search_z: int = 1,
+    search_z: int = 2,
     reference_centroid: tuple[int, int, int] | None = None,
     max_y_drift: int = 1,
     max_z_drift: int = 1,
@@ -516,7 +516,7 @@ def refine_roi_placement(
     search_y : int
         Search range in Y direction (voxels), default 2
     search_z : int
-        Search range in Z direction (voxels), default 1
+        Search range in Z direction (voxels), default 2
     reference_centroid : tuple of int, optional
         Centroid of the paired ROI (e.g., projection ROI when refining association).
         If provided, the Y and Z coordinate drift from this reference is constrained.

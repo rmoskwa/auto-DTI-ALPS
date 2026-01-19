@@ -317,7 +317,7 @@ def reanalyze_subject(
                     radius_mm=roi_shape.sphere_radius or 3.0,
                     search_x=3,
                     search_y=2,
-                    search_z=1,
+                    search_z=2,
                     shape_type=roi_shape.shape_type,
                 )
 
@@ -371,7 +371,7 @@ def reanalyze_subject(
                     radius_mm=roi_shape.sphere_radius or 3.0,
                     search_x=3,
                     search_y=2,
-                    search_z=1,
+                    search_z=2,
                     reference_centroid=proj_centroid,
                     max_y_drift=1,
                     max_z_drift=1,

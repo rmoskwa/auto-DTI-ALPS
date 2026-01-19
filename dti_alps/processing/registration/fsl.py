@@ -612,7 +612,7 @@ class FSLRegistration(RegistrationBackend):
                     radius_mm=sphere_radius or 3.0,  # Use 3mm for square refinement search
                     search_x=3,
                     search_y=2,
-                    search_z=1,
+                    search_z=2,
                     shape_type=shape_type,
                 )
 
@@ -676,7 +676,7 @@ class FSLRegistration(RegistrationBackend):
                     radius_mm=sphere_radius or 3.0,  # Use 3mm for square refinement search
                     search_x=3,
                     search_y=2,
-                    search_z=1,
+                    search_z=2,
                     reference_centroid=proj_centroid,
                     max_y_drift=1,
                     max_z_drift=1,
