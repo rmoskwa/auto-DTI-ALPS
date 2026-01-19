@@ -179,6 +179,8 @@ def get_roi_display_name(roi_type: str) -> str:
         return f"Sphere {radius}mm{refined_suffix}"
     elif base_type == "squarev9":
         return f"Square 3x3{refined_suffix}"
+    elif base_type == "squarev4":
+        return f"Square 2x2{refined_suffix}"
     else:
         return base_type.replace("_", " ").title() + refined_suffix
 

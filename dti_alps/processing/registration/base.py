@@ -269,6 +269,105 @@ def create_square_v9_mask(
     return mask
 
 
+def create_square_v4_mask(
+    shape: tuple[int, int, int],
+    center_voxel: tuple[int, int, int],
+    v1_data: np.ndarray | None = None,
+    fiber_type: str = "proj",
+) -> np.ndarray:
+    """
+    Create a 2x2 square binary mask (4 voxels) in the axial plane.
+
+    The centroid is placed at one corner of the 2x2 square. There are 4 possible
+    configurations for the 2x2 square with the centroid as a corner. The optimal
+    configuration is selected by maximizing the average V1(z) for projection ROIs
+    or V1(y) for association ROIs, helping the square encapsulate the track region
+    and avoid boundaries where crossing fibers might exist.
+
+    If v1_data is not provided, defaults to centroid at bottom-left corner.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Shape of the output array (x, y, z)
+    center_voxel : tuple of int
+        Corner voxel coordinates (x, y, z) - one corner of the 2x2 square
+    v1_data : np.ndarray, optional
+        Primary eigenvector data (x, y, z, 3) for optimal configuration selection
+    fiber_type : str
+        Either 'proj' (maximize V1_z) or 'assoc' (maximize V1_y)
+
+    Returns
+    -------
+    np.ndarray
+        Binary mask with 2x2 square (4 voxels)
+    """
+    cx, cy, cz = center_voxel
+
+    # Define all 4 possible 2x2 configurations with centroid as a corner
+    # Each configuration is a list of (dx, dy) offsets from centroid
+    configurations = [
+        # Centroid at bottom-left: (cx, cy), (cx+1, cy), (cx, cy+1), (cx+1, cy+1)
+        [(0, 0), (1, 0), (0, 1), (1, 1)],
+        # Centroid at bottom-right: (cx-1, cy), (cx, cy), (cx-1, cy+1), (cx, cy+1)
+        [(-1, 0), (0, 0), (-1, 1), (0, 1)],
+        # Centroid at top-left: (cx, cy-1), (cx+1, cy-1), (cx, cy), (cx+1, cy)
+        [(0, -1), (1, -1), (0, 0), (1, 0)],
+        # Centroid at top-right: (cx-1, cy-1), (cx, cy-1), (cx-1, cy), (cx, cy)
+        [(-1, -1), (0, -1), (-1, 0), (0, 0)],
+    ]
+
+    def _get_voxels_for_config(offsets: list[tuple[int, int]]) -> list[tuple[int, int, int]]:
+        """Get valid voxel coordinates for a configuration."""
+        voxels = []
+        for dx, dy in offsets:
+            x, y, z = cx + dx, cy + dy, cz
+            if 0 <= x < shape[0] and 0 <= y < shape[1] and 0 <= z < shape[2]:
+                voxels.append((x, y, z))
+        return voxels
+
+    def _calculate_v1_metric(voxels: list[tuple[int, int, int]]) -> float:
+        """Calculate average V1 component for the given voxels."""
+        if not voxels or v1_data is None:
+            return 0.0
+
+        component_idx = 2 if fiber_type == "proj" else 1  # Z for proj, Y for assoc
+        total = 0.0
+        for x, y, z in voxels:
+            total += abs(v1_data[x, y, z, component_idx])
+        return total / len(voxels)
+
+    # Select optimal configuration
+    if v1_data is not None:
+        best_config = None
+        best_metric = -1.0
+
+        for config in configurations:
+            voxels = _get_voxels_for_config(config)
+            if len(voxels) < 4:
+                continue  # Skip configs that go out of bounds
+            metric = _calculate_v1_metric(voxels)
+            if metric > best_metric:
+                best_metric = metric
+                best_config = config
+
+        # Fallback to first config if none are valid
+        if best_config is None:
+            best_config = configurations[0]
+    else:
+        # Default to first configuration (centroid at bottom-left)
+        best_config = configurations[0]
+
+    # Create mask with selected configuration
+    mask = np.zeros(shape, dtype=bool)
+    for dx, dy in best_config:
+        x, y, z = cx + dx, cy + dy, cz
+        if 0 <= x < shape[0] and 0 <= y < shape[1] and 0 <= z < shape[2]:
+            mask[x, y, z] = True
+
+    return mask
+
+
 def find_mask_centroid(mask_data: np.ndarray) -> tuple[int, int, int] | None:
     """
     Find the centroid of non-zero voxels in a mask, rounded to nearest integer.
@@ -381,6 +480,8 @@ def refine_roi_placement(
     search_z: int = 1,
     reference_centroid: tuple[int, int, int] | None = None,
     max_y_drift: int = 1,
+    max_z_drift: int = 1,
+    shape_type: str = "sphere",
 ) -> tuple[tuple[int, int, int], float, float]:
     """
     Refine ROI placement by searching nearby positions for better fiber purity.
@@ -391,7 +492,7 @@ def refine_roi_placement(
 
     For DTI-ALPS, projection and association ROIs must remain spatially aligned
     to capture the same underlying X-direction diffusion. When a reference_centroid
-    is provided (typically from the paired ROI), the Y-coordinate drift is
+    is provided (typically from the paired ROI), the Y and Z coordinate drift is
     constrained to ensure both ROIs sample the same diffusion pathway.
 
     Parameters
@@ -409,7 +510,7 @@ def refine_roi_placement(
     fiber_type : str
         Either 'proj' (Z-dominant) or 'assoc' (Y-dominant)
     radius_mm : float
-        Sphere radius in millimeters
+        Sphere radius in millimeters (used for sphere shape)
     search_x : int
         Search range in X direction (voxels), default 3
     search_y : int
@@ -418,10 +519,15 @@ def refine_roi_placement(
         Search range in Z direction (voxels), default 1
     reference_centroid : tuple of int, optional
         Centroid of the paired ROI (e.g., projection ROI when refining association).
-        If provided, the Y-coordinate drift from this reference is constrained.
+        If provided, the Y and Z coordinate drift from this reference is constrained.
     max_y_drift : int
         Maximum allowed Y-coordinate difference from reference_centroid (voxels).
         Only used when reference_centroid is provided. Default 1.
+    max_z_drift : int
+        Maximum allowed Z-coordinate difference from reference_centroid (voxels).
+        Only used when reference_centroid is provided. Default 1.
+    shape_type : str
+        ROI shape type: "sphere", "squarev9", or "squarev4". Default "sphere".
 
     Returns
     -------
@@ -451,17 +557,25 @@ def refine_roi_placement(
                 ):
                     continue
 
-                # If reference centroid provided, constrain Y drift
+                # If reference centroid provided, constrain Y and Z drift
                 if reference_centroid is not None:
                     y_drift = abs(test_center[1] - reference_centroid[1])
                     if y_drift > max_y_drift:
                         continue
+                    z_drift = abs(test_center[2] - reference_centroid[2])
+                    if z_drift > max_z_drift:
+                        continue
 
-                # Create sphere at test position
-                sphere = create_sphere_mask(shape, test_center, radius_mm, voxel_size)
+                # Create mask at test position using appropriate shape
+                if shape_type == "sphere":
+                    mask = create_sphere_mask(shape, test_center, radius_mm, voxel_size)
+                elif shape_type == "squarev4":
+                    mask = create_square_v4_mask(shape, test_center, v1_data, fiber_type)
+                else:  # squarev9
+                    mask = create_square_v9_mask(shape, test_center)
 
                 # Calculate quality metrics
-                purity, _, _, score = calculate_roi_quality(v1_data, fa_data, sphere, fiber_type)
+                purity, _, _, score = calculate_roi_quality(v1_data, fa_data, mask, fiber_type)
 
                 if score > best_score:
                     best_score = score

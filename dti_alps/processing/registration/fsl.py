@@ -29,6 +29,7 @@ from .base import (
     ROIPlacementResult,
     calculate_roi_quality,
     create_sphere_mask,
+    create_square_v4_mask,
     create_square_v9_mask,
     find_mask_centroid,
     get_roi_template_paths,
@@ -448,7 +449,7 @@ class FSLRegistration(RegistrationBackend):
                 r_str = str(sphere_radius).replace(".", "p").rstrip("0").rstrip("p")
                 shape_name = f"sphere{r_str}"
             else:
-                shape_name = shape_type  # squarev9
+                shape_name = shape_type  # squarev9, squarev4
 
             # Add _refined suffix if refinement is enabled
             if do_refinement:
@@ -515,16 +516,26 @@ class FSLRegistration(RegistrationBackend):
         # Check if ROI refinement is enabled
         do_refinement = getattr(state, "refine_roi_placement", True)
         v1_data = None
-        if do_refinement:
-            log("  ROI refinement enabled (±3 X, ±2 Y, ±1 Z voxels)")
-            log("  Association ROIs constrained to ±1 Y voxels from projection ROI")
+
+        # Load V1 data if refinement is enabled OR if using squarev4 (needs V1 for config selection)
+        needs_v1_data = do_refinement or shape_type == "squarev4"
+        if needs_v1_data:
+            if do_refinement:
+                log("  ROI refinement enabled (±3 X, ±2 Y, ±1 Z voxels)")
+                log("  Association ROIs constrained to ±1 Y, ±1 Z voxels from projection ROI")
+            if shape_type == "squarev4":
+                log("  Square 2x2: V1-optimized configuration selection enabled")
             # Load V1 data for fiber orientation analysis
             if state.v1_path and os.path.exists(state.v1_path):
                 v1_img = nib.load(state.v1_path)
                 v1_data = v1_img.get_fdata()
             else:
-                log("  WARNING: V1 data not available, skipping refinement")
-                do_refinement = False
+                log("  WARNING: V1 data not available")
+                if do_refinement:
+                    log("  Skipping refinement")
+                    do_refinement = False
+                if shape_type == "squarev4":
+                    log("  Squarev4 will use default configuration")
 
         roi_centroids = {}
         roi_native_paths = {}
@@ -584,6 +595,8 @@ class FSLRegistration(RegistrationBackend):
                 # Calculate original purity using appropriate mask
                 if shape_type == "sphere":
                     orig_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
+                elif shape_type == "squarev4":
+                    orig_mask = create_square_v4_mask(ref_shape, centroid, v1_data, "proj")
                 else:
                     orig_mask = create_square_v9_mask(ref_shape, centroid)
                 orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_mask, "proj")
@@ -596,10 +609,11 @@ class FSLRegistration(RegistrationBackend):
                     ref_shape,
                     voxel_size,
                     "proj",
-                    radius_mm=sphere_radius or 3.0,  # Use 3mm for squarev9 refinement search
+                    radius_mm=sphere_radius or 3.0,  # Use 3mm for square refinement search
                     search_x=3,
                     search_y=2,
                     search_z=1,
+                    shape_type=shape_type,
                 )
 
                 offset = (
@@ -623,6 +637,8 @@ class FSLRegistration(RegistrationBackend):
             # Create and save ROI mask based on shape type
             if shape_type == "sphere":
                 roi_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
+            elif shape_type == "squarev4":
+                roi_mask = create_square_v4_mask(ref_shape, centroid, v1_data, "proj")
             else:
                 roi_mask = create_square_v9_mask(ref_shape, centroid)
             n_voxels = int(np.sum(roi_mask))
@@ -643,11 +659,13 @@ class FSLRegistration(RegistrationBackend):
                 # Calculate original purity using appropriate mask
                 if shape_type == "sphere":
                     orig_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
+                elif shape_type == "squarev4":
+                    orig_mask = create_square_v4_mask(ref_shape, centroid, v1_data, "assoc")
                 else:
                     orig_mask = create_square_v9_mask(ref_shape, centroid)
                 orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_mask, "assoc")
 
-                # Refine placement with Y-constraint relative to projection ROI
+                # Refine placement with Y/Z-constraint relative to projection ROI
                 refined_centroid, refined_purity, _ = refine_roi_placement(
                     centroid,
                     v1_data,
@@ -655,12 +673,14 @@ class FSLRegistration(RegistrationBackend):
                     ref_shape,
                     voxel_size,
                     "assoc",
-                    radius_mm=sphere_radius or 3.0,  # Use 3mm for squarev9 refinement search
+                    radius_mm=sphere_radius or 3.0,  # Use 3mm for square refinement search
                     search_x=3,
                     search_y=2,
                     search_z=1,
                     reference_centroid=proj_centroid,
                     max_y_drift=1,
+                    max_z_drift=1,
+                    shape_type=shape_type,
                 )
 
                 offset = (
@@ -669,11 +689,12 @@ class FSLRegistration(RegistrationBackend):
                     refined_centroid[2] - centroid[2],
                 )
                 y_drift = abs(refined_centroid[1] - proj_centroid[1])
+                z_drift = abs(refined_centroid[2] - proj_centroid[2])
 
                 if offset != (0, 0, 0):
                     log(f"    {roi_name} refined: {refined_centroid} (offset: {offset})")
                     log(f"    Purity: {orig_purity * 100:.0f}% -> {refined_purity * 100:.0f}%")
-                    log(f"    Y-drift from {proj_name}: {y_drift} voxels")
+                    log(f"    Drift from {proj_name}: Y={y_drift}, Z={z_drift} voxels")
                 else:
                     log(
                         f"    {roi_name} no refinement needed (purity: {refined_purity * 100:.0f}%)"
@@ -686,6 +707,8 @@ class FSLRegistration(RegistrationBackend):
             # Create and save ROI mask based on shape type
             if shape_type == "sphere":
                 roi_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
+            elif shape_type == "squarev4":
+                roi_mask = create_square_v4_mask(ref_shape, centroid, v1_data, "assoc")
             else:
                 roi_mask = create_square_v9_mask(ref_shape, centroid)
             n_voxels = int(np.sum(roi_mask))

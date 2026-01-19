@@ -1267,6 +1267,7 @@ class DTIALPSApplication(tk.Tk):
             "sphere3": tk.BooleanVar(value=True),  # Default selected
             "sphere3p5": tk.BooleanVar(value=False),
             "squarev9": tk.BooleanVar(value=False),
+            "squarev4": tk.BooleanVar(value=False),
         }
 
         # Create checkboxes for each ROI shape
@@ -1281,6 +1282,9 @@ class DTIALPSApplication(tk.Tk):
         ).pack(side=tk.LEFT, padx=(0, 15))
         ttk.Checkbutton(
             roi_shapes_frame, text="Square 3x3", variable=self.roi_shape_vars["squarev9"]
+        ).pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Checkbutton(
+            roi_shapes_frame, text="Square 2x2", variable=self.roi_shape_vars["squarev4"]
         ).pack(side=tk.LEFT)
 
         # FA threshold for CSF filtering
@@ -1636,6 +1640,7 @@ class DTIALPSApplication(tk.Tk):
             "sphere3": {"type": "sphere", "radius": 3.0},
             "sphere3p5": {"type": "sphere", "radius": 3.5},
             "squarev9": {"type": "squarev9"},
+            "squarev4": {"type": "squarev4"},
         }
 
         for key, var in self.roi_shape_vars.items():

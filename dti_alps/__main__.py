@@ -11,6 +11,7 @@ Usage:
 ROI Reanalysis (post-processing with different ROI shapes):
     python -m dti_alps --reanalyze /path/to/output --sphere 3.0
     python -m dti_alps --reanalyze /path/to/output --squarev9
+    python -m dti_alps --reanalyze /path/to/output --squarev4
     python -m dti_alps --reanalyze /path/to/output --sphere 2.5 --refine
 
 Output naming:
@@ -20,6 +21,7 @@ Output naming:
     Examples:
         --squarev9          -> rois_squarev9/, alps_results_squarev9.csv
         --squarev9 --refine -> rois_squarev9_refined/, alps_results_squarev9_refined.csv
+        --squarev4          -> rois_squarev4/, alps_results_squarev4.csv
         --sphere 2.5        -> rois_sphere2p5/, alps_results_sphere2p5.csv
         --sphere 2.5 --refine -> rois_sphere2p5_refined/, alps_results_sphere2p5_refined.csv
 
@@ -65,7 +67,10 @@ Examples:
       Reanalyze with 3mm radius spherical ROIs
 
   %(prog)s --reanalyze /path/to/output --squarev9
-      Reanalyze with 3x3 voxel square ROIs
+      Reanalyze with 3x3 voxel square ROIs (9 voxels)
+
+  %(prog)s --reanalyze /path/to/output --squarev4
+      Reanalyze with 2x2 voxel square ROIs (4 voxels, V1-optimized)
 
   %(prog)s --reanalyze /path/to/output --sphere 2.5 --refine
       Reanalyze with 2.5mm spheres and ROI refinement enabled
@@ -94,6 +99,11 @@ Examples:
         "--squarev9",
         action="store_true",
         help="Create 3x3 voxel square ROIs in the axial plane (9 voxels total)",
+    )
+    shape_group.add_argument(
+        "--squarev4",
+        action="store_true",
+        help="Create 2x2 voxel square ROIs in the axial plane (4 voxels, V1-optimized)",
     )
 
     parser.add_argument(
@@ -129,6 +139,8 @@ def _run_reanalysis() -> None:
     # Create ROI shape configuration
     if args.sphere:
         roi_shape = ROIShape(shape_type="sphere", sphere_radius=args.sphere)
+    elif args.squarev4:
+        roi_shape = ROIShape(shape_type="squarev4")
     else:
         roi_shape = ROIShape(shape_type="squarev9")
 

@@ -25,6 +25,7 @@ from .alps_calculation import calculate_alps_lab, calculate_alps_pas
 from .registration.base import (
     calculate_roi_quality,
     create_sphere_mask,
+    create_square_v4_mask,
     create_square_v9_mask,
     find_mask_centroid,
     get_roi_template_paths,
@@ -36,7 +37,7 @@ from .registration.base import (
 class ROIShape:
     """ROI shape configuration."""
 
-    shape_type: str  # "sphere" or "squarev9"
+    shape_type: str  # "sphere", "squarev9", or "squarev4"
     sphere_radius: float | None = None  # Only for sphere type
 
     @property
@@ -46,7 +47,7 @@ class ROIShape:
             # Format radius: 3.0 -> "sphere3", 2.5 -> "sphere2p5"
             r_str = str(self.sphere_radius).replace(".", "p").rstrip("p0")
             return f"sphere{r_str}"
-        return "squarev9"
+        return self.shape_type  # squarev9 or squarev4
 
 
 @dataclass
@@ -242,9 +243,10 @@ def reanalyze_subject(
         ref_shape = fa_data.shape[:3]
         voxel_size = fa_img.header.get_zooms()[:3]
 
-        # Load V1 for refinement if enabled
+        # Load V1 for refinement or squarev4 (needs V1 for config selection)
         v1_data = None
-        if enable_refinement and v1_path:
+        needs_v1 = enable_refinement or roi_shape.shape_type == "squarev4"
+        if needs_v1 and v1_path:
             v1_data = nib.load(v1_path).get_fdata()
 
         # Create output directory for new ROIs
@@ -292,15 +294,17 @@ def reanalyze_subject(
             centroid = template_centroids[roi_name]
 
             if enable_refinement and v1_data is not None:
-                # Calculate sphere for purity calculation
+                # Calculate mask for purity calculation
                 if roi_shape.shape_type == "sphere":
-                    orig_sphere = create_sphere_mask(
+                    orig_mask = create_sphere_mask(
                         ref_shape, centroid, roi_shape.sphere_radius, voxel_size
                     )
+                elif roi_shape.shape_type == "squarev4":
+                    orig_mask = create_square_v4_mask(ref_shape, centroid, v1_data, "proj")
                 else:
-                    orig_sphere = create_square_v9_mask(ref_shape, centroid)
+                    orig_mask = create_square_v9_mask(ref_shape, centroid)
 
-                orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_sphere, "proj")
+                orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_mask, "proj")
 
                 # Refine placement
                 refined_centroid, refined_purity, _ = refine_roi_placement(
@@ -314,6 +318,7 @@ def reanalyze_subject(
                     search_x=3,
                     search_y=2,
                     search_z=1,
+                    shape_type=roi_shape.shape_type,
                 )
 
                 if refined_centroid != centroid:
@@ -327,6 +332,8 @@ def reanalyze_subject(
             # Create ROI mask
             if roi_shape.shape_type == "sphere":
                 mask = create_sphere_mask(ref_shape, centroid, roi_shape.sphere_radius, voxel_size)
+            elif roi_shape.shape_type == "squarev4":
+                mask = create_square_v4_mask(ref_shape, centroid, v1_data, "proj")
             else:
                 mask = create_square_v9_mask(ref_shape, centroid)
 
@@ -343,15 +350,17 @@ def reanalyze_subject(
 
             if enable_refinement and v1_data is not None:
                 if roi_shape.shape_type == "sphere":
-                    orig_sphere = create_sphere_mask(
+                    orig_mask = create_sphere_mask(
                         ref_shape, centroid, roi_shape.sphere_radius, voxel_size
                     )
+                elif roi_shape.shape_type == "squarev4":
+                    orig_mask = create_square_v4_mask(ref_shape, centroid, v1_data, "assoc")
                 else:
-                    orig_sphere = create_square_v9_mask(ref_shape, centroid)
+                    orig_mask = create_square_v9_mask(ref_shape, centroid)
 
-                orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_sphere, "assoc")
+                orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_mask, "assoc")
 
-                # Refine with Y-constraint
+                # Refine with Y/Z-constraint
                 refined_centroid, refined_purity, _ = refine_roi_placement(
                     centroid,
                     v1_data,
@@ -365,6 +374,8 @@ def reanalyze_subject(
                     search_z=1,
                     reference_centroid=proj_centroid,
                     max_y_drift=1,
+                    max_z_drift=1,
+                    shape_type=roi_shape.shape_type,
                 )
 
                 if refined_centroid != centroid:
@@ -378,6 +389,8 @@ def reanalyze_subject(
             # Create ROI mask
             if roi_shape.shape_type == "sphere":
                 mask = create_sphere_mask(ref_shape, centroid, roi_shape.sphere_radius, voxel_size)
+            elif roi_shape.shape_type == "squarev4":
+                mask = create_square_v4_mask(ref_shape, centroid, v1_data, "assoc")
             else:
                 mask = create_square_v9_mask(ref_shape, centroid)
 
