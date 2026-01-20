@@ -1263,28 +1263,28 @@ class DTIALPSApplication(tk.Tk):
 
         # ROI shape checkbox variables
         self.roi_shape_vars = {
+            "sphere2": tk.BooleanVar(value=False),
             "sphere2p5": tk.BooleanVar(value=False),
             "sphere3": tk.BooleanVar(value=True),  # Default selected
-            "sphere3p5": tk.BooleanVar(value=False),
-            "squarev9": tk.BooleanVar(value=False),
             "squarev4": tk.BooleanVar(value=False),
+            "squarev9": tk.BooleanVar(value=False),
         }
 
         # Create checkboxes for each ROI shape
         ttk.Checkbutton(
+            roi_shapes_frame, text="Sphere 2.0mm", variable=self.roi_shape_vars["sphere2"]
+        ).pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Checkbutton(
             roi_shapes_frame, text="Sphere 2.5mm", variable=self.roi_shape_vars["sphere2p5"]
         ).pack(side=tk.LEFT, padx=(0, 15))
         ttk.Checkbutton(
-            roi_shapes_frame, text="Sphere 3mm", variable=self.roi_shape_vars["sphere3"]
-        ).pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Checkbutton(
-            roi_shapes_frame, text="Sphere 3.5mm", variable=self.roi_shape_vars["sphere3p5"]
-        ).pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Checkbutton(
-            roi_shapes_frame, text="Square 3x3", variable=self.roi_shape_vars["squarev9"]
+            roi_shapes_frame, text="Sphere 3.0mm", variable=self.roi_shape_vars["sphere3"]
         ).pack(side=tk.LEFT, padx=(0, 15))
         ttk.Checkbutton(
             roi_shapes_frame, text="Square 2x2", variable=self.roi_shape_vars["squarev4"]
+        ).pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Checkbutton(
+            roi_shapes_frame, text="Square 3x3", variable=self.roi_shape_vars["squarev9"]
         ).pack(side=tk.LEFT)
 
         # FA threshold for CSF filtering
@@ -1327,7 +1327,7 @@ class DTIALPSApplication(tk.Tk):
         self.refine_roi_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             param_frame,
-            text="Enable ROI refinement (±3 X, ±2 Y, ±1 Z voxels; ±1 Y drift between proj/assoc)",
+            text="Enable ROI refinement (±3 X, ±2 Y, ±2 Z voxels; ±1 Y/Z drift between proj/assoc)",
             variable=self.refine_roi_var,
         ).grid(row=row, column=0, columnspan=3, sticky=tk.W, pady=5)
 
@@ -1636,11 +1636,11 @@ class DTIALPSApplication(tk.Tk):
 
         # Map checkbox keys to shape configurations
         shape_configs = {
+            "sphere2": {"type": "sphere", "radius": 2.0},
             "sphere2p5": {"type": "sphere", "radius": 2.5},
             "sphere3": {"type": "sphere", "radius": 3.0},
-            "sphere3p5": {"type": "sphere", "radius": 3.5},
-            "squarev9": {"type": "squarev9"},
             "squarev4": {"type": "squarev4"},
+            "squarev9": {"type": "squarev9"},
         }
 
         for key, var in self.roi_shape_vars.items():

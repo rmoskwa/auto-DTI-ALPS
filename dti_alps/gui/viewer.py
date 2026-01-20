@@ -172,11 +172,12 @@ def get_roi_display_name(roi_type: str) -> str:
     refined_suffix = " (r)" if is_refined else ""
 
     if base_type == "rois":
-        return f"Sphere 3mm{refined_suffix}"
+        return f"Sphere 3.0mm{refined_suffix}"
     elif base_type.startswith("sphere"):
-        # e.g., "sphere2p5" -> "Sphere 2.5mm"
-        radius = base_type[6:].replace("p", ".")
-        return f"Sphere {radius}mm{refined_suffix}"
+        # e.g., "sphere2p5" -> "Sphere 2.5mm", "sphere2" -> "Sphere 2.0mm"
+        radius_str = base_type[6:].replace("p", ".")
+        radius = float(radius_str)
+        return f"Sphere {radius:.1f}mm{refined_suffix}"
     elif base_type == "squarev9":
         return f"Square 3x3{refined_suffix}"
     elif base_type == "squarev4":
