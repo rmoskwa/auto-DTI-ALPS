@@ -29,7 +29,7 @@ from .registration.base import (
     create_square_v9_mask,
     find_mask_centroid,
     get_roi_template_paths,
-    refine_roi_placement,
+    refine_roi_pair_placement,
 )
 
 
@@ -288,117 +288,111 @@ def reanalyze_subject(
 
             template_centroids[roi_name] = centroid
 
-        # Second pass: Process projection ROIs first (for refinement constraint)
+        # Second pass: Jointly refine projection and association ROI pairs
+        # This optimizes both ROIs together to find the best combined placement
         roi_centroids = {}
-        for roi_name in ["left_proj", "right_proj"]:
-            centroid = template_centroids[roi_name]
+        for side in ["left", "right"]:
+            proj_name = f"{side}_proj"
+            assoc_name = f"{side}_assoc"
+            proj_centroid = template_centroids[proj_name]
+            assoc_centroid = template_centroids[assoc_name]
 
             if enable_refinement and v1_data is not None:
-                # Calculate mask for purity calculation
+                # Calculate original purities for logging
                 if roi_shape.shape_type == "sphere":
-                    orig_mask = create_sphere_mask(
-                        ref_shape, centroid, roi_shape.sphere_radius, voxel_size
+                    orig_proj_mask = create_sphere_mask(
+                        ref_shape, proj_centroid, roi_shape.sphere_radius, voxel_size
+                    )
+                    orig_assoc_mask = create_sphere_mask(
+                        ref_shape, assoc_centroid, roi_shape.sphere_radius, voxel_size
                     )
                 elif roi_shape.shape_type == "squarev4":
-                    orig_mask = create_square_v4_mask(ref_shape, centroid, v1_data, "proj")
+                    orig_proj_mask = create_square_v4_mask(
+                        ref_shape, proj_centroid, v1_data, "proj"
+                    )
+                    orig_assoc_mask = create_square_v4_mask(
+                        ref_shape, assoc_centroid, v1_data, "assoc"
+                    )
                 else:
-                    orig_mask = create_square_v9_mask(ref_shape, centroid)
+                    orig_proj_mask = create_square_v9_mask(ref_shape, proj_centroid)
+                    orig_assoc_mask = create_square_v9_mask(ref_shape, assoc_centroid)
 
-                orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_mask, "proj")
-
-                # Refine placement
-                refined_centroid, refined_purity, _ = refine_roi_placement(
-                    centroid,
-                    v1_data,
-                    fa_data,
-                    ref_shape,
-                    voxel_size,
-                    "proj",
-                    radius_mm=roi_shape.sphere_radius or 3.0,
-                    search_x=3,
-                    search_y=2,
-                    search_z=2,
-                    shape_type=roi_shape.shape_type,
+                orig_proj_purity, _, _, _ = calculate_roi_quality(
+                    v1_data, fa_data, orig_proj_mask, "proj"
+                )
+                orig_assoc_purity, _, _, _ = calculate_roi_quality(
+                    v1_data, fa_data, orig_assoc_mask, "assoc"
                 )
 
-                if refined_centroid != centroid:
-                    log(
-                        f"    {roi_name}: purity {orig_purity * 100:.0f}% -> {refined_purity * 100:.0f}%"
-                    )
-                centroid = refined_centroid
-
-            roi_centroids[roi_name] = centroid
-
-            # Create ROI mask
-            if roi_shape.shape_type == "sphere":
-                mask = create_sphere_mask(ref_shape, centroid, roi_shape.sphere_radius, voxel_size)
-            elif roi_shape.shape_type == "squarev4":
-                mask = create_square_v4_mask(ref_shape, centroid, v1_data, "proj")
-            else:
-                mask = create_square_v9_mask(ref_shape, centroid)
-
-            # Save ROI
-            roi_path = roi_dir / f"{subject_id}_{roi_name}.nii.gz"
-            roi_img = nib.Nifti1Image(mask.astype(np.float32), fa_img.affine, fa_img.header)
-            nib.save(roi_img, str(roi_path))
-            roi_mask_paths[roi_name] = str(roi_path)
-
-        # Third pass: Process association ROIs with Y-constraint
-        for roi_name, proj_name in [("left_assoc", "left_proj"), ("right_assoc", "right_proj")]:
-            centroid = template_centroids[roi_name]
-            proj_centroid = roi_centroids[proj_name]
-
-            if enable_refinement and v1_data is not None:
-                if roi_shape.shape_type == "sphere":
-                    orig_mask = create_sphere_mask(
-                        ref_shape, centroid, roi_shape.sphere_radius, voxel_size
-                    )
-                elif roi_shape.shape_type == "squarev4":
-                    orig_mask = create_square_v4_mask(ref_shape, centroid, v1_data, "assoc")
-                else:
-                    orig_mask = create_square_v9_mask(ref_shape, centroid)
-
-                orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_mask, "assoc")
-
-                # Refine with Y/Z-constraint
-                refined_centroid, refined_purity, _ = refine_roi_placement(
-                    centroid,
+                # Jointly refine both ROIs as a pair
+                (
+                    refined_proj,
+                    refined_assoc,
+                    refined_proj_purity,
+                    refined_assoc_purity,
+                    _,
+                ) = refine_roi_pair_placement(
+                    proj_centroid,
+                    assoc_centroid,
                     v1_data,
                     fa_data,
                     ref_shape,
                     voxel_size,
-                    "assoc",
                     radius_mm=roi_shape.sphere_radius or 3.0,
                     search_x=3,
                     search_y=2,
                     search_z=2,
-                    reference_centroid=proj_centroid,
                     max_y_drift=1,
                     max_z_drift=1,
                     shape_type=roi_shape.shape_type,
                 )
 
-                if refined_centroid != centroid:
+                if refined_proj != proj_centroid:
                     log(
-                        f"    {roi_name}: purity {orig_purity * 100:.0f}% -> {refined_purity * 100:.0f}%"
+                        f"    {proj_name}: purity {orig_proj_purity * 100:.0f}% -> "
+                        f"{refined_proj_purity * 100:.0f}%"
                     )
-                centroid = refined_centroid
+                if refined_assoc != assoc_centroid:
+                    log(
+                        f"    {assoc_name}: purity {orig_assoc_purity * 100:.0f}% -> "
+                        f"{refined_assoc_purity * 100:.0f}%"
+                    )
 
-            roi_centroids[roi_name] = centroid
+                proj_centroid = refined_proj
+                assoc_centroid = refined_assoc
 
-            # Create ROI mask
+            roi_centroids[proj_name] = proj_centroid
+            roi_centroids[assoc_name] = assoc_centroid
+
+            # Create and save projection ROI mask
             if roi_shape.shape_type == "sphere":
-                mask = create_sphere_mask(ref_shape, centroid, roi_shape.sphere_radius, voxel_size)
+                proj_mask = create_sphere_mask(
+                    ref_shape, proj_centroid, roi_shape.sphere_radius, voxel_size
+                )
             elif roi_shape.shape_type == "squarev4":
-                mask = create_square_v4_mask(ref_shape, centroid, v1_data, "assoc")
+                proj_mask = create_square_v4_mask(ref_shape, proj_centroid, v1_data, "proj")
             else:
-                mask = create_square_v9_mask(ref_shape, centroid)
+                proj_mask = create_square_v9_mask(ref_shape, proj_centroid)
 
-            # Save ROI
-            roi_path = roi_dir / f"{subject_id}_{roi_name}.nii.gz"
-            roi_img = nib.Nifti1Image(mask.astype(np.float32), fa_img.affine, fa_img.header)
-            nib.save(roi_img, str(roi_path))
-            roi_mask_paths[roi_name] = str(roi_path)
+            proj_path = roi_dir / f"{subject_id}_{proj_name}.nii.gz"
+            proj_img = nib.Nifti1Image(proj_mask.astype(np.float32), fa_img.affine, fa_img.header)
+            nib.save(proj_img, str(proj_path))
+            roi_mask_paths[proj_name] = str(proj_path)
+
+            # Create and save association ROI mask
+            if roi_shape.shape_type == "sphere":
+                assoc_mask = create_sphere_mask(
+                    ref_shape, assoc_centroid, roi_shape.sphere_radius, voxel_size
+                )
+            elif roi_shape.shape_type == "squarev4":
+                assoc_mask = create_square_v4_mask(ref_shape, assoc_centroid, v1_data, "assoc")
+            else:
+                assoc_mask = create_square_v9_mask(ref_shape, assoc_centroid)
+
+            assoc_path = roi_dir / f"{subject_id}_{assoc_name}.nii.gz"
+            assoc_img = nib.Nifti1Image(assoc_mask.astype(np.float32), fa_img.affine, fa_img.header)
+            nib.save(assoc_img, str(assoc_path))
+            roi_mask_paths[assoc_name] = str(assoc_path)
 
         # Load ROI masks for ALPS calculation
         masks = {}

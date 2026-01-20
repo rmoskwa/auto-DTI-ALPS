@@ -583,3 +583,166 @@ def refine_roi_placement(
                     best_purity = purity
 
     return best_center, best_purity, best_score
+
+
+def refine_roi_pair_placement(
+    proj_centroid: tuple[int, int, int],
+    assoc_centroid: tuple[int, int, int],
+    v1_data: np.ndarray,
+    fa_data: np.ndarray,
+    shape: tuple[int, int, int],
+    voxel_size: tuple[float, float, float],
+    radius_mm: float = 3.0,
+    search_x: int = 3,
+    search_y: int = 2,
+    search_z: int = 2,
+    max_y_drift: int = 1,
+    max_z_drift: int = 1,
+    shape_type: str = "sphere",
+) -> tuple[tuple[int, int, int], tuple[int, int, int], float, float, float]:
+    """
+    Jointly refine projection and association ROI placement as a pair.
+
+    Instead of optimizing projection ROI first and then constraining association ROI
+    to it, this function searches all valid (proj, assoc) pairs simultaneously and
+    selects the pair that maximizes the combined quality score.
+
+    This approach prevents suboptimal results where a locally-optimal projection ROI
+    position severely limits the quality of the paired association ROI.
+
+    Parameters
+    ----------
+    proj_centroid : tuple of int
+        Initial projection ROI centroid from template registration (x, y, z)
+    assoc_centroid : tuple of int
+        Initial association ROI centroid from template registration (x, y, z)
+    v1_data : np.ndarray
+        Primary eigenvector data (x, y, z, 3)
+    fa_data : np.ndarray
+        Fractional anisotropy data (x, y, z)
+    shape : tuple of int
+        Shape of the image volume
+    voxel_size : tuple of float
+        Voxel dimensions in mm
+    radius_mm : float
+        Sphere radius in millimeters (used for sphere shape)
+    search_x : int
+        Search range in X direction (voxels), default 3
+    search_y : int
+        Search range in Y direction (voxels), default 2
+    search_z : int
+        Search range in Z direction (voxels), default 2
+    max_y_drift : int
+        Maximum allowed Y-coordinate difference between proj and assoc ROIs (voxels).
+        Default 1.
+    max_z_drift : int
+        Maximum allowed Z-coordinate difference between proj and assoc ROIs (voxels).
+        Default 1.
+    shape_type : str
+        ROI shape type: "sphere", "squarev9", or "squarev4". Default "sphere".
+
+    Returns
+    -------
+    tuple of (best_proj_center, best_assoc_center, best_proj_purity, best_assoc_purity, best_combined_score)
+        best_proj_center: optimal projection ROI centroid position
+        best_assoc_center: optimal association ROI centroid position
+        best_proj_purity: fiber purity at optimal projection position
+        best_assoc_purity: fiber purity at optimal association position
+        best_combined_score: combined quality score (geometric mean of individual scores)
+    """
+    best_proj_center = proj_centroid
+    best_assoc_center = assoc_centroid
+    best_combined_score = -1.0
+    best_proj_purity = 0.0
+    best_assoc_purity = 0.0
+
+    # Precompute quality scores for all projection ROI candidate positions
+    # This avoids redundant mask creation and quality calculation in the pair search
+    proj_scores: dict[tuple[int, int, int], tuple[float, float]] = {}
+    for dx in range(-search_x, search_x + 1):
+        for dy in range(-search_y, search_y + 1):
+            for dz in range(-search_z, search_z + 1):
+                test_center = (
+                    proj_centroid[0] + dx,
+                    proj_centroid[1] + dy,
+                    proj_centroid[2] + dz,
+                )
+
+                # Ensure center is within bounds
+                if not (
+                    0 <= test_center[0] < shape[0]
+                    and 0 <= test_center[1] < shape[1]
+                    and 0 <= test_center[2] < shape[2]
+                ):
+                    continue
+
+                # Create mask and calculate quality
+                if shape_type == "sphere":
+                    mask = create_sphere_mask(shape, test_center, radius_mm, voxel_size)
+                elif shape_type == "squarev4":
+                    mask = create_square_v4_mask(shape, test_center, v1_data, "proj")
+                else:  # squarev9
+                    mask = create_square_v9_mask(shape, test_center)
+
+                purity, _, _, score = calculate_roi_quality(v1_data, fa_data, mask, "proj")
+                if score > 0:
+                    proj_scores[test_center] = (purity, score)
+
+    # Precompute quality scores for all association ROI candidate positions
+    assoc_scores: dict[tuple[int, int, int], tuple[float, float]] = {}
+    for dx in range(-search_x, search_x + 1):
+        for dy in range(-search_y, search_y + 1):
+            for dz in range(-search_z, search_z + 1):
+                test_center = (
+                    assoc_centroid[0] + dx,
+                    assoc_centroid[1] + dy,
+                    assoc_centroid[2] + dz,
+                )
+
+                # Ensure center is within bounds
+                if not (
+                    0 <= test_center[0] < shape[0]
+                    and 0 <= test_center[1] < shape[1]
+                    and 0 <= test_center[2] < shape[2]
+                ):
+                    continue
+
+                # Create mask and calculate quality
+                if shape_type == "sphere":
+                    mask = create_sphere_mask(shape, test_center, radius_mm, voxel_size)
+                elif shape_type == "squarev4":
+                    mask = create_square_v4_mask(shape, test_center, v1_data, "assoc")
+                else:  # squarev9
+                    mask = create_square_v9_mask(shape, test_center)
+
+                purity, _, _, score = calculate_roi_quality(v1_data, fa_data, mask, "assoc")
+                if score > 0:
+                    assoc_scores[test_center] = (purity, score)
+
+    # Search all valid (proj, assoc) pairs using precomputed scores
+    for test_proj, (proj_purity, proj_score) in proj_scores.items():
+        for test_assoc, (assoc_purity, assoc_score) in assoc_scores.items():
+            # Check Y and Z drift constraint between proj and assoc
+            y_drift = abs(test_assoc[1] - test_proj[1])
+            z_drift = abs(test_assoc[2] - test_proj[2])
+            if y_drift > max_y_drift or z_drift > max_z_drift:
+                continue
+
+            # Combined score: geometric mean of individual scores
+            # This ensures both ROIs must have good quality
+            combined_score = np.sqrt(proj_score * assoc_score)
+
+            if combined_score > best_combined_score:
+                best_combined_score = combined_score
+                best_proj_center = test_proj
+                best_assoc_center = test_assoc
+                best_proj_purity = proj_purity
+                best_assoc_purity = assoc_purity
+
+    return (
+        best_proj_center,
+        best_assoc_center,
+        best_proj_purity,
+        best_assoc_purity,
+        best_combined_score,
+    )

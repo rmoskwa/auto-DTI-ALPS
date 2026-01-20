@@ -33,7 +33,7 @@ from .base import (
     create_square_v9_mask,
     find_mask_centroid,
     get_roi_template_paths,
-    refine_roi_placement,
+    refine_roi_pair_placement,
 )
 
 if TYPE_CHECKING:
@@ -586,138 +586,143 @@ class FSLRegistration(RegistrationBackend):
             template_centroids[roi_name] = centroid
             log(f"    Template centroid: {centroid}")
 
-        # Second pass: Refine projection ROIs first (no constraint)
-        # This establishes the Y-coordinate reference for association ROIs
-        for roi_name in ["left_proj", "right_proj"]:
-            centroid = template_centroids[roi_name]
+        # Second pass: Jointly refine projection and association ROI pairs
+        # This optimizes both ROIs together to find the best combined placement
+        # while respecting the Y/Z drift constraint between paired ROIs
+        for side in ["left", "right"]:
+            proj_name = f"{side}_proj"
+            assoc_name = f"{side}_assoc"
+            proj_centroid = template_centroids[proj_name]
+            assoc_centroid = template_centroids[assoc_name]
 
             if do_refinement and v1_data is not None:
-                # Calculate original purity using appropriate mask
+                # Calculate original purities for logging
                 if shape_type == "sphere":
-                    orig_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
-                elif shape_type == "squarev4":
-                    orig_mask = create_square_v4_mask(ref_shape, centroid, v1_data, "proj")
-                else:
-                    orig_mask = create_square_v9_mask(ref_shape, centroid)
-                orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_mask, "proj")
-
-                # Refine placement (no reference constraint for projection ROIs)
-                refined_centroid, refined_purity, _ = refine_roi_placement(
-                    centroid,
-                    v1_data,
-                    fa_data,
-                    ref_shape,
-                    voxel_size,
-                    "proj",
-                    radius_mm=sphere_radius or 3.0,  # Use 3mm for square refinement search
-                    search_x=3,
-                    search_y=2,
-                    search_z=2,
-                    shape_type=shape_type,
-                )
-
-                offset = (
-                    refined_centroid[0] - centroid[0],
-                    refined_centroid[1] - centroid[1],
-                    refined_centroid[2] - centroid[2],
-                )
-
-                if offset != (0, 0, 0):
-                    log(f"    {roi_name} refined: {refined_centroid} (offset: {offset})")
-                    log(f"    Purity: {orig_purity * 100:.0f}% -> {refined_purity * 100:.0f}%")
-                else:
-                    log(
-                        f"    {roi_name} no refinement needed (purity: {refined_purity * 100:.0f}%)"
+                    orig_proj_mask = create_sphere_mask(
+                        ref_shape, proj_centroid, sphere_radius, voxel_size
                     )
-
-                centroid = refined_centroid
-
-            roi_centroids[roi_name] = centroid
-
-            # Create and save ROI mask based on shape type
-            if shape_type == "sphere":
-                roi_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
-            elif shape_type == "squarev4":
-                roi_mask = create_square_v4_mask(ref_shape, centroid, v1_data, "proj")
-            else:
-                roi_mask = create_square_v9_mask(ref_shape, centroid)
-            n_voxels = int(np.sum(roi_mask))
-            log(f"    Created {roi_name} with {n_voxels} voxels")
-
-            roi_path = roi_dir / f"{prefix}_{roi_name}.nii.gz"
-            roi_img = nib.Nifti1Image(roi_mask.astype(np.float32), ref_img.affine, ref_img.header)
-            nib.save(roi_img, str(roi_path))
-            roi_native_paths[roi_name] = str(roi_path)
-
-        # Third pass: Refine association ROIs with Y-constraint from paired projection ROI
-        # This ensures proj and assoc ROIs stay aligned to sample same X-direction diffusion
-        for roi_name, proj_name in [("left_assoc", "left_proj"), ("right_assoc", "right_proj")]:
-            centroid = template_centroids[roi_name]
-            proj_centroid = roi_centroids[proj_name]
-
-            if do_refinement and v1_data is not None:
-                # Calculate original purity using appropriate mask
-                if shape_type == "sphere":
-                    orig_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
+                    orig_assoc_mask = create_sphere_mask(
+                        ref_shape, assoc_centroid, sphere_radius, voxel_size
+                    )
                 elif shape_type == "squarev4":
-                    orig_mask = create_square_v4_mask(ref_shape, centroid, v1_data, "assoc")
+                    orig_proj_mask = create_square_v4_mask(
+                        ref_shape, proj_centroid, v1_data, "proj"
+                    )
+                    orig_assoc_mask = create_square_v4_mask(
+                        ref_shape, assoc_centroid, v1_data, "assoc"
+                    )
                 else:
-                    orig_mask = create_square_v9_mask(ref_shape, centroid)
-                orig_purity, _, _, _ = calculate_roi_quality(v1_data, fa_data, orig_mask, "assoc")
+                    orig_proj_mask = create_square_v9_mask(ref_shape, proj_centroid)
+                    orig_assoc_mask = create_square_v9_mask(ref_shape, assoc_centroid)
 
-                # Refine placement with Y/Z-constraint relative to projection ROI
-                refined_centroid, refined_purity, _ = refine_roi_placement(
-                    centroid,
+                orig_proj_purity, _, _, _ = calculate_roi_quality(
+                    v1_data, fa_data, orig_proj_mask, "proj"
+                )
+                orig_assoc_purity, _, _, _ = calculate_roi_quality(
+                    v1_data, fa_data, orig_assoc_mask, "assoc"
+                )
+
+                # Jointly refine both ROIs as a pair
+                (
+                    refined_proj,
+                    refined_assoc,
+                    refined_proj_purity,
+                    refined_assoc_purity,
+                    _,
+                ) = refine_roi_pair_placement(
+                    proj_centroid,
+                    assoc_centroid,
                     v1_data,
                     fa_data,
                     ref_shape,
                     voxel_size,
-                    "assoc",
-                    radius_mm=sphere_radius or 3.0,  # Use 3mm for square refinement search
+                    radius_mm=sphere_radius or 3.0,
                     search_x=3,
                     search_y=2,
                     search_z=2,
-                    reference_centroid=proj_centroid,
                     max_y_drift=1,
                     max_z_drift=1,
                     shape_type=shape_type,
                 )
 
-                offset = (
-                    refined_centroid[0] - centroid[0],
-                    refined_centroid[1] - centroid[1],
-                    refined_centroid[2] - centroid[2],
+                # Log projection ROI refinement
+                proj_offset = (
+                    refined_proj[0] - proj_centroid[0],
+                    refined_proj[1] - proj_centroid[1],
+                    refined_proj[2] - proj_centroid[2],
                 )
-                y_drift = abs(refined_centroid[1] - proj_centroid[1])
-                z_drift = abs(refined_centroid[2] - proj_centroid[2])
+                if proj_offset != (0, 0, 0):
+                    log(f"    {proj_name} refined: {refined_proj} (offset: {proj_offset})")
+                    log(
+                        f"    Purity: {orig_proj_purity * 100:.0f}% -> "
+                        f"{refined_proj_purity * 100:.0f}%"
+                    )
+                else:
+                    log(
+                        f"    {proj_name} no refinement needed "
+                        f"(purity: {refined_proj_purity * 100:.0f}%)"
+                    )
 
-                if offset != (0, 0, 0):
-                    log(f"    {roi_name} refined: {refined_centroid} (offset: {offset})")
-                    log(f"    Purity: {orig_purity * 100:.0f}% -> {refined_purity * 100:.0f}%")
+                # Log association ROI refinement
+                assoc_offset = (
+                    refined_assoc[0] - assoc_centroid[0],
+                    refined_assoc[1] - assoc_centroid[1],
+                    refined_assoc[2] - assoc_centroid[2],
+                )
+                y_drift = abs(refined_assoc[1] - refined_proj[1])
+                z_drift = abs(refined_assoc[2] - refined_proj[2])
+                if assoc_offset != (0, 0, 0):
+                    log(f"    {assoc_name} refined: {refined_assoc} (offset: {assoc_offset})")
+                    log(
+                        f"    Purity: {orig_assoc_purity * 100:.0f}% -> "
+                        f"{refined_assoc_purity * 100:.0f}%"
+                    )
                     log(f"    Drift from {proj_name}: Y={y_drift}, Z={z_drift} voxels")
                 else:
                     log(
-                        f"    {roi_name} no refinement needed (purity: {refined_purity * 100:.0f}%)"
+                        f"    {assoc_name} no refinement needed "
+                        f"(purity: {refined_assoc_purity * 100:.0f}%)"
                     )
 
-                centroid = refined_centroid
+                proj_centroid = refined_proj
+                assoc_centroid = refined_assoc
 
-            roi_centroids[roi_name] = centroid
+            roi_centroids[proj_name] = proj_centroid
+            roi_centroids[assoc_name] = assoc_centroid
 
-            # Create and save ROI mask based on shape type
+            # Create and save projection ROI mask
             if shape_type == "sphere":
-                roi_mask = create_sphere_mask(ref_shape, centroid, sphere_radius, voxel_size)
+                proj_mask = create_sphere_mask(ref_shape, proj_centroid, sphere_radius, voxel_size)
             elif shape_type == "squarev4":
-                roi_mask = create_square_v4_mask(ref_shape, centroid, v1_data, "assoc")
+                proj_mask = create_square_v4_mask(ref_shape, proj_centroid, v1_data, "proj")
             else:
-                roi_mask = create_square_v9_mask(ref_shape, centroid)
-            n_voxels = int(np.sum(roi_mask))
-            log(f"    Created {roi_name} with {n_voxels} voxels")
+                proj_mask = create_square_v9_mask(ref_shape, proj_centroid)
+            n_voxels = int(np.sum(proj_mask))
+            log(f"    Created {proj_name} with {n_voxels} voxels")
 
-            roi_path = roi_dir / f"{prefix}_{roi_name}.nii.gz"
-            roi_img = nib.Nifti1Image(roi_mask.astype(np.float32), ref_img.affine, ref_img.header)
-            nib.save(roi_img, str(roi_path))
-            roi_native_paths[roi_name] = str(roi_path)
+            proj_path = roi_dir / f"{prefix}_{proj_name}.nii.gz"
+            proj_img = nib.Nifti1Image(proj_mask.astype(np.float32), ref_img.affine, ref_img.header)
+            nib.save(proj_img, str(proj_path))
+            roi_native_paths[proj_name] = str(proj_path)
+
+            # Create and save association ROI mask
+            if shape_type == "sphere":
+                assoc_mask = create_sphere_mask(
+                    ref_shape, assoc_centroid, sphere_radius, voxel_size
+                )
+            elif shape_type == "squarev4":
+                assoc_mask = create_square_v4_mask(ref_shape, assoc_centroid, v1_data, "assoc")
+            else:
+                assoc_mask = create_square_v9_mask(ref_shape, assoc_centroid)
+            n_voxels = int(np.sum(assoc_mask))
+            log(f"    Created {assoc_name} with {n_voxels} voxels")
+
+            assoc_path = roi_dir / f"{prefix}_{assoc_name}.nii.gz"
+            assoc_img = nib.Nifti1Image(
+                assoc_mask.astype(np.float32), ref_img.affine, ref_img.header
+            )
+            nib.save(assoc_img, str(assoc_path))
+            roi_native_paths[assoc_name] = str(assoc_path)
 
         log("ROI placement completed successfully")
         log(f"  Left projection ROI: {roi_native_paths['left_proj']}")
