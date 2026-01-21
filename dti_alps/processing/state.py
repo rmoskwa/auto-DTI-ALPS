@@ -173,9 +173,17 @@ class PipelineState:
     # Keys: 'left_proj', 'left_assoc', 'right_proj', 'right_assoc'
     roi_mask_paths: dict[str, str] = field(default_factory=dict)
 
+    # All ROI results indexed by shape name (e.g., "rois_sphere3_refined")
+    # Each entry contains: {"roi_mask_paths": {...}, "roi_centers": {...}}
+    all_roi_results: dict[str, dict] | None = None
+
     # Results
     roi_centers: dict[str, tuple] | None = None
     alps_results: dict[str, float] | None = None
+
+    # Per-shape ALPS results indexed by shape name (e.g., "sphere3_refined")
+    # Each entry is a dict with ALPS calculation results for that shape
+    alps_results_by_shape: dict[str, dict] | None = None
 
     def get_output_path(self, suffix: str) -> str:
         """Generate output file path with prefix and suffix."""
@@ -277,15 +285,20 @@ class SubjectResult:
     error_message: str | None = None
     processing_time: float = 0.0
 
-    # ALPS-LAB results
+    # ALPS-LAB results (for primary/first shape - backward compatibility)
     alps_lab_left: float | None = None
     alps_lab_right: float | None = None
     alps_lab_bilateral: float | None = None
 
-    # ALPS-PAS results (populated when method is ALPS-PAS or Both)
+    # ALPS-PAS results (for primary/first shape - backward compatibility)
     alps_pas_left: float | None = None
     alps_pas_right: float | None = None
     alps_pas_bilateral: float | None = None
+
+    # Per-shape ALPS results indexed by shape name (e.g., "sphere3_refined")
+    # Each entry is a dict with: alps_lab_left, alps_lab_right, alps_lab_bilateral,
+    # alps_pas_left, alps_pas_right, alps_pas_bilateral
+    alps_results_by_shape: dict[str, dict] = field(default_factory=dict)
 
     # Detailed diffusivity values for ALPS-LAB (optional, populated on success)
     dxx_proj_left: float | None = None

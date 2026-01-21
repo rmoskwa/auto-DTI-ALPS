@@ -240,15 +240,28 @@ class BatchRunner:
                 result.status = "completed"
                 result.alps_method = state.alps_results.get("method")
 
-                # Store ALPS-LAB results (if available)
+                # Store ALPS-LAB results (if available) - for backward compatibility
                 result.alps_lab_left = state.alps_results.get("LAB_ALPS_left")
                 result.alps_lab_right = state.alps_results.get("LAB_ALPS_right")
                 result.alps_lab_bilateral = state.alps_results.get("LAB_ALPS_bilateral")
 
-                # Store ALPS-PAS results (if available)
+                # Store ALPS-PAS results (if available) - for backward compatibility
                 result.alps_pas_left = state.alps_results.get("PAS_ALPS_left")
                 result.alps_pas_right = state.alps_results.get("PAS_ALPS_right")
                 result.alps_pas_bilateral = state.alps_results.get("PAS_ALPS_bilateral")
+
+                # Store per-shape ALPS results
+                if state.alps_results_by_shape:
+                    for shape_name, shape_results in state.alps_results_by_shape.items():
+                        result.alps_results_by_shape[shape_name] = {
+                            "alps_method": shape_results.get("method"),
+                            "alps_lab_left": shape_results.get("LAB_ALPS_left"),
+                            "alps_lab_right": shape_results.get("LAB_ALPS_right"),
+                            "alps_lab_bilateral": shape_results.get("LAB_ALPS_bilateral"),
+                            "alps_pas_left": shape_results.get("PAS_ALPS_left"),
+                            "alps_pas_right": shape_results.get("PAS_ALPS_right"),
+                            "alps_pas_bilateral": shape_results.get("PAS_ALPS_bilateral"),
+                        }
 
                 # Store detailed diffusivity values (from LAB method)
                 result.dxx_proj_left = state.alps_results.get("LAB_Dxx_proj_left")
@@ -260,33 +273,70 @@ class BatchRunner:
                 result.dzz_assoc_left = state.alps_results.get("LAB_Dzz_assoc_left")
                 result.dzz_assoc_right = state.alps_results.get("LAB_Dzz_assoc_right")
 
-                # Log appropriate results based on method
-                method = result.alps_method
-                if method == "ALPS-LAB" and result.alps_lab_bilateral is not None:
-                    self._notify(
-                        "log",
-                        f"  ALPS-LAB: L={result.alps_lab_left:.4f}, "
-                        f"R={result.alps_lab_right:.4f}, Bi={result.alps_lab_bilateral:.4f}",
-                    )
-                elif method == "ALPS-PAS" and result.alps_pas_bilateral is not None:
-                    self._notify(
-                        "log",
-                        f"  ALPS-PAS: L={result.alps_pas_left:.4f}, "
-                        f"R={result.alps_pas_right:.4f}, Bi={result.alps_pas_bilateral:.4f}",
-                    )
-                elif method == "Both":
-                    if result.alps_lab_bilateral is not None:
+                # Log results for each shape
+                if state.alps_results_by_shape:
+                    for shape_name, shape_results in state.alps_results_by_shape.items():
+                        method = shape_results.get("method")
+                        lab_bi = shape_results.get("LAB_ALPS_bilateral")
+                        pas_bi = shape_results.get("PAS_ALPS_bilateral")
+                        lab_left = shape_results.get("LAB_ALPS_left")
+                        lab_right = shape_results.get("LAB_ALPS_right")
+                        pas_left = shape_results.get("PAS_ALPS_left")
+                        pas_right = shape_results.get("PAS_ALPS_right")
+
+                        if method == "ALPS-LAB" and lab_bi is not None:
+                            self._notify(
+                                "log",
+                                f"  [{shape_name}] ALPS-LAB: L={lab_left:.4f}, "
+                                f"R={lab_right:.4f}, Bi={lab_bi:.4f}",
+                            )
+                        elif method == "ALPS-PAS" and pas_bi is not None:
+                            self._notify(
+                                "log",
+                                f"  [{shape_name}] ALPS-PAS: L={pas_left:.4f}, "
+                                f"R={pas_right:.4f}, Bi={pas_bi:.4f}",
+                            )
+                        elif method == "Both":
+                            if lab_bi is not None:
+                                self._notify(
+                                    "log",
+                                    f"  [{shape_name}] ALPS-LAB: L={lab_left:.4f}, "
+                                    f"R={lab_right:.4f}, Bi={lab_bi:.4f}",
+                                )
+                            if pas_bi is not None:
+                                self._notify(
+                                    "log",
+                                    f"  [{shape_name}] ALPS-PAS: L={pas_left:.4f}, "
+                                    f"R={pas_right:.4f}, Bi={pas_bi:.4f}",
+                                )
+                else:
+                    # Fallback: log the primary results (backward compatibility)
+                    method = result.alps_method
+                    if method == "ALPS-LAB" and result.alps_lab_bilateral is not None:
                         self._notify(
                             "log",
                             f"  ALPS-LAB: L={result.alps_lab_left:.4f}, "
                             f"R={result.alps_lab_right:.4f}, Bi={result.alps_lab_bilateral:.4f}",
                         )
-                    if result.alps_pas_bilateral is not None:
+                    elif method == "ALPS-PAS" and result.alps_pas_bilateral is not None:
                         self._notify(
                             "log",
                             f"  ALPS-PAS: L={result.alps_pas_left:.4f}, "
                             f"R={result.alps_pas_right:.4f}, Bi={result.alps_pas_bilateral:.4f}",
                         )
+                    elif method == "Both":
+                        if result.alps_lab_bilateral is not None:
+                            self._notify(
+                                "log",
+                                f"  ALPS-LAB: L={result.alps_lab_left:.4f}, "
+                                f"R={result.alps_lab_right:.4f}, Bi={result.alps_lab_bilateral:.4f}",
+                            )
+                        if result.alps_pas_bilateral is not None:
+                            self._notify(
+                                "log",
+                                f"  ALPS-PAS: L={result.alps_pas_left:.4f}, "
+                                f"R={result.alps_pas_right:.4f}, Bi={result.alps_pas_bilateral:.4f}",
+                            )
             else:
                 result.status = "failed"
                 result.error_message = "Pipeline execution failed"
@@ -313,112 +363,170 @@ class BatchRunner:
             self.batch_state.results.append(result)
 
     def _write_csv_results(self) -> None:
-        """Write batch results to CSV file with method-specific column names."""
-        csv_path = os.path.join(self.batch_state.config.output_dir, "alps_results.csv")
+        """Write batch results to CSV files - one per ROI shape."""
         alps_method = self.batch_state.config.alps_method
 
         try:
             os.makedirs(self.batch_state.config.output_dir, exist_ok=True)
 
-            with open(csv_path, "w", newline="") as f:
-                writer = csv.writer(f)
+            # Collect all unique shape names from results
+            all_shapes = set()
+            for result in self.batch_state.results:
+                if result.alps_results_by_shape:
+                    all_shapes.update(result.alps_results_by_shape.keys())
 
-                # Build header based on method
-                if alps_method == "ALPS-LAB":
-                    header = [
-                        "Filename",
-                        "Left Hemisphere ALPS-LAB",
-                        "Right Hemisphere ALPS-LAB",
-                        "Combined ALPS-LAB",
-                        "Status",
-                        "Error",
-                    ]
-                elif alps_method == "ALPS-PAS":
-                    header = [
-                        "Filename",
-                        "Left Hemisphere ALPS-PAS",
-                        "Right Hemisphere ALPS-PAS",
-                        "Combined ALPS-PAS",
-                        "Status",
-                        "Error",
-                    ]
-                else:  # Both
-                    header = [
-                        "Filename",
-                        "Left Hemisphere ALPS-LAB",
-                        "Right Hemisphere ALPS-LAB",
-                        "Combined ALPS-LAB",
-                        "Left Hemisphere ALPS-PAS",
-                        "Right Hemisphere ALPS-PAS",
-                        "Combined ALPS-PAS",
-                        "Status",
-                        "Error",
-                    ]
+            # If no per-shape results, write single CSV (backward compatibility)
+            if not all_shapes:
+                self._write_single_csv(alps_method)
+                return
 
-                writer.writerow(header)
-
-                for result in self.batch_state.results:
-                    if alps_method == "ALPS-LAB":
-                        row = [
-                            result.subject_id,
-                            f"{result.alps_lab_left:.6f}"
-                            if result.alps_lab_left is not None
-                            else "",
-                            f"{result.alps_lab_right:.6f}"
-                            if result.alps_lab_right is not None
-                            else "",
-                            f"{result.alps_lab_bilateral:.6f}"
-                            if result.alps_lab_bilateral is not None
-                            else "",
-                            result.status,
-                            result.error_message or "",
-                        ]
-                    elif alps_method == "ALPS-PAS":
-                        row = [
-                            result.subject_id,
-                            f"{result.alps_pas_left:.6f}"
-                            if result.alps_pas_left is not None
-                            else "",
-                            f"{result.alps_pas_right:.6f}"
-                            if result.alps_pas_right is not None
-                            else "",
-                            f"{result.alps_pas_bilateral:.6f}"
-                            if result.alps_pas_bilateral is not None
-                            else "",
-                            result.status,
-                            result.error_message or "",
-                        ]
-                    else:  # Both
-                        row = [
-                            result.subject_id,
-                            f"{result.alps_lab_left:.6f}"
-                            if result.alps_lab_left is not None
-                            else "",
-                            f"{result.alps_lab_right:.6f}"
-                            if result.alps_lab_right is not None
-                            else "",
-                            f"{result.alps_lab_bilateral:.6f}"
-                            if result.alps_lab_bilateral is not None
-                            else "",
-                            f"{result.alps_pas_left:.6f}"
-                            if result.alps_pas_left is not None
-                            else "",
-                            f"{result.alps_pas_right:.6f}"
-                            if result.alps_pas_right is not None
-                            else "",
-                            f"{result.alps_pas_bilateral:.6f}"
-                            if result.alps_pas_bilateral is not None
-                            else "",
-                            result.status,
-                            result.error_message or "",
-                        ]
-
-                    writer.writerow(row)
-
-            self._notify("log", f"Results saved to {csv_path}")
+            # Write a CSV for each shape
+            for shape_name in sorted(all_shapes):
+                csv_filename = f"alps_results_{shape_name}.csv"
+                csv_path = os.path.join(self.batch_state.config.output_dir, csv_filename)
+                self._write_shape_csv(csv_path, shape_name, alps_method)
+                self._notify("log", f"Results saved to {csv_path}")
 
         except OSError as e:
             self._notify("log", f"ERROR: Failed to write CSV: {e}")
+
+    def _write_single_csv(self, alps_method: str) -> None:
+        """Write single CSV file (backward compatibility mode)."""
+        csv_path = os.path.join(self.batch_state.config.output_dir, "alps_results.csv")
+
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            header = self._get_csv_header(alps_method)
+            writer.writerow(header)
+
+            for result in self.batch_state.results:
+                row = self._get_csv_row(result, alps_method)
+                writer.writerow(row)
+
+        self._notify("log", f"Results saved to {csv_path}")
+
+    def _write_shape_csv(self, csv_path: str, shape_name: str, alps_method: str) -> None:
+        """Write CSV file for a specific ROI shape."""
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            header = self._get_csv_header(alps_method)
+            writer.writerow(header)
+
+            for result in self.batch_state.results:
+                row = self._get_csv_row_for_shape(result, shape_name, alps_method)
+                writer.writerow(row)
+
+    def _get_csv_header(self, alps_method: str) -> list[str]:
+        """Get CSV header based on ALPS method."""
+        if alps_method == "ALPS-LAB":
+            return [
+                "Filename",
+                "Left Hemisphere ALPS-LAB",
+                "Right Hemisphere ALPS-LAB",
+                "Combined ALPS-LAB",
+                "Status",
+                "Error",
+            ]
+        elif alps_method == "ALPS-PAS":
+            return [
+                "Filename",
+                "Left Hemisphere ALPS-PAS",
+                "Right Hemisphere ALPS-PAS",
+                "Combined ALPS-PAS",
+                "Status",
+                "Error",
+            ]
+        else:  # Both
+            return [
+                "Filename",
+                "Left Hemisphere ALPS-LAB",
+                "Right Hemisphere ALPS-LAB",
+                "Combined ALPS-LAB",
+                "Left Hemisphere ALPS-PAS",
+                "Right Hemisphere ALPS-PAS",
+                "Combined ALPS-PAS",
+                "Status",
+                "Error",
+            ]
+
+    def _get_csv_row(self, result: SubjectResult, alps_method: str) -> list[str]:
+        """Get CSV row for a subject result (backward compatibility)."""
+        if alps_method == "ALPS-LAB":
+            return [
+                result.subject_id,
+                f"{result.alps_lab_left:.6f}" if result.alps_lab_left is not None else "",
+                f"{result.alps_lab_right:.6f}" if result.alps_lab_right is not None else "",
+                f"{result.alps_lab_bilateral:.6f}" if result.alps_lab_bilateral is not None else "",
+                result.status,
+                result.error_message or "",
+            ]
+        elif alps_method == "ALPS-PAS":
+            return [
+                result.subject_id,
+                f"{result.alps_pas_left:.6f}" if result.alps_pas_left is not None else "",
+                f"{result.alps_pas_right:.6f}" if result.alps_pas_right is not None else "",
+                f"{result.alps_pas_bilateral:.6f}" if result.alps_pas_bilateral is not None else "",
+                result.status,
+                result.error_message or "",
+            ]
+        else:  # Both
+            return [
+                result.subject_id,
+                f"{result.alps_lab_left:.6f}" if result.alps_lab_left is not None else "",
+                f"{result.alps_lab_right:.6f}" if result.alps_lab_right is not None else "",
+                f"{result.alps_lab_bilateral:.6f}" if result.alps_lab_bilateral is not None else "",
+                f"{result.alps_pas_left:.6f}" if result.alps_pas_left is not None else "",
+                f"{result.alps_pas_right:.6f}" if result.alps_pas_right is not None else "",
+                f"{result.alps_pas_bilateral:.6f}" if result.alps_pas_bilateral is not None else "",
+                result.status,
+                result.error_message or "",
+            ]
+
+    def _get_csv_row_for_shape(
+        self, result: SubjectResult, shape_name: str, alps_method: str
+    ) -> list[str]:
+        """Get CSV row for a specific ROI shape."""
+        # Get shape-specific results if available
+        shape_data = result.alps_results_by_shape.get(shape_name, {})
+
+        # Extract values
+        lab_left = shape_data.get("alps_lab_left")
+        lab_right = shape_data.get("alps_lab_right")
+        lab_bilateral = shape_data.get("alps_lab_bilateral")
+        pas_left = shape_data.get("alps_pas_left")
+        pas_right = shape_data.get("alps_pas_right")
+        pas_bilateral = shape_data.get("alps_pas_bilateral")
+
+        if alps_method == "ALPS-LAB":
+            return [
+                result.subject_id,
+                f"{lab_left:.6f}" if lab_left is not None else "",
+                f"{lab_right:.6f}" if lab_right is not None else "",
+                f"{lab_bilateral:.6f}" if lab_bilateral is not None else "",
+                result.status,
+                result.error_message or "",
+            ]
+        elif alps_method == "ALPS-PAS":
+            return [
+                result.subject_id,
+                f"{pas_left:.6f}" if pas_left is not None else "",
+                f"{pas_right:.6f}" if pas_right is not None else "",
+                f"{pas_bilateral:.6f}" if pas_bilateral is not None else "",
+                result.status,
+                result.error_message or "",
+            ]
+        else:  # Both
+            return [
+                result.subject_id,
+                f"{lab_left:.6f}" if lab_left is not None else "",
+                f"{lab_right:.6f}" if lab_right is not None else "",
+                f"{lab_bilateral:.6f}" if lab_bilateral is not None else "",
+                f"{pas_left:.6f}" if pas_left is not None else "",
+                f"{pas_right:.6f}" if pas_right is not None else "",
+                f"{pas_bilateral:.6f}" if pas_bilateral is not None else "",
+                result.status,
+                result.error_message or "",
+            ]
 
     def cancel(self) -> None:
         """Request batch cancellation."""

@@ -479,12 +479,20 @@ class FSLRegistration(RegistrationBackend):
             if not result.success:
                 return result
 
-            all_results[dir_name] = result
+            all_results[dir_name] = {
+                "roi_mask_paths": result.roi_mask_paths,
+                "roi_centers": result.roi_centers,
+            }
 
-        # Return the first result (for backward compatibility with single-shape callers)
-        # The roi_mask_paths will be from the first shape processed
-        first_result = list(all_results.values())[0]
-        return first_result
+        # Return composite result with all shapes
+        # The primary roi_mask_paths/roi_centers are from the first shape (backward compatibility)
+        first_key = list(all_results.keys())[0]
+        return ROIPlacementResult(
+            success=True,
+            roi_mask_paths=all_results[first_key]["roi_mask_paths"],
+            roi_centers=all_results[first_key]["roi_centers"],
+            all_roi_results=all_results,
+        )
 
     def _transform_rois_to_native(
         self,

@@ -362,9 +362,11 @@ class PipelineRunner:
         )
 
         if result.success:
-            # Update state with results
+            # Update state with primary results (backward compatibility)
             self.state.roi_mask_paths = result.roi_mask_paths
             self.state.roi_centers = result.roi_centers
+            # Store all ROI results indexed by shape name
+            self.state.all_roi_results = result.all_roi_results
             self._update_stage("roi", "complete")
         else:
             self._log(f"ERROR: ROI placement failed: {result.error_message}")
@@ -375,6 +377,8 @@ class PipelineRunner:
     def run_alps_calculation(self) -> bool:
         """
         Calculate DTI-ALPS index from tensor and registered ROI masks.
+
+        Calculates ALPS for each ROI shape that was created during ROI placement.
 
         Supports three options:
         - ALPS-LAB: Uses tensor diagonal components (Dxx, Dyy, Dzz)
@@ -389,16 +393,68 @@ class PipelineRunner:
         self._update_stage("results", "running")
 
         try:
-            results = run_alps_calculation(
-                state=self.state,
-                log_callback=self._log,
-            )
+            # Calculate ALPS for each shape
+            alps_results_by_shape = {}
 
-            if results is None:
+            if self.state.all_roi_results:
+                # Process each shape
+                for shape_dir_name, roi_info in self.state.all_roi_results.items():
+                    # Extract shape name from directory name (e.g., "rois_sphere3_refined" -> "sphere3_refined")
+                    shape_name = (
+                        shape_dir_name[5:] if shape_dir_name.startswith("rois_") else shape_dir_name
+                    )
+
+                    self._log(f"Calculating ALPS for {shape_name}...")
+
+                    # Temporarily set roi_mask_paths to this shape's paths
+                    original_paths = self.state.roi_mask_paths
+                    self.state.roi_mask_paths = roi_info["roi_mask_paths"]
+
+                    results = run_alps_calculation(
+                        state=self.state,
+                        log_callback=self._log,
+                    )
+
+                    # Restore original paths
+                    self.state.roi_mask_paths = original_paths
+
+                    if results is not None:
+                        alps_results_by_shape[shape_name] = results
+                    else:
+                        self._log(f"  WARNING: ALPS calculation failed for {shape_name}")
+            else:
+                # Fallback: single shape using current roi_mask_paths
+                self._log("Calculating ALPS (single shape)...")
+                results = run_alps_calculation(
+                    state=self.state,
+                    log_callback=self._log,
+                )
+                if results is not None:
+                    # Try to determine shape name from roi_mask_paths
+                    if self.state.roi_mask_paths:
+                        first_path = list(self.state.roi_mask_paths.values())[0]
+                        # Extract from path like ".../rois_sphere3_refined/..."
+                        import os
+
+                        roi_dir = os.path.dirname(first_path)
+                        dir_name = os.path.basename(roi_dir)
+                        shape_name = dir_name[5:] if dir_name.startswith("rois_") else "default"
+                    else:
+                        shape_name = "default"
+                    alps_results_by_shape[shape_name] = results
+
+            if not alps_results_by_shape:
+                self._log("ERROR: No ALPS results computed for any shape")
                 self._update_stage("results", "failed")
                 return False
 
-            self.state.alps_results = results
+            # Store per-shape results
+            self.state.alps_results_by_shape = alps_results_by_shape
+
+            # For backward compatibility, also store the first shape's results in alps_results
+            first_shape = list(alps_results_by_shape.keys())[0]
+            self.state.alps_results = alps_results_by_shape[first_shape]
+
             self._update_stage("results", "complete")
             return True
 

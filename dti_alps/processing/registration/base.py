@@ -48,17 +48,21 @@ class ROIPlacementResult:
     success : bool
         Whether ROI placement completed successfully
     roi_mask_paths : dict[str, str]
-        Paths to final ROI masks in native space
+        Paths to final ROI masks in native space (for first/primary shape)
     roi_centers : dict[str, tuple[int, int, int]]
-        Centroid coordinates for each ROI
+        Centroid coordinates for each ROI (for first/primary shape)
     error_message : str, optional
         Error description if placement failed
+    all_roi_results : dict[str, dict]
+        All ROI results indexed by shape name (e.g., "sphere3_refined").
+        Each entry contains: {"roi_mask_paths": {...}, "roi_centers": {...}}
     """
 
     success: bool
     roi_mask_paths: dict[str, str]
     roi_centers: dict[str, tuple[int, int, int]]
     error_message: str | None = None
+    all_roi_results: dict[str, dict] | None = None
 
 
 class RegistrationBackend(ABC):
