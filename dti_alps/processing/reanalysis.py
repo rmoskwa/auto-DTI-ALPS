@@ -340,7 +340,7 @@ def reanalyze_subject(
                     voxel_size,
                     radius_mm=roi_shape.sphere_radius or 3.0,
                     search_x=3,
-                    search_y=2,
+                    search_y=1,
                     search_z=2,
                     max_y_drift=1,
                     max_z_drift=1,

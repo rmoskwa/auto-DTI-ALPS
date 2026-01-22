@@ -480,7 +480,7 @@ def refine_roi_placement(
     fiber_type: str,
     radius_mm: float = 3.0,
     search_x: int = 3,
-    search_y: int = 2,
+    search_y: int = 1,
     search_z: int = 2,
     reference_centroid: tuple[int, int, int] | None = None,
     max_y_drift: int = 1,
@@ -518,7 +518,7 @@ def refine_roi_placement(
     search_x : int
         Search range in X direction (voxels), default 3
     search_y : int
-        Search range in Y direction (voxels), default 2
+        Search range in Y direction (voxels), default 1
     search_z : int
         Search range in Z direction (voxels), default 2
     reference_centroid : tuple of int, optional
@@ -598,7 +598,7 @@ def refine_roi_pair_placement(
     voxel_size: tuple[float, float, float],
     radius_mm: float = 3.0,
     search_x: int = 3,
-    search_y: int = 2,
+    search_y: int = 1,
     search_z: int = 2,
     max_y_drift: int = 1,
     max_z_drift: int = 1,
@@ -633,7 +633,7 @@ def refine_roi_pair_placement(
     search_x : int
         Search range in X direction (voxels), default 3
     search_y : int
-        Search range in Y direction (voxels), default 2
+        Search range in Y direction (voxels), default 1
     search_z : int
         Search range in Z direction (voxels), default 2
     max_y_drift : int
