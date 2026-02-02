@@ -311,7 +311,7 @@ class PipelineRunner:
 
         # Create brain mask for eddy
         self._log("  Creating brain mask...")
-        mask_path = self.state.get_output_path("brain_mask")
+        mask_path = self.state.get_output_path("brain_mask.nii.gz")
         mask_cmd = commands.build_dwi2mask_cmd(
             dwi_input, mask_path, self.state.bvecs_path, self.state.bvals_path
         )
