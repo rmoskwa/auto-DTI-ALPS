@@ -368,11 +368,12 @@ class PipelineRunner:
             self._update_stage("eddy", "failed")
             return False
 
-        # Copy/rename to expected output paths
+        # Copy/rename to expected output paths (if not already in place)
         import shutil
 
         final_dwi = self.state.preprocessed_dwi_path
-        shutil.copy(corrected_dwi, final_dwi)
+        if os.path.abspath(corrected_dwi) != os.path.abspath(final_dwi):
+            shutil.copy(corrected_dwi, final_dwi)
         self._log(f"  Corrected DWI saved to: {final_dwi}")
 
         if os.path.exists(corrected_bvecs):
