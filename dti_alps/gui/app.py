@@ -18,6 +18,7 @@ from ..processing.pipeline import (
     PipelineState,
 )
 from . import config
+from .user_config import UserConfig, get_user_config
 
 
 class DTIALPSApplication(tk.Tk):
@@ -891,26 +892,40 @@ class DTIALPSApplication(tk.Tk):
     def _browse_cli_file(self, var: tk.StringVar, filetypes: list | None):
         """Browse for a file and set the variable."""
         ft = filetypes or [("All files", "*.*")]
-        path = filedialog.askopenfilename(filetypes=ft)
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_FILE)
+        path = filedialog.askopenfilename(filetypes=ft, initialdir=initial_dir)
         if path:
             var.set(path)
+            user_config.set_from_path(UserConfig.KEY_CLI_FILE, path)
 
     def _browse_cli_dir(self, var: tk.StringVar):
         """Browse for a directory and set the variable."""
-        path = filedialog.askdirectory()
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_DIR)
+        path = filedialog.askdirectory(initialdir=initial_dir)
         if path:
             var.set(path)
+            user_config.set_from_path(UserConfig.KEY_CLI_DIR, path)
 
     def _browse_cli_save(self, var: tk.StringVar, filetypes: list):
         """Browse for a save file location and set the variable."""
-        path = filedialog.asksaveasfilename(filetypes=filetypes)
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_SAVE)
+        path = filedialog.asksaveasfilename(filetypes=filetypes, initialdir=initial_dir)
         if path:
             var.set(path)
+            user_config.set_from_path(UserConfig.KEY_CLI_SAVE, path)
 
     def _add_subject_folder(self):
         """Add a folder and discover all DWI runs within it."""
-        folder = filedialog.askdirectory(title="Select Folder with DWI Data")
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_SUBJECT_FOLDER)
+        folder = filedialog.askdirectory(
+            title="Select Folder with DWI Data", initialdir=initial_dir
+        )
         if folder:
+            user_config.set_from_path(UserConfig.KEY_SUBJECT_FOLDER, folder)
             self._discover_and_add_folder(folder)
 
     def _discover_and_add_folder(self, folder_path: str) -> int:
@@ -1210,9 +1225,14 @@ class DTIALPSApplication(tk.Tk):
 
     def _browse_synb0_output_dir(self):
         """Browse for synB0-DISCO output directory."""
-        path = filedialog.askdirectory(title="Select synB0-DISCO OUTPUTS Directory")
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_SYNB0_OUTPUT_DIR)
+        path = filedialog.askdirectory(
+            title="Select synB0-DISCO OUTPUTS Directory", initialdir=initial_dir
+        )
         if path:
             self.synb0_output_dir_var.set(path)
+            user_config.set_from_path(UserConfig.KEY_SYNB0_OUTPUT_DIR, path)
             self._validate_synb0_output_dir(path)
 
     def _validate_synb0_output_dir(self, path):
@@ -1854,16 +1874,22 @@ class DTIALPSApplication(tk.Tk):
 
     def _browse_file(self, var_name, filetypes):
         """Open file browser and update variable."""
-        path = filedialog.askopenfilename(filetypes=filetypes)
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_FILE)
+        path = filedialog.askopenfilename(filetypes=filetypes, initialdir=initial_dir)
         if path:
             var = getattr(self, f"{var_name}_var")
             var.set(path)
+            user_config.set_from_path(UserConfig.KEY_CLI_FILE, path)
 
     def _browse_output_dir(self):
         """Open directory browser for output."""
-        path = filedialog.askdirectory()
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_OUTPUT_DIR)
+        path = filedialog.askdirectory(initialdir=initial_dir)
         if path:
             self.output_dir_var.set(path)
+            user_config.set_from_path(UserConfig.KEY_OUTPUT_DIR, path)
 
     def _show_stage(self, stage_idx):
         """Show the specified pipeline stage."""
@@ -2591,10 +2617,15 @@ class DTIALPSApplication(tk.Tk):
 
     def _export_csv(self):
         """Export results to CSV."""
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CSV_EXPORT)
         path = filedialog.asksaveasfilename(
-            defaultextension=".csv", filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialdir=initial_dir,
         )
         if path and self.pipeline_state.alps_results:
+            user_config.set_from_path(UserConfig.KEY_CSV_EXPORT, path)
             import csv
 
             with open(path, "w", newline="") as f:

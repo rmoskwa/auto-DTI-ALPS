@@ -14,6 +14,8 @@ import nibabel as nib
 import numpy as np
 from PIL import Image, ImageTk
 
+from .user_config import UserConfig, get_user_config
+
 
 @dataclass
 class SubjectData:
@@ -566,8 +568,13 @@ class ResultsViewer(tk.Toplevel):
 
     def _browse_folder(self):
         """Open folder browser and load results."""
-        folder = filedialog.askdirectory(title="Select DTI-ALPS Output Folder")
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_VIEWER_FOLDER)
+        folder = filedialog.askdirectory(
+            title="Select DTI-ALPS Output Folder", initialdir=initial_dir
+        )
         if folder:
+            user_config.set_from_path(UserConfig.KEY_VIEWER_FOLDER, folder)
             self._load_output_folder(folder)
 
     def _load_output_folder(self, folder_path: str):
