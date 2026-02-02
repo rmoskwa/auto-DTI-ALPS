@@ -128,6 +128,14 @@ class BatchRunner:
             topup_options=batch_config.topup_options,
             generate_qc=batch_config.generate_qc,
             keep_intermediates=batch_config.keep_intermediates,
+            # synB0-DISCO parameters
+            use_synb0=batch_config.use_synb0,
+            t1_path=subject_files.t1_path if hasattr(subject_files, "t1_path") else None,
+            t1_stripped=batch_config.t1_stripped,
+            synb0_device=batch_config.synb0_device,
+            synb0_options=dict(batch_config.synb0_options),
+            synb0_topup_options=dict(batch_config.synb0_topup_options),
+            synb0_eddy_options=dict(batch_config.synb0_eddy_options),
             # Registration parameters
             flirt_options=dict(batch_config.flirt_options),
             fnirt_options=dict(batch_config.fnirt_options),

@@ -18,6 +18,8 @@ from .alps_calculation import run_alps_calculation
 # Re-export classes for backward compatibility
 from .batch import BatchRunner
 from .state import BatchConfig, BatchState, OutputConfig, PipelineState, SubjectResult
+from .synb0 import Synb0Backend
+from .synb0.backend import run_topup_eddy
 from .workers import BatchWorker, PipelineWorker
 
 __all__ = [
@@ -236,6 +238,69 @@ class PipelineRunner:
             self._update_stage("preproc", "failed")
 
         return success
+
+    def run_synb0(self) -> bool:
+        """
+        Run synB0-DISCO to generate synthetic distortion-free b0.
+
+        This method uses T1 structural data to synthesize a distortion-free
+        b0 image for susceptibility distortion correction.
+
+        Returns
+        -------
+        bool
+            True if successful
+        """
+        self._update_stage("synb0", "running")
+        self._log("Starting synB0-DISCO processing...")
+
+        backend = Synb0Backend()
+
+        # Check availability
+        available, missing = backend.check_available()
+        if not available:
+            self._log(f"ERROR: Missing synB0-DISCO tools: {', '.join(missing)}")
+            self._update_stage("synb0", "failed")
+            return False
+
+        # Run synB0-DISCO
+        result = backend.run(state=self.state, log=self._log)
+
+        if result.success:
+            self.state.synthetic_b0_path = result.synthetic_b0_path
+            self._log("synB0-DISCO completed successfully")
+            self._update_stage("synb0", "complete")
+        else:
+            self._log(f"ERROR: synB0-DISCO failed: {result.error_message}")
+            self._update_stage("synb0", "failed")
+
+        return result.success
+
+    def run_topup_eddy(self) -> bool:
+        """
+        Run FSL topup and eddy for distortion correction.
+
+        This method uses the synthetic b0 from synB0-DISCO with FSL's
+        topup to estimate and correct susceptibility distortions.
+
+        Returns
+        -------
+        bool
+            True if successful
+        """
+        self._update_stage("topup_eddy", "running")
+        self._log("Starting topup + eddy distortion correction...")
+
+        result = run_topup_eddy(state=self.state, log=self._log)
+
+        if result.success:
+            self._log("topup + eddy completed successfully")
+            self._update_stage("topup_eddy", "complete")
+        else:
+            self._log(f"ERROR: topup + eddy failed: {result.error_message}")
+            self._update_stage("topup_eddy", "failed")
+
+        return result.success
 
     def run_dti_fitting(self) -> bool:
         """
@@ -467,6 +532,10 @@ class PipelineRunner:
         """
         Run the complete DTI-ALPS pipeline.
 
+        Supports two preprocessing routes:
+        - Standard: dwifslpreproc (default)
+        - synB0-DISCO: synB0 + topup + eddy (requires T1 image)
+
         Returns
         -------
         bool
@@ -494,11 +563,33 @@ class PipelineRunner:
             if self.cancelled:
                 return False
 
-        # Stage 3: Preprocessing
-        if not self.run_preprocessing():
-            return False
-        if self.cancelled:
-            return False
+        # Stage 3: Preprocessing (branching based on mode)
+        if self.state.use_synb0:
+            # synB0-DISCO mode: synB0 + topup + eddy
+            self._log("Using synB0-DISCO preprocessing route...")
+
+            # Validate T1 input
+            if not self.state.t1_path:
+                self._log("ERROR: T1 image required for synB0-DISCO mode")
+                return False
+
+            # Stage 3a: synB0-DISCO
+            if not self.run_synb0():
+                return False
+            if self.cancelled:
+                return False
+
+            # Stage 3b: topup + eddy
+            if not self.run_topup_eddy():
+                return False
+            if self.cancelled:
+                return False
+        else:
+            # Standard mode: dwifslpreproc
+            if not self.run_preprocessing():
+                return False
+            if self.cancelled:
+                return False
 
         # Stage 4: DTI fitting
         if not self.run_dti_fitting():

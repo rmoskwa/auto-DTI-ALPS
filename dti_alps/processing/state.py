@@ -113,6 +113,21 @@ class PipelineState:
     generate_qc: bool = False
     keep_intermediates: bool = False
 
+    # synB0-DISCO alternative preprocessing parameters
+    use_synb0: bool = False  # Use synB0-DISCO instead of dwifslpreproc
+    t1_path: str | None = None  # T1 image path (required for synB0)
+    t1_stripped: bool = False  # Whether T1 is already skull-stripped
+    synb0_device: str = "auto"  # Device for inference: "auto", "cuda", "cpu"
+    synb0_options: dict[str, Any] = field(default_factory=dict)  # synB0-specific options
+    synb0_topup_options: dict[str, Any] = field(default_factory=dict)  # topup options for synB0
+    synb0_eddy_options: dict[str, Any] = field(default_factory=dict)  # eddy options for synB0
+
+    # synB0-DISCO intermediate outputs
+    synb0_b0_pair_path: str | None = None  # Merged b0 pair for topup
+    synb0_acqparams_path: str | None = None  # Acquisition parameters file
+    synb0_topup_prefix: str | None = None  # topup output prefix
+    synthetic_b0_path: str | None = None  # Generated synthetic b0
+
     # Stage 3: dwi2tensor CLI options dict
     dwi2tensor_options: dict[str, Any] = field(default_factory=dict)
 
@@ -250,6 +265,14 @@ class BatchConfig:
     topup_options: str = ""
     generate_qc: bool = False
     keep_intermediates: bool = False
+
+    # synB0-DISCO alternative preprocessing parameters (batch-wide)
+    use_synb0: bool = False  # Use synB0-DISCO instead of dwifslpreproc
+    t1_stripped: bool = False  # Whether T1 images are already skull-stripped
+    synb0_device: str = "auto"  # Device for inference: "auto", "cuda", "cpu"
+    synb0_options: dict[str, Any] = field(default_factory=dict)  # synB0-specific options
+    synb0_topup_options: dict[str, Any] = field(default_factory=dict)  # topup options for synB0
+    synb0_eddy_options: dict[str, Any] = field(default_factory=dict)  # eddy options for synB0
 
     # Registration parameters (FSL FLIRT/FNIRT)
     flirt_options: dict[str, Any] = field(default_factory=dict)
