@@ -18,8 +18,6 @@ from .alps_calculation import run_alps_calculation
 # Re-export classes for backward compatibility
 from .batch import BatchRunner
 from .state import BatchConfig, BatchState, OutputConfig, PipelineState, SubjectResult
-from .synb0 import Synb0Backend
-from .synb0.backend import run_topup_eddy
 from .workers import BatchWorker, PipelineWorker
 
 __all__ = [
@@ -239,12 +237,17 @@ class PipelineRunner:
 
         return success
 
-    def run_synb0(self) -> bool:
+    def run_eddy_with_synb0(self) -> bool:
         """
-        Run synB0-DISCO to generate synthetic distortion-free b0.
+        Run FSL eddy using pre-computed synB0-DISCO topup outputs.
 
-        This method uses T1 structural data to synthesize a distortion-free
-        b0 image for susceptibility distortion correction.
+        The user runs synB0-DISCO externally and provides the output directory.
+        This method uses those topup outputs to run eddy for distortion correction.
+
+        Required files in synb0_output_dir:
+        - topup_fieldcoef.nii.gz
+        - topup_movpar.txt
+        - acqparams.txt (from INPUTS, should be copied or referenced)
 
         Returns
         -------
@@ -252,55 +255,133 @@ class PipelineRunner:
             True if successful
         """
         self._update_stage("synb0", "running")
-        self._log("Starting synB0-DISCO processing...")
+        self._log("Validating synB0-DISCO outputs...")
 
-        backend = Synb0Backend()
-
-        # Check availability
-        available, missing = backend.check_available()
-        if not available:
-            self._log(f"ERROR: Missing synB0-DISCO tools: {', '.join(missing)}")
+        synb0_dir = self.state.synb0_output_dir
+        if not synb0_dir or not os.path.isdir(synb0_dir):
+            self._log(f"ERROR: synB0-DISCO output directory not found: {synb0_dir}")
             self._update_stage("synb0", "failed")
             return False
 
-        # Run synB0-DISCO
-        result = backend.run(state=self.state, log=self._log)
+        # Check for required topup outputs
+        topup_prefix = os.path.join(synb0_dir, "topup")
+        topup_fieldcoef = f"{topup_prefix}_fieldcoef.nii.gz"
+        topup_movpar = f"{topup_prefix}_movpar.txt"
 
-        if result.success:
-            self.state.synthetic_b0_path = result.synthetic_b0_path
-            self._log("synB0-DISCO completed successfully")
-            self._update_stage("synb0", "complete")
-        else:
-            self._log(f"ERROR: synB0-DISCO failed: {result.error_message}")
+        if not os.path.exists(topup_fieldcoef):
+            self._log(f"ERROR: topup_fieldcoef.nii.gz not found in {synb0_dir}")
             self._update_stage("synb0", "failed")
+            return False
 
-        return result.success
+        if not os.path.exists(topup_movpar):
+            self._log(f"ERROR: topup_movpar.txt not found in {synb0_dir}")
+            self._update_stage("synb0", "failed")
+            return False
 
-    def run_topup_eddy(self) -> bool:
-        """
-        Run FSL topup and eddy for distortion correction.
+        # Look for acqparams.txt - check both OUTPUTS and parent INPUTS directory
+        acqparams_path = os.path.join(synb0_dir, "acqparams.txt")
+        if not os.path.exists(acqparams_path):
+            # Try INPUTS sibling directory
+            parent_dir = os.path.dirname(synb0_dir)
+            inputs_acqparams = os.path.join(parent_dir, "INPUTS", "acqparams.txt")
+            if os.path.exists(inputs_acqparams):
+                acqparams_path = inputs_acqparams
+            else:
+                self._log(f"ERROR: acqparams.txt not found in {synb0_dir} or INPUTS/")
+                self._update_stage("synb0", "failed")
+                return False
 
-        This method uses the synthetic b0 from synB0-DISCO with FSL's
-        topup to estimate and correct susceptibility distortions.
+        self._log(f"  Found topup outputs in: {synb0_dir}")
+        self._log(f"  Using acqparams: {acqparams_path}")
+        self._update_stage("synb0", "complete")
 
-        Returns
-        -------
-        bool
-            True if successful
-        """
-        self._update_stage("topup_eddy", "running")
-        self._log("Starting topup + eddy distortion correction...")
+        # Now run eddy
+        self._update_stage("eddy", "running")
+        self._log("Starting eddy distortion correction...")
 
-        result = run_topup_eddy(state=self.state, log=self._log)
-
-        if result.success:
-            self._log("topup + eddy completed successfully")
-            self._update_stage("topup_eddy", "complete")
+        # Determine input DWI (use degibbs if available, else denoised, else original)
+        if self.state.degibbs_dwi_path and os.path.exists(self.state.degibbs_dwi_path):
+            dwi_input = self.state.degibbs_dwi_path
+        elif self.state.denoised_dwi_path and os.path.exists(self.state.denoised_dwi_path):
+            dwi_input = self.state.denoised_dwi_path
         else:
-            self._log(f"ERROR: topup + eddy failed: {result.error_message}")
-            self._update_stage("topup_eddy", "failed")
+            dwi_input = self.state.dwi_path
 
-        return result.success
+        self._log(f"  Input DWI: {dwi_input}")
+
+        # Create brain mask for eddy
+        self._log("  Creating brain mask...")
+        mask_path = self.state.get_output_path("brain_mask")
+        mask_cmd = commands.build_dwi2mask_cmd(dwi_input, mask_path)
+        if not self._run_command(mask_cmd, "dwi2mask"):
+            self._log("ERROR: Failed to create brain mask")
+            self._update_stage("eddy", "failed")
+            return False
+
+        # Create index file (all 1s for number of volumes)
+        self._log("  Creating index file...")
+        import nibabel as nib
+
+        dwi_img = nib.load(dwi_input)
+        n_volumes = dwi_img.shape[3] if len(dwi_img.shape) > 3 else 1
+        index_path = os.path.join(self.state.output_dir, "eddy_index.txt")
+        with open(index_path, "w") as f:
+            f.write(" ".join(["1"] * n_volumes))
+
+        # Build and run eddy command
+        eddy_output = self.state.get_output_path("dwi_preproc").replace(".nii.gz", "")
+
+        eddy_cmd = [
+            "eddy",
+            f"--imain={dwi_input}",
+            f"--mask={mask_path}",
+            f"--acqp={acqparams_path}",
+            f"--index={index_path}",
+            f"--bvecs={self.state.bvecs_path}",
+            f"--bvals={self.state.bvals_path}",
+            f"--topup={topup_prefix}",
+            f"--out={eddy_output}",
+            "--repol",  # Replace outliers
+        ]
+
+        # Add user-specified eddy options
+        eddy_options = self.state.synb0_eddy_options or {}
+        for opt, val in eddy_options.items():
+            if val is True:
+                eddy_cmd.append(f"--{opt}")
+            elif val is not False and val is not None:
+                eddy_cmd.append(f"--{opt}={val}")
+
+        if not self._run_command(eddy_cmd, "eddy"):
+            self._log("ERROR: eddy failed")
+            self._update_stage("eddy", "failed")
+            return False
+
+        # Check outputs and set paths
+        corrected_dwi = f"{eddy_output}.nii.gz"
+        corrected_bvecs = f"{eddy_output}.eddy_rotated_bvecs"
+
+        if not os.path.exists(corrected_dwi):
+            self._log(f"ERROR: eddy did not create output: {corrected_dwi}")
+            self._update_stage("eddy", "failed")
+            return False
+
+        # Copy/rename to expected output paths
+        import shutil
+
+        final_dwi = self.state.preprocessed_dwi_path
+        shutil.copy(corrected_dwi, final_dwi)
+        self._log(f"  Corrected DWI saved to: {final_dwi}")
+
+        if os.path.exists(corrected_bvecs):
+            final_bvecs = self.state.get_output_path("bvecs_preproc")
+            shutil.copy(corrected_bvecs, final_bvecs)
+            # Also copy bvals (unchanged)
+            shutil.copy(self.state.bvals_path, self.state.get_output_path("bvals_preproc"))
+
+        self._log("eddy completed successfully")
+        self._update_stage("eddy", "complete")
+        return True
 
     def run_dti_fitting(self) -> bool:
         """
@@ -565,22 +646,16 @@ class PipelineRunner:
 
         # Stage 3: Preprocessing (branching based on mode)
         if self.state.use_synb0:
-            # synB0-DISCO mode: synB0 + topup + eddy
+            # synB0-DISCO mode: use pre-computed synB0 outputs + eddy
             self._log("Using synB0-DISCO preprocessing route...")
 
-            # Validate T1 input
-            if not self.state.t1_path:
-                self._log("ERROR: T1 image required for synB0-DISCO mode")
+            # Validate synB0 output directory
+            if not self.state.synb0_output_dir:
+                self._log("ERROR: synB0-DISCO output directory required")
                 return False
 
-            # Stage 3a: synB0-DISCO
-            if not self.run_synb0():
-                return False
-            if self.cancelled:
-                return False
-
-            # Stage 3b: topup + eddy
-            if not self.run_topup_eddy():
+            # Run eddy with synB0 topup outputs
+            if not self.run_eddy_with_synb0():
                 return False
             if self.cancelled:
                 return False

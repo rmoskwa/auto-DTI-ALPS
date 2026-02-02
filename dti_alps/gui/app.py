@@ -65,8 +65,8 @@ class DTIALPSApplication(tk.Tk):
         self._synb0_stage_to_button_indices = {
             "denoise": [1],  # dwidenoise
             "degibbs": [2],  # mrdegibbs
-            "synb0": [3],  # synB0-DISCO
-            "topup_eddy": [4],  # topup+eddy
+            "synb0": [3],  # synB0-DISCO output dir
+            "eddy": [4],  # Eddy
             "dti": [5, 6],  # dwi2tensor, tensor2metric
             "registration": [7],  # Registration
             "roi": [8],  # ROI Placement
@@ -158,26 +158,6 @@ class DTIALPSApplication(tk.Tk):
         toolbar = ttk.Frame(self, padding=5)
         toolbar.pack(fill=tk.X, padx=5, pady=5)
 
-        # Left side - synB0-DISCO checkbox
-        left_frame = ttk.Frame(toolbar)
-        left_frame.pack(side=tk.LEFT, padx=10)
-
-        self.synb0_checkbox = ttk.Checkbutton(
-            left_frame,
-            text="Use synB0-DISCO",
-            variable=self.use_synb0,
-            command=self._on_synb0_toggle,
-        )
-        self.synb0_checkbox.pack(side=tk.LEFT)
-
-        # Tooltip/info label
-        self.synb0_info_label = ttk.Label(
-            left_frame,
-            text="(requires T1 image)",
-            foreground="gray",
-        )
-        self.synb0_info_label.pack(side=tk.LEFT, padx=5)
-
         # Center container for buttons
         center_frame = ttk.Frame(toolbar)
         center_frame.pack(expand=True)
@@ -207,12 +187,14 @@ class DTIALPSApplication(tk.Tk):
         all_valid = all(s.is_valid for s in self.subject_files_list) if has_subjects else False
         has_output_dir = bool(hasattr(self, "output_dir_var") and self.output_dir_var.get())
 
-        # If synB0-DISCO mode, also require T1 input
-        t1_valid = True
+        # If synB0-DISCO mode, require synB0 output directory
+        synb0_valid = True
         if self.use_synb0.get():
-            t1_valid = bool(hasattr(self, "t1_path_var") and self.t1_path_var.get())
+            synb0_valid = bool(
+                hasattr(self, "synb0_output_dir_var") and self.synb0_output_dir_var.get()
+            )
 
-        can_run = has_subjects and all_valid and has_output_dir and readout_valid and t1_valid
+        can_run = has_subjects and all_valid and has_output_dir and readout_valid and synb0_valid
 
         if can_run:
             self.run_btn.config(state=tk.NORMAL)
@@ -347,7 +329,7 @@ class DTIALPSApplication(tk.Tk):
         self._create_mrdegibbs_frame()
         self._create_dwifslpreproc_frame()
         self._create_synb0_frame()
-        self._create_topup_eddy_frame()
+        self._create_eddy_frame()
         self._create_dwi2tensor_frame()
         self._create_tensor2metric_frame()
         self._create_registration_frame()
@@ -578,6 +560,22 @@ class DTIALPSApplication(tk.Tk):
         )
         self.rpe_desc_label.grid(row=2, column=2, columnspan=4, sticky=tk.W, padx=5, pady=2)
         rpe_combo.bind("<<ComboboxSelected>>", self._on_rpe_combo_change)
+
+        # Row 4: synB0-DISCO option (alternative to dwifslpreproc)
+        self.synb0_checkbox = ttk.Checkbutton(
+            params_frame,
+            text="Use synB0-DISCO",
+            variable=self.use_synb0,
+            command=self._on_synb0_toggle,
+        )
+        self.synb0_checkbox.grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(10, 2))
+
+        synb0_desc = ttk.Label(
+            params_frame,
+            text="Use pre-computed synB0-DISCO outputs instead of dwifslpreproc",
+            foreground="gray",
+        )
+        synb0_desc.grid(row=3, column=2, columnspan=4, sticky=tk.W, padx=5, pady=(10, 2))
 
         # Output settings
         out_frame = ttk.LabelFrame(frame, text="Output", padding=10)
@@ -1063,126 +1061,83 @@ class DTIALPSApplication(tk.Tk):
         options_frame.columnconfigure(2, weight=1)
 
     def _create_synb0_frame(self):
-        """Create synB0-DISCO options frame."""
+        """Create synB0-DISCO output directory selection frame."""
         frame = ttk.Frame(self.content_frame)
         self.stage_frames["synb0"] = frame
 
         # Info text
         info_label = ttk.Label(
             frame,
-            text="synB0-DISCO synthesizes a distortion-free b0 from T1 structural data.\n"
-            "This method uses a neural network to predict what the b0 would look like\n"
-            "without EPI distortions, enabling susceptibility correction via topup.",
+            text="synB0-DISCO must be run externally before using this pipeline.\n"
+            "Please provide the path to your synB0-DISCO OUTPUTS directory.\n\n"
+            "Required files in the OUTPUTS directory:\n"
+            "  - topup_fieldcoef.nii.gz\n"
+            "  - topup_movpar.txt\n"
+            "  - acqparams.txt (in OUTPUTS or ../INPUTS/)",
             justify=tk.LEFT,
         )
         info_label.pack(anchor=tk.W, pady=(0, 10))
 
-        # T1 input section
-        t1_frame = ttk.LabelFrame(frame, text="T1 Input (Required)", padding=10)
-        t1_frame.pack(fill=tk.X, pady=5)
+        # synB0 output directory selection
+        output_frame = ttk.LabelFrame(frame, text="synB0-DISCO Output Directory", padding=10)
+        output_frame.pack(fill=tk.X, pady=5)
 
-        # T1 file input
-        ttk.Label(t1_frame, text="T1 Image:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.t1_path_var = tk.StringVar()
-        self.t1_path_var.trace_add("write", lambda *_: self._update_run_button_state())
-        ttk.Entry(t1_frame, textvariable=self.t1_path_var, width=50).grid(
+        ttk.Label(output_frame, text="OUTPUTS Directory:").grid(
+            row=0, column=0, sticky=tk.W, pady=2
+        )
+        self.synb0_output_dir_var = tk.StringVar()
+        self.synb0_output_dir_var.trace_add("write", lambda *_: self._update_run_button_state())
+        ttk.Entry(output_frame, textvariable=self.synb0_output_dir_var, width=50).grid(
             row=0, column=1, sticky=tk.EW, padx=5, pady=2
         )
-        ttk.Button(t1_frame, text="Browse...", command=self._browse_t1_file).grid(
+        ttk.Button(output_frame, text="Browse...", command=self._browse_synb0_output_dir).grid(
             row=0, column=2, pady=2
         )
 
-        # T1 skull-stripped checkbox
-        self.t1_stripped_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            t1_frame,
-            text="T1 is already skull-stripped (--stripped)",
-            variable=self.t1_stripped_var,
-        ).grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=5)
+        output_frame.columnconfigure(1, weight=1)
 
-        t1_frame.columnconfigure(1, weight=1)
+        # Validation status
+        self.synb0_validation_label = ttk.Label(output_frame, text="", foreground="gray")
+        self.synb0_validation_label.grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=5)
 
-        # Device selection
-        device_frame = ttk.LabelFrame(frame, text="Inference Settings", padding=10)
-        device_frame.pack(fill=tk.X, pady=5)
+        # Info about running synB0-DISCO
+        info_frame = ttk.LabelFrame(frame, text="How to Run synB0-DISCO", padding=10)
+        info_frame.pack(fill=tk.X, pady=5)
 
-        ttk.Label(device_frame, text="Compute Device:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.synb0_device_var = tk.StringVar(value="auto")
-        ttk.Combobox(
-            device_frame,
-            textvariable=self.synb0_device_var,
-            values=config.SYNB0_DEVICE_CHOICES,
-            state="readonly",
-            width=10,
-        ).grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
-        ttk.Label(
-            device_frame,
-            text="auto: use GPU if available, otherwise CPU",
-            foreground="gray",
-        ).grid(row=0, column=2, sticky=tk.W, padx=10)
-
-        # Requirements info
-        req_frame = ttk.LabelFrame(frame, text="Requirements", padding=10)
-        req_frame.pack(fill=tk.X, pady=5)
-
-        req_text = (
-            "synB0-DISCO requires the following tools:\n"
-            "  - FreeSurfer (mri_convert, mri_nu_correct.mni, mri_normalize)\n"
-            "  - FSL (bet, epi_reg, topup, eddy, fslmaths, fslmerge)\n"
-            "  - ANTs (antsRegistrationSyNQuick.sh, antsApplyTransforms)\n"
-            "  - c3d/Convert3D (c3d_affine_tool)\n"
-            "  - Python: PyTorch, nibabel"
+        info_text = (
+            "Run synB0-DISCO using Docker or Singularity:\n\n"
+            "docker run --rm -v /path/to/INPUTS:/INPUTS -v /path/to/OUTPUTS:/OUTPUTS \\\n"
+            "    -v /path/to/license.txt:/extra/freesurfer/license.txt \\\n"
+            "    leonyichencai/synb0-disco:v3.1\n\n"
+            "Required INPUTS:\n"
+            "  - b0.nii.gz: mean b0 image (3D)\n"
+            "  - T1.nii.gz: T1-weighted image\n"
+            "  - acqparams.txt: acquisition parameters file"
         )
-        ttk.Label(req_frame, text=req_text, justify=tk.LEFT).pack(anchor=tk.W)
+        ttk.Label(info_frame, text=info_text, justify=tk.LEFT, font=("Courier", 9)).pack(
+            anchor=tk.W
+        )
 
-        # Check availability button
-        ttk.Button(
-            req_frame,
-            text="Check Tool Availability",
-            command=self._check_synb0_availability,
-        ).pack(pady=10)
-
-    def _create_topup_eddy_frame(self):
-        """Create topup+eddy options frame."""
+    def _create_eddy_frame(self):
+        """Create eddy options frame for synB0 mode."""
         frame = ttk.Frame(self.content_frame)
-        self.stage_frames["topup_eddy"] = frame
+        self.stage_frames["eddy"] = frame
 
         # Info text
         info_label = ttk.Label(
             frame,
-            text="Configure FSL topup and eddy for susceptibility distortion correction.\n"
-            "Topup estimates the field from the distorted + synthetic b0 pair.\n"
-            "Eddy applies motion and distortion correction to the full DWI series.",
+            text="Configure FSL eddy for motion and distortion correction.\n"
+            "Eddy will use the topup outputs from your synB0-DISCO run.",
             justify=tk.LEFT,
         )
         info_label.pack(anchor=tk.W, pady=(0, 10))
 
-        # Scrollable frame for options
-        canvas = tk.Canvas(frame, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
+        # Eddy options section
+        eddy_frame = ttk.LabelFrame(frame, text="Eddy Options", padding=10)
+        eddy_frame.pack(fill=tk.X, pady=5)
 
-        scrollable_frame.bind(
-            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Topup options section
-        topup_frame = ttk.LabelFrame(scrollable_frame, text="topup Options", padding=10)
-        topup_frame.pack(fill=tk.X, pady=5, padx=5)
-
-        ttk.Label(
-            topup_frame,
-            text="Note: Uses optimized config for synthetic b0 (synb0.cnf) by default.",
-            foreground="gray",
-        ).pack(anchor=tk.W, pady=(0, 5))
-
-        # Column headers for topup
-        headers_frame = ttk.Frame(topup_frame)
+        # Column headers
+        headers_frame = ttk.Frame(eddy_frame)
         headers_frame.pack(fill=tk.X)
         ttk.Label(headers_frame, text="", width=3).grid(row=0, column=0)
         ttk.Label(headers_frame, text="Option", width=12, font=("TkDefaultFont", 9, "bold")).grid(
@@ -1195,44 +1150,6 @@ class DTIALPSApplication(tk.Tk):
             row=0, column=3, sticky=tk.W
         )
 
-        ttk.Separator(topup_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
-
-        topup_opts_frame = ttk.Frame(topup_frame)
-        topup_opts_frame.pack(fill=tk.X)
-
-        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.SYNB0_TOPUP_OPTIONS):
-            choices = None
-            if opt_name == "--regmod":
-                choices = config.SYNB0_TOPUP_REGMOD_CHOICES
-
-            self._create_cli_option_row(
-                topup_opts_frame,
-                opt_name,
-                opt_type,
-                opt_desc,
-                row=i,
-                stage_prefix="synb0_topup",
-                choices=choices,
-            )
-
-        # Eddy options section
-        eddy_frame = ttk.LabelFrame(scrollable_frame, text="eddy Options", padding=10)
-        eddy_frame.pack(fill=tk.X, pady=5, padx=5)
-
-        # Column headers for eddy
-        headers_frame2 = ttk.Frame(eddy_frame)
-        headers_frame2.pack(fill=tk.X)
-        ttk.Label(headers_frame2, text="", width=3).grid(row=0, column=0)
-        ttk.Label(headers_frame2, text="Option", width=12, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=1, sticky=tk.W
-        )
-        ttk.Label(headers_frame2, text="Value", width=20, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=2, sticky=tk.W
-        )
-        ttk.Label(headers_frame2, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=3, sticky=tk.W
-        )
-
         ttk.Separator(eddy_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
 
         eddy_opts_frame = ttk.Frame(eddy_frame)
@@ -1240,7 +1157,7 @@ class DTIALPSApplication(tk.Tk):
 
         for i, (opt_name, opt_type, opt_desc, default) in enumerate(config.SYNB0_EDDY_OPTIONS):
             choices = None
-            if opt_name == "--slm":
+            if opt_name == "slm":
                 choices = config.SYNB0_EDDY_SLM_CHOICES
 
             self._create_cli_option_row(
@@ -1254,36 +1171,47 @@ class DTIALPSApplication(tk.Tk):
             )
 
             # Pre-enable repol option (recommended)
-            if opt_name == "--repol" and default:
+            if opt_name == "repol" and default:
                 if hasattr(self, "cli_option_vars"):
                     opt_info = self.cli_option_vars.get("synb0_eddy", {}).get(opt_name)
                     if opt_info:
                         opt_info["enabled_var"].set(True)
 
-    def _browse_t1_file(self):
-        """Browse for T1 image file."""
-        path = filedialog.askopenfilename(filetypes=config.NIFTI_FILETYPES)
+    def _browse_synb0_output_dir(self):
+        """Browse for synB0-DISCO output directory."""
+        path = filedialog.askdirectory(title="Select synB0-DISCO OUTPUTS Directory")
         if path:
-            self.t1_path_var.set(path)
+            self.synb0_output_dir_var.set(path)
+            self._validate_synb0_output_dir(path)
 
-    def _check_synb0_availability(self):
-        """Check and display synB0-DISCO tool availability."""
-        from ..processing.synb0 import check_synb0_available
+    def _validate_synb0_output_dir(self, path):
+        """Validate synB0-DISCO output directory contents."""
+        import os
 
-        available, missing = check_synb0_available()
+        required_files = [
+            ("topup_fieldcoef.nii.gz", "topup field coefficients"),
+            ("topup_movpar.txt", "topup movement parameters"),
+        ]
 
-        if available:
-            messagebox.showinfo(
-                "synB0-DISCO Tools",
-                "All required tools are available!\n\nsynB0-DISCO is ready to use.",
+        missing = []
+        for filename, desc in required_files:
+            if not os.path.exists(os.path.join(path, filename)):
+                missing.append(f"{filename} ({desc})")
+
+        # Check for acqparams.txt in OUTPUTS or ../INPUTS
+        acqparams_found = os.path.exists(os.path.join(path, "acqparams.txt"))
+        if not acqparams_found:
+            parent = os.path.dirname(path)
+            acqparams_found = os.path.exists(os.path.join(parent, "INPUTS", "acqparams.txt"))
+        if not acqparams_found:
+            missing.append("acqparams.txt (acquisition parameters)")
+
+        if missing:
+            self.synb0_validation_label.config(
+                text=f"Missing: {', '.join(missing)}", foreground="red"
             )
         else:
-            missing_str = "\n".join(f"  - {tool}" for tool in missing)
-            messagebox.showwarning(
-                "Missing Tools",
-                f"The following tools are missing:\n\n{missing_str}\n\n"
-                "Please install the missing tools to use synB0-DISCO.",
-            )
+            self.synb0_validation_label.config(text="All required files found", foreground="green")
 
     def _create_dwi2tensor_frame(self):
         """Create dwi2tensor options frame (Stage 3)."""
@@ -2032,8 +1960,7 @@ class DTIALPSApplication(tk.Tk):
         flirt_options = self._collect_cli_options("flirt")
         fnirt_options = self._collect_cli_options("fnirt")
 
-        # Collect synB0 options (if enabled)
-        synb0_topup_options = self._collect_cli_options("synb0_topup")
+        # Collect synB0 eddy options (if enabled)
         synb0_eddy_options = self._collect_cli_options("synb0_eddy")
 
         # Create batch config
@@ -2053,13 +1980,13 @@ class DTIALPSApplication(tk.Tk):
             dwifslpreproc_options=dwifslpreproc_options,
             dwi2tensor_options=dwi2tensor_options,
             tensor2metric_options=tensor2metric_options,
-            # synB0-DISCO parameters
+            # synB0-DISCO parameters (user runs synB0 externally)
             use_synb0=self.use_synb0.get(),
-            t1_stripped=self.t1_stripped_var.get() if hasattr(self, "t1_stripped_var") else False,
-            synb0_device=self.synb0_device_var.get()
-            if hasattr(self, "synb0_device_var")
-            else "auto",
-            synb0_topup_options=synb0_topup_options,
+            synb0_output_dir=(
+                self.synb0_output_dir_var.get()
+                if hasattr(self, "synb0_output_dir_var") and self.synb0_output_dir_var.get()
+                else None
+            ),
             synb0_eddy_options=synb0_eddy_options,
             # Registration parameters
             flirt_options=flirt_options,
@@ -2303,7 +2230,7 @@ class DTIALPSApplication(tk.Tk):
             "degibbs": "Gibbs Ringing Removal",
             "preproc": "Preprocessing",
             "synb0": "synB0-DISCO",
-            "topup_eddy": "topup + eddy",
+            "eddy": "Eddy",
             "dti": "DTI Fitting",
             "registration": "Registration",
             "roi": "ROI Placement",

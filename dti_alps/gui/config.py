@@ -62,13 +62,14 @@ PIPELINE_STAGES = [
     ("results", "Results"),
 ]
 
-# Pipeline stages (synB0-DISCO mode) - replaces dwifslpreproc with synB0 + topup+eddy
+# Pipeline stages (synB0-DISCO mode) - replaces dwifslpreproc with synB0 outputs + eddy
+# User runs synB0-DISCO externally and provides the output directory
 SYNB0_PIPELINE_STAGES = [
     ("data", "Data Input"),
     ("dwidenoise", "dwidenoise"),
     ("mrdegibbs", "mrdegibbs"),
-    ("synb0", "synB0-DISCO"),
-    ("topup_eddy", "topup+eddy"),
+    ("synb0", "synB0-DISCO"),  # User provides output directory
+    ("eddy", "Eddy"),  # Runs eddy with synB0 topup outputs
     ("dwi2tensor", "dwi2tensor"),
     ("tensor2metric", "tensor2metric"),
     ("registration", "Registration"),
@@ -220,34 +221,17 @@ FNIRT_OPTIONS = [
 # Choices for FNIRT options
 FNIRT_INTMOD_CHOICES = ["none", "global_linear", "local_linear"]
 
-# synB0-DISCO options
-SYNB0_DEVICE_CHOICES = ["auto", "cuda", "cpu"]
-
-# synB0 topup options (for synB0 mode)
-SYNB0_TOPUP_OPTIONS = [
-    ("--fwhm", "string", "FWHM of smoothing (comma-separated per level)", None),
-    ("--subsamp", "string", "Subsampling levels (comma-separated)", None),
-    ("--miter", "string", "Max iterations per level (comma-separated)", None),
-    ("--lambda", "string", "Regularization weights (comma-separated)", None),
-    ("--scale", "flag", "Scale images to common mean intensity", False),
-    ("--regmod", "choice", "Regularization model", None),
-    ("--verbose", "flag", "Verbose output", False),
-]
-
-# synB0 topup regmod choices
-SYNB0_TOPUP_REGMOD_CHOICES = ["bending_energy", "membrane_energy"]
-
-# synB0 eddy options (for synB0 mode)
+# synB0-DISCO eddy options (user runs synB0 externally, we run eddy with their topup outputs)
 SYNB0_EDDY_OPTIONS = [
-    ("--repol", "flag", "Replace outlier slices (recommended)", True),
-    ("--cnr_maps", "flag", "Output CNR maps", False),
-    ("--residuals", "flag", "Output residuals", False),
-    ("--slm", "choice", "Second level model for eddy", None),
-    ("--niter", "int", "Number of iterations (default: 5)", None),
-    ("--fwhm", "string", "FWHM for conditioning (comma-separated)", None),
-    ("--s2v_niter", "int", "Slice-to-volume iterations (default: 5)", None),
-    ("--mporder", "int", "Motion model order (default: 0)", None),
-    ("--verbose", "flag", "Verbose output", False),
+    ("repol", "flag", "Replace outlier slices (recommended)", True),
+    ("cnr_maps", "flag", "Output CNR maps", False),
+    ("residuals", "flag", "Output residuals", False),
+    ("slm", "choice", "Second level model for eddy", None),
+    ("niter", "int", "Number of iterations (default: 5)", None),
+    ("fwhm", "string", "FWHM for conditioning (comma-separated)", None),
+    ("s2v_niter", "int", "Slice-to-volume iterations (default: 5)", None),
+    ("mporder", "int", "Motion model order (default: 0)", None),
+    ("verbose", "flag", "Verbose output", False),
 ]
 
 # synB0 eddy slm choices

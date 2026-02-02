@@ -99,6 +99,25 @@ def build_mrdegibbs_cmd(state: "PipelineState") -> list[str]:
     return cmd
 
 
+def build_dwi2mask_cmd(dwi_path: str, mask_path: str) -> list[str]:
+    """
+    Build dwi2mask command for brain mask generation.
+
+    Parameters
+    ----------
+    dwi_path : str
+        Path to DWI image
+    mask_path : str
+        Output path for brain mask
+
+    Returns
+    -------
+    list of str
+        Command and arguments
+    """
+    return ["dwi2mask", dwi_path, mask_path]
+
+
 def build_dwifslpreproc_cmd(state: "PipelineState") -> list[str]:
     """
     Build dwifslpreproc command for DWI preprocessing.
