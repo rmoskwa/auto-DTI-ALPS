@@ -312,7 +312,9 @@ class PipelineRunner:
         # Create brain mask for eddy
         self._log("  Creating brain mask...")
         mask_path = self.state.get_output_path("brain_mask")
-        mask_cmd = commands.build_dwi2mask_cmd(dwi_input, mask_path)
+        mask_cmd = commands.build_dwi2mask_cmd(
+            dwi_input, mask_path, self.state.bvecs_path, self.state.bvals_path
+        )
         if not self._run_command(mask_cmd, "dwi2mask"):
             self._log("ERROR: Failed to create brain mask")
             self._update_stage("eddy", "failed")

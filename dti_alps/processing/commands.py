@@ -99,7 +99,9 @@ def build_mrdegibbs_cmd(state: "PipelineState") -> list[str]:
     return cmd
 
 
-def build_dwi2mask_cmd(dwi_path: str, mask_path: str) -> list[str]:
+def build_dwi2mask_cmd(
+    dwi_path: str, mask_path: str, bvecs_path: str | None = None, bvals_path: str | None = None
+) -> list[str]:
     """
     Build dwi2mask command for brain mask generation.
 
@@ -109,13 +111,24 @@ def build_dwi2mask_cmd(dwi_path: str, mask_path: str) -> list[str]:
         Path to DWI image
     mask_path : str
         Output path for brain mask
+    bvecs_path : str, optional
+        Path to bvecs file (required if not embedded in image)
+    bvals_path : str, optional
+        Path to bvals file (required if not embedded in image)
 
     Returns
     -------
     list of str
         Command and arguments
     """
-    return ["dwi2mask", dwi_path, mask_path]
+    cmd = ["dwi2mask"]
+
+    # Add gradient table if provided
+    if bvecs_path and bvals_path:
+        cmd.extend(["-fslgrad", bvecs_path, bvals_path])
+
+    cmd.extend([dwi_path, mask_path])
+    return cmd
 
 
 def build_dwifslpreproc_cmd(state: "PipelineState") -> list[str]:
