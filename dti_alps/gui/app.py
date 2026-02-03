@@ -188,14 +188,13 @@ class DTIALPSApplication(tk.Tk):
         all_valid = all(s.is_valid for s in self.subject_files_list) if has_subjects else False
         has_output_dir = bool(hasattr(self, "output_dir_var") and self.output_dir_var.get())
 
-        # If synB0-DISCO mode, require synB0 output directory AND single subject only
+        # If synB0-DISCO mode, require synB0 output directory
         synb0_valid = True
         if self.use_synb0.get():
             has_synb0_dir = bool(
                 hasattr(self, "synb0_output_dir_var") and self.synb0_output_dir_var.get()
             )
-            single_subject = len(self.subject_files_list) <= 1
-            synb0_valid = has_synb0_dir and single_subject
+            synb0_valid = has_synb0_dir
 
         can_run = has_subjects and all_valid and has_output_dir and readout_valid and synb0_valid
 
@@ -207,12 +206,13 @@ class DTIALPSApplication(tk.Tk):
     def _on_synb0_toggle(self):
         """Handle synB0-DISCO checkbox toggle - rebuild stage buttons."""
         if self.use_synb0.get():
-            # synB0 mode enabled - check if multiple subjects exist
+            # synB0 mode enabled - warn if multiple subjects exist
             if len(self.subject_files_list) > 1:
-                messagebox.showwarning(
+                messagebox.showinfo(
                     "synB0-DISCO Mode",
-                    "synB0-DISCO mode only supports single-subject processing.\n\n"
-                    "Please remove extra subjects or disable synB0-DISCO for batch processing.",
+                    "Note: The same synB0-DISCO output directory will be used\n"
+                    "for all subjects in the batch.\n\n"
+                    "Ensure the synB0 outputs are appropriate for all subjects.",
                 )
         self._rebuild_stage_buttons()
         self._update_run_button_state()
@@ -934,16 +934,6 @@ class DTIALPSApplication(tk.Tk):
 
         Returns the number of runs successfully added.
         """
-        # Check synB0 mode single-subject restriction
-        if self.use_synb0.get() and len(self.subject_files_list) >= 1:
-            messagebox.showwarning(
-                "synB0-DISCO Mode",
-                "synB0-DISCO mode only supports single-subject processing.\n\n"
-                "Please disable synB0-DISCO to add multiple subjects,\n"
-                "or remove the existing subject first.",
-            )
-            return 0
-
         try:
             discovery = SubjectDiscovery(folder_path)
             discovered_runs = discovery.discover_files()
@@ -957,17 +947,6 @@ class DTIALPSApplication(tk.Tk):
 
             added = 0
             for subject_files in discovered_runs:
-                # In synB0 mode, only allow one subject total
-                if self.use_synb0.get() and len(self.subject_files_list) >= 1:
-                    if len(discovered_runs) > 1:
-                        messagebox.showinfo(
-                            "synB0-DISCO Mode",
-                            f"Found {len(discovered_runs)} DWI runs, but synB0-DISCO mode\n"
-                            "only supports single-subject processing.\n\n"
-                            "Only the first run was added.",
-                        )
-                    break
-
                 # Check for duplicates by DWI path (more specific than folder)
                 is_duplicate = False
                 for existing in self.subject_files_list:
@@ -996,8 +975,21 @@ class DTIALPSApplication(tk.Tk):
                 added += 1
 
             if added > 0:
+                # Track if we crossed from <=1 to >1 subjects
+                count_before = len(self.subject_files_list) - added
+                now_multiple = len(self.subject_files_list) > 1
+
                 self._log(f"Added {added} DWI run(s) from {folder_path}")
                 self._update_run_button_state()
+
+                # Warn about synB0 batch usage when first reaching multiple subjects
+                if self.use_synb0.get() and count_before <= 1 and now_multiple:
+                    messagebox.showinfo(
+                        "synB0-DISCO Mode",
+                        "Note: The same synB0-DISCO output directory will be used\n"
+                        "for all subjects in the batch.\n\n"
+                        "Ensure the synB0 outputs are appropriate for all subjects.",
+                    )
 
             return added
 
