@@ -2314,8 +2314,9 @@ class DTIALPSApplication(tk.Tk):
         if not alps_results:
             return
 
-        # Switch to results stage (stage 6, index 5)
-        self._show_stage(8)
+        # Switch to results stage (last stage, index varies by mode)
+        results_stage_index = len(self.stage_buttons) - 1
+        self._show_stage(results_stage_index)
 
         # Update results frame
         frame = self.stage_frames["results"]
@@ -2412,8 +2413,9 @@ class DTIALPSApplication(tk.Tk):
 
     def _show_batch_results(self, batch_state: BatchState):
         """Display batch processing results with method-specific column names."""
-        # Switch to results stage (stage 6, index 5)
-        self._show_stage(8)
+        # Switch to results stage (last stage, index varies by mode)
+        results_stage_index = len(self.stage_buttons) - 1
+        self._show_stage(results_stage_index)
 
         # Update results frame
         frame = self.stage_frames["results"]
