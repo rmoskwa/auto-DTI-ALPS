@@ -130,21 +130,21 @@ def calculate_angular_dispersion(
 
     vectors = np.array(vectors)
 
-    # Account for antipodal symmetry (V1 and -V1 represent same direction)
-    # Use the principal direction (first vector) as reference
-    ref_vector = vectors[0]
-    for i in range(1, len(vectors)):
-        if np.dot(vectors[i], ref_vector) < 0:
-            vectors[i] = -vectors[i]
+    # Use orientation tensor to find mean direction
+    # This properly handles antipodal symmetry (V1 and -V1 represent same direction)
+    # since v⊗v is identical for v and -v
+    orientation_tensor = np.zeros((3, 3))
+    for v in vectors:
+        orientation_tensor += np.outer(v, v)
+    orientation_tensor /= len(vectors)
 
-    # Calculate mean direction
-    mean_vector = np.mean(vectors, axis=0)
-    mean_norm = np.linalg.norm(mean_vector)
+    # Principal eigenvector (largest eigenvalue) is the mean orientation
+    eigenvalues, eigenvectors = np.linalg.eigh(orientation_tensor)
+    mean_direction = eigenvectors[:, -1]  # eigh returns eigenvalues in ascending order
 
-    if mean_norm < 1e-10:
-        return 90.0  # Vectors cancel out - maximum dispersion
-
-    mean_direction = mean_vector / mean_norm
+    # Check for highly dispersed case (eigenvalues nearly equal)
+    if eigenvalues[-1] < 1e-10:
+        return 90.0  # Degenerate case - maximum dispersion
 
     # Calculate angular deviation for each vector from mean
     angles = []
