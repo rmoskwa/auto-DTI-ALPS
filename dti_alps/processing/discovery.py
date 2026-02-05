@@ -124,9 +124,6 @@ class SubjectDiscovery:
         bval_files = self._find_files(self.BVAL_EXTENSIONS)
         json_files = self._find_files(self.JSON_EXTENSIONS)
 
-        # Filter out known non-DWI NIfTI files
-        dwi_files = [f for f in dwi_files if not self._is_non_dwi_file(f)]
-
         if not dwi_files:
             return []
 
@@ -172,32 +169,6 @@ class SubjectDiscovery:
             pattern = os.path.join(self.folder_path, ext)
             files.extend(glob(pattern))
         return sorted(files)
-
-    def _is_non_dwi_file(self, filepath: str) -> bool:
-        """
-        Check if a NIfTI file is likely not a DWI image.
-
-        Excludes common derived images like masks, FA maps, etc.
-        """
-        filename = os.path.basename(filepath).lower()
-        non_dwi_patterns = [
-            "mask",
-            "brain",
-            "fa",
-            "md",
-            "ad",
-            "rd",
-            "tensor",
-            "noddi",
-            "adc",
-            "b0",
-            "mean",
-            "std",
-        ]
-        for pattern in non_dwi_patterns:
-            if pattern in filename and "dwi" not in filename:
-                return True
-        return False
 
     def _get_stem(self, filepath: str) -> str:
         """
