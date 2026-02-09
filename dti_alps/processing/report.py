@@ -29,6 +29,7 @@ class ROIMetrics:
     directional_alignment: float | None = None
     angular_dispersion: float | None = None
     fa_mean: float | None = None
+    radial_asymmetry: float | None = None  # mean(λ2/λ3) within ROI
 
 
 @dataclass
@@ -184,6 +185,49 @@ def calculate_fa_mean(
     return float(np.mean(fa_values))
 
 
+def calculate_radial_asymmetry(
+    l2_data: np.ndarray,
+    l3_data: np.ndarray,
+    mask: np.ndarray,
+) -> float | None:
+    """
+    Calculate mean radial asymmetry (λ2/λ3) within ROI.
+
+    The λ2/λ3 ratio indicates radial diffusion asymmetry and potential
+    crossing fiber contamination (Wright et al. 2023, Georgiopoulos et al. 2024).
+    A ratio close to 1.0 indicates isotropic radial diffusion; higher values
+    suggest the presence of crossing fibers.
+
+    Parameters
+    ----------
+    l2_data : np.ndarray
+        Second eigenvalue data (x, y, z)
+    l3_data : np.ndarray
+        Third eigenvalue data (x, y, z)
+    mask : np.ndarray
+        Binary ROI mask
+
+    Returns
+    -------
+    float or None
+        Mean λ2/λ3 ratio, or None if mask is empty
+    """
+    coords = np.where(mask > 0)
+    if len(coords[0]) == 0:
+        return None
+
+    l2_values = l2_data[coords]
+    l3_values = l3_data[coords]
+
+    # Only compute ratio where λ3 > 0 to avoid division by zero
+    valid = l3_values > 0
+    if not np.any(valid):
+        return None
+
+    ratios = l2_values[valid] / l3_values[valid]
+    return float(np.mean(ratios))
+
+
 def discover_roi_shapes(output_dir: Path) -> list[str]:
     """
     Discover all unique ROI shapes in the output directory.
@@ -291,6 +335,12 @@ def calculate_subject_metrics(
     fa_data = nib.load(str(fa_path)).get_fdata()
     v1_data = nib.load(str(v1_path)).get_fdata()
 
+    # Discover optional L2/L3 files (only present for ALPS-PAS or Both)
+    l2_files = list(subject_dir.glob("*_L2.nii.gz"))
+    l3_files = list(subject_dir.glob("*_L3.nii.gz"))
+    l2_data = nib.load(str(l2_files[0])).get_fdata() if l2_files and l3_files else None
+    l3_data = nib.load(str(l3_files[0])).get_fdata() if l2_files and l3_files else None
+
     # Get ROI directory
     roi_dir = subject_dir / f"rois_{shape}"
     if not roi_dir.exists():
@@ -314,10 +364,15 @@ def calculate_subject_metrics(
 
         mask_data = nib.load(str(roi_files[0])).get_fdata()
 
+        radial_asym = None
+        if l2_data is not None and l3_data is not None:
+            radial_asym = calculate_radial_asymmetry(l2_data, l3_data, mask_data)
+
         metrics = ROIMetrics(
             directional_alignment=calculate_directional_alignment(v1_data, mask_data, fiber_type),
             angular_dispersion=calculate_angular_dispersion(v1_data, mask_data),
             fa_mean=calculate_fa_mean(fa_data, mask_data),
+            radial_asymmetry=radial_asym,
         )
 
         setattr(result, report_key, metrics)
@@ -348,8 +403,8 @@ def write_report_csv(
         writer = csv.writer(f)
 
         # Header row 1: Category headers
+        # Columns: Filename, "", [4 DA], "", [4 AD], "", [4 FA], "", [4 RA]
         header1 = [
-            "",
             "",
             "",
             "Directional Alignment (V1)",
@@ -365,28 +420,23 @@ def write_report_csv(
             "Fractional Anisotropy",
             "",
             "",
+            "",
+            "",
+            "Radial Asymmetry (\u03bb2/\u03bb3)",
+            "",
+            "",
+            "",
         ]
         writer.writerow(header1)
 
         # Header row 2: Column headers
-        header2 = [
-            "Filename",
-            "",
-            "l_proj",
-            "l_assoc",
-            "r_proj",
-            "r_assoc",
-            "",
-            "l_proj",
-            "l_assoc",
-            "r_proj",
-            "r_assoc",
-            "",
-            "l_proj",
-            "l_assoc",
-            "r_proj",
-            "r_assoc",
-        ]
+        roi_cols = ["l_proj", "l_assoc", "r_proj", "r_assoc"]
+        header2 = ["Filename", ""]
+        for _ in range(4):  # 4 metric groups
+            header2.extend(roi_cols)
+            header2.append("")
+        # Remove trailing empty separator
+        header2.pop()
         writer.writerow(header2)
 
         # Data rows
@@ -415,6 +465,12 @@ def write_report_csv(
                 fmt(data.l_assoc.fa_mean),
                 fmt(data.r_proj.fa_mean),
                 fmt(data.r_assoc.fa_mean),
+                "",
+                # Radial Asymmetry
+                fmt(data.l_proj.radial_asymmetry),
+                fmt(data.l_assoc.radial_asymmetry),
+                fmt(data.r_proj.radial_asymmetry),
+                fmt(data.r_assoc.radial_asymmetry),
             ]
             writer.writerow(row)
 
