@@ -249,6 +249,14 @@ def reanalyze_subject(
         if needs_v1 and v1_path:
             v1_data = nib.load(v1_path).get_fdata()
 
+        # Load L2/L3 for radial asymmetry penalty in refinement
+        l2_data = None
+        l3_data = None
+        if enable_refinement and l2_path and l3_path:
+            l2_data = nib.load(l2_path).get_fdata()
+            l3_data = nib.load(l3_path).get_fdata()
+            log("  L2/L3 data loaded for radial asymmetry penalty")
+
         # Create output directory for new ROIs
         # Include _refined suffix if refinement is enabled
         roi_suffix = f"{roi_shape.name}_refined" if enable_refinement else roi_shape.name
@@ -345,6 +353,8 @@ def reanalyze_subject(
                     max_y_drift=1,
                     max_z_drift=1,
                     shape_type=roi_shape.shape_type,
+                    l2_data=l2_data,
+                    l3_data=l3_data,
                 )
 
                 if refined_proj != proj_centroid:

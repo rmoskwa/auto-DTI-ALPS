@@ -404,14 +404,18 @@ def calculate_roi_quality(
     fa_data: np.ndarray,
     mask: np.ndarray,
     fiber_type: str,
+    l2_data: np.ndarray | None = None,
+    l3_data: np.ndarray | None = None,
 ) -> tuple[float, float, float, float]:
     """
-    Calculate ROI quality based on fiber purity, direction strength, and FA.
+    Calculate ROI quality based on fiber purity, direction strength, FA,
+    and optionally radial asymmetry (λ2/λ3).
 
     The quality score rewards ROIs that:
     1. Have high fiber purity (% of voxels with correct dominant direction)
     2. Have strong directional alignment (mean magnitude of target V1 component)
     3. Have high FA values (strong fiber signal)
+    4. Have low radial asymmetry (λ2/λ3 close to 1.0, indicating single fiber population)
 
     Parameters
     ----------
@@ -423,6 +427,12 @@ def calculate_roi_quality(
         Binary ROI mask
     fiber_type : str
         Either 'proj' (Z-dominant) or 'assoc' (Y-dominant)
+    l2_data : np.ndarray, optional
+        Second eigenvalue data (x, y, z). Only available when alps_method
+        is "ALPS-PAS" or "Both".
+    l3_data : np.ndarray, optional
+        Third eigenvalue data (x, y, z). Only available when alps_method
+        is "ALPS-PAS" or "Both".
 
     Returns
     -------
@@ -430,7 +440,7 @@ def calculate_roi_quality(
         purity: fraction of voxels with correct fiber orientation
         direction_strength: mean magnitude of target V1 component
         mean_fa: mean FA value in ROI
-        combined_score: purity * direction_strength * mean_fa
+        combined_score: purity * direction_strength * mean_fa * radial_penalty
     """
     coords = np.where(mask)
     if len(coords[0]) == 0:
@@ -468,6 +478,17 @@ def calculate_roi_quality(
     # Combined score rewards ROIs with high purity, strong direction, and high FA
     combined_score = purity * mean_direction_strength * mean_fa
 
+    # Apply radial asymmetry penalty when eigenvalue data is available.
+    # sqrt(1/ratio) compresses the dynamic range to match the other factors,
+    # preventing λ2/λ3 from dominating the objective.
+    if l2_data is not None and l3_data is not None:
+        l2_values = l2_data[coords]
+        l3_values = l3_data[coords]
+        valid = l3_values > 0
+        if np.any(valid):
+            radial_asymmetry = float(np.mean(l2_values[valid] / l3_values[valid]))
+            combined_score *= (1.0 / radial_asymmetry) ** 0.5
+
     return purity, mean_direction_strength, mean_fa, combined_score
 
 
@@ -486,13 +507,15 @@ def refine_roi_placement(
     max_y_drift: int = 1,
     max_z_drift: int = 1,
     shape_type: str = "sphere",
+    l2_data: np.ndarray | None = None,
+    l3_data: np.ndarray | None = None,
 ) -> tuple[tuple[int, int, int], float, float]:
     """
     Refine ROI placement by searching nearby positions for better fiber purity.
 
     Starting from the template-based centroid, search a small neighborhood
     to find the position that maximizes the combined quality score
-    (purity * direction * FA).
+    (purity * direction * FA * radial_penalty).
 
     For DTI-ALPS, projection and association ROIs must remain spatially aligned
     to capture the same underlying X-direction diffusion. When a reference_centroid
@@ -532,6 +555,10 @@ def refine_roi_placement(
         Only used when reference_centroid is provided. Default 1.
     shape_type : str
         ROI shape type: "sphere", "squarev9", or "squarev4". Default "sphere".
+    l2_data : np.ndarray, optional
+        Second eigenvalue data for radial asymmetry penalty.
+    l3_data : np.ndarray, optional
+        Third eigenvalue data for radial asymmetry penalty.
 
     Returns
     -------
@@ -579,7 +606,9 @@ def refine_roi_placement(
                     mask = create_square_v9_mask(shape, test_center)
 
                 # Calculate quality metrics
-                purity, _, _, score = calculate_roi_quality(v1_data, fa_data, mask, fiber_type)
+                purity, _, _, score = calculate_roi_quality(
+                    v1_data, fa_data, mask, fiber_type, l2_data, l3_data
+                )
 
                 if score > best_score:
                     best_score = score
@@ -603,6 +632,8 @@ def refine_roi_pair_placement(
     max_y_drift: int = 1,
     max_z_drift: int = 1,
     shape_type: str = "sphere",
+    l2_data: np.ndarray | None = None,
+    l3_data: np.ndarray | None = None,
 ) -> tuple[tuple[int, int, int], tuple[int, int, int], float, float, float]:
     """
     Jointly refine projection and association ROI placement as a pair.
@@ -644,6 +675,10 @@ def refine_roi_pair_placement(
         Default 1.
     shape_type : str
         ROI shape type: "sphere", "squarev9", or "squarev4". Default "sphere".
+    l2_data : np.ndarray, optional
+        Second eigenvalue data for radial asymmetry penalty.
+    l3_data : np.ndarray, optional
+        Third eigenvalue data for radial asymmetry penalty.
 
     Returns
     -------
@@ -688,7 +723,9 @@ def refine_roi_pair_placement(
                 else:  # squarev9
                     mask = create_square_v9_mask(shape, test_center)
 
-                purity, _, _, score = calculate_roi_quality(v1_data, fa_data, mask, "proj")
+                purity, _, _, score = calculate_roi_quality(
+                    v1_data, fa_data, mask, "proj", l2_data, l3_data
+                )
                 if score > 0:
                     proj_scores[test_center] = (purity, score)
 
@@ -719,7 +756,9 @@ def refine_roi_pair_placement(
                 else:  # squarev9
                     mask = create_square_v9_mask(shape, test_center)
 
-                purity, _, _, score = calculate_roi_quality(v1_data, fa_data, mask, "assoc")
+                purity, _, _, score = calculate_roi_quality(
+                    v1_data, fa_data, mask, "assoc", l2_data, l3_data
+                )
                 if score > 0:
                     assoc_scores[test_center] = (purity, score)
 

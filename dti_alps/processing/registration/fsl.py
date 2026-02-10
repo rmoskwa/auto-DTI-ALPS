@@ -545,6 +545,17 @@ class FSLRegistration(RegistrationBackend):
                 if shape_type == "squarev4":
                     log("  Squarev4 will use default configuration")
 
+        # Load L2/L3 data for radial asymmetry penalty in refinement
+        l2_data = None
+        l3_data = None
+        if do_refinement:
+            l2_path = getattr(state, "l2_path", None)
+            l3_path = getattr(state, "l3_path", None)
+            if l2_path and os.path.exists(l2_path) and l3_path and os.path.exists(l3_path):
+                l2_data = nib.load(l2_path).get_fdata()
+                l3_data = nib.load(l3_path).get_fdata()
+                log("  L2/L3 data loaded for radial asymmetry penalty")
+
         roi_centroids = {}
         roi_native_paths = {}
         template_centroids = {}
@@ -651,6 +662,8 @@ class FSLRegistration(RegistrationBackend):
                     max_y_drift=1,
                     max_z_drift=1,
                     shape_type=shape_type,
+                    l2_data=l2_data,
+                    l3_data=l3_data,
                 )
 
                 # Log projection ROI refinement
