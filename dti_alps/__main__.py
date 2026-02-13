@@ -13,6 +13,8 @@ ROI Reanalysis (post-processing with different ROI shapes):
     python -m dti_alps --reanalyze /path/to/output --squarev9
     python -m dti_alps --reanalyze /path/to/output --squarev4
     python -m dti_alps --reanalyze /path/to/output --sphere 2.5 --refine
+    python -m dti_alps --reanalyze /path/to/output --sphere 2,3,4
+    python -m dti_alps --reanalyze /path/to/output --sphere 3 --squarev4
 
 Output naming:
     Without --refine: rois_{shape}/ and alps_results_{shape}.csv
@@ -42,18 +44,23 @@ SPHERE_RADIUS_MIN = 1.0
 SPHERE_RADIUS_MAX = 4.0
 
 
-def _validate_sphere_radius(value: str) -> float:
-    """Validate sphere radius is within allowed range."""
-    try:
-        radius = float(value)
-    except ValueError as err:
-        raise argparse.ArgumentTypeError(f"invalid float value: '{value}'") from err
+def _validate_sphere_radii(value: str) -> list[float]:
+    """Validate comma-separated sphere radii are within allowed range."""
+    radii = []
+    for part in value.split(","):
+        part = part.strip()
+        try:
+            radius = float(part)
+        except ValueError as err:
+            raise argparse.ArgumentTypeError(f"invalid float value: '{part}'") from err
 
-    if radius < SPHERE_RADIUS_MIN or radius > SPHERE_RADIUS_MAX:
-        raise argparse.ArgumentTypeError(
-            f"radius must be between {SPHERE_RADIUS_MIN} and {SPHERE_RADIUS_MAX} mm, got {radius}"
-        )
-    return radius
+        if radius < SPHERE_RADIUS_MIN or radius > SPHERE_RADIUS_MAX:
+            raise argparse.ArgumentTypeError(
+                f"radius must be between {SPHERE_RADIUS_MIN} and {SPHERE_RADIUS_MAX} mm, "
+                f"got {radius}"
+            )
+        radii.append(radius)
+    return radii
 
 
 def _parse_reanalysis_args() -> argparse.Namespace:
@@ -75,6 +82,12 @@ Examples:
   %(prog)s --reanalyze /path/to/output --sphere 2.5 --refine
       Reanalyze with 2.5mm spheres and ROI refinement enabled
 
+  %(prog)s --reanalyze /path/to/output --sphere 2,3,4
+      Reanalyze with 2mm, 3mm, and 4mm spheres in one run
+
+  %(prog)s --reanalyze /path/to/output --sphere 3 --squarev4
+      Reanalyze with both 3mm sphere and 2x2 square ROIs
+
   %(prog)s --reanalyze /path/to/output --squarev9 --refine --method ALPS-LAB
       Reanalyze with square ROIs, refinement, and only ALPS-LAB calculation
         """,
@@ -87,20 +100,23 @@ Examples:
         help="Path to output directory containing processed subjects",
     )
 
-    # ROI shape options (mutually exclusive)
-    shape_group = parser.add_mutually_exclusive_group(required=True)
-    shape_group.add_argument(
+    # ROI shape options (can be combined)
+    parser.add_argument(
         "--sphere",
-        type=_validate_sphere_radius,
-        metavar="RADIUS",
-        help=f"Create spherical ROIs with given radius ({SPHERE_RADIUS_MIN}-{SPHERE_RADIUS_MAX} mm)",
+        type=_validate_sphere_radii,
+        metavar="RADIUS[,RADIUS,...]",
+        help=(
+            f"Create spherical ROIs with given radius/radii "
+            f"({SPHERE_RADIUS_MIN}-{SPHERE_RADIUS_MAX} mm). "
+            f"Comma-separated for multiple (e.g., --sphere 2,3,4)"
+        ),
     )
-    shape_group.add_argument(
+    parser.add_argument(
         "--squarev9",
         action="store_true",
         help="Create 3x3 voxel square ROIs in the axial plane (9 voxels total)",
     )
-    shape_group.add_argument(
+    parser.add_argument(
         "--squarev4",
         action="store_true",
         help="Create 2x2 voxel square ROIs in the axial plane (4 voxels, V1-optimized)",
@@ -136,22 +152,36 @@ def _run_reanalysis() -> None:
 
     from .processing.reanalysis import ROIShape, run_reanalysis
 
-    # Create ROI shape configuration
+    # Build list of ROI shapes from all specified flags
+    roi_shapes: list[ROIShape] = []
     if args.sphere:
-        roi_shape = ROIShape(shape_type="sphere", sphere_radius=args.sphere)
-    elif args.squarev4:
-        roi_shape = ROIShape(shape_type="squarev4")
-    else:
-        roi_shape = ROIShape(shape_type="squarev9")
+        for radius in args.sphere:
+            roi_shapes.append(ROIShape(shape_type="sphere", sphere_radius=radius))
+    if args.squarev9:
+        roi_shapes.append(ROIShape(shape_type="squarev9"))
+    if args.squarev4:
+        roi_shapes.append(ROIShape(shape_type="squarev4"))
 
-    # Run reanalysis
-    run_reanalysis(
-        output_dir=args.reanalyze,
-        roi_shape=roi_shape,
-        enable_refinement=args.refine,
-        alps_method=args.method,
-        fa_threshold=args.fa_threshold,
-    )
+    if not roi_shapes:
+        print(
+            "ERROR: At least one ROI shape must be specified (--sphere, --squarev9, or --squarev4)"
+        )
+        sys.exit(1)
+
+    # Run reanalysis for each shape
+    for roi_shape in roi_shapes:
+        if len(roi_shapes) > 1:
+            print(f"\n{'=' * 60}")
+            print(f"Reanalysis: {roi_shape.name}")
+            print(f"{'=' * 60}\n")
+
+        run_reanalysis(
+            output_dir=args.reanalyze,
+            roi_shape=roi_shape,
+            enable_refinement=args.refine,
+            alps_method=args.method,
+            fa_threshold=args.fa_threshold,
+        )
 
 
 def main():
