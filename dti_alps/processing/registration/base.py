@@ -406,6 +406,7 @@ def calculate_roi_quality(
     fiber_type: str,
     l2_data: np.ndarray | None = None,
     l3_data: np.ndarray | None = None,
+    radial_threshold: float = 1.8,
 ) -> tuple[float, float, float, float]:
     """
     Calculate ROI quality based on fiber purity, direction strength, FA,
@@ -415,7 +416,13 @@ def calculate_roi_quality(
     1. Have high fiber purity (% of voxels with correct dominant direction)
     2. Have strong directional alignment (mean magnitude of target V1 component)
     3. Have high FA values (strong fiber signal)
-    4. Have low radial asymmetry (λ2/λ3 close to 1.0, indicating single fiber population)
+    4. Avoid crossing fiber contamination (λ2/λ3 above threshold)
+
+    The radial asymmetry penalty is only applied when mean λ2/λ3 exceeds
+    the threshold, to avoid penalizing genuine perivascular diffusion signal
+    (which also elevates L2 relative to L3). The threshold of 1.8 is based
+    on Georgiopoulos et al. (2024, Brain Communications) who used this
+    eigenvalue ratio to identify crossing fiber regions in DTI-ALPS ROIs.
 
     Parameters
     ----------
@@ -433,6 +440,9 @@ def calculate_roi_quality(
     l3_data : np.ndarray, optional
         Third eigenvalue data (x, y, z). Only available when alps_method
         is "ALPS-PAS" or "Both".
+    radial_threshold : float, optional
+        Mean λ2/λ3 ratio above which the crossing fiber penalty is applied.
+        Default 1.8 (Georgiopoulos et al. 2024).
 
     Returns
     -------
@@ -478,16 +488,18 @@ def calculate_roi_quality(
     # Combined score rewards ROIs with high purity, strong direction, and high FA
     combined_score = purity * mean_direction_strength * mean_fa
 
-    # Apply radial asymmetry penalty when eigenvalue data is available.
-    # sqrt(1/ratio) compresses the dynamic range to match the other factors,
-    # preventing λ2/λ3 from dominating the objective.
+    # Apply crossing fiber penalty only when mean λ2/λ3 exceeds the threshold.
+    # Below the threshold, asymmetry likely reflects genuine perivascular
+    # diffusion signal rather than crossing fibers, so no penalty is applied.
+    # Above the threshold, sqrt(threshold/ratio) penalizes proportionally.
     if l2_data is not None and l3_data is not None:
         l2_values = l2_data[coords]
         l3_values = l3_data[coords]
         valid = l3_values > 0
         if np.any(valid):
             radial_asymmetry = float(np.mean(l2_values[valid] / l3_values[valid]))
-            combined_score *= (1.0 / radial_asymmetry) ** 0.5
+            if radial_asymmetry > radial_threshold:
+                combined_score *= (radial_threshold / radial_asymmetry) ** 0.5
 
     return purity, mean_direction_strength, mean_fa, combined_score
 
@@ -515,7 +527,7 @@ def refine_roi_placement(
 
     Starting from the template-based centroid, search a small neighborhood
     to find the position that maximizes the combined quality score
-    (purity * direction * FA * radial_penalty).
+    (purity * direction * FA, with crossing fiber penalty when λ2/λ3 > 1.8).
 
     For DTI-ALPS, projection and association ROIs must remain spatially aligned
     to capture the same underlying X-direction diffusion. When a reference_centroid
