@@ -22,7 +22,9 @@ class SubjectFiles:
     folder_path : str
         Path to the subject's data folder
     subject_id : str
-        Subject identifier (typically folder name)
+        Subject identifier. For single-run folders, this is the folder basename
+        (e.g., "10_1003"). For multi-run folders, this is the DWI filename stem
+        (e.g., "DTI64_b1300") to differentiate runs within the same folder.
     dwi_path : str or None
         Path to 4D diffusion-weighted image
     bvec_path : str or None
@@ -110,7 +112,9 @@ class SubjectDiscovery:
         Auto-discover all DWI runs in the folder.
 
         Each DWI file with matching bvec/bval files becomes a separate entry.
-        The subject_id is derived from the DWI filename stem.
+        When a single DWI run is found, subject_id is set to the folder basename
+        (e.g., "10_1003") since the folder identifies the subject. When multiple
+        runs are found, subject_id uses the DWI filename stem to differentiate them.
 
         Returns
         -------
@@ -155,6 +159,12 @@ class SubjectDiscovery:
                 )
                 results.append(subject)
                 matched_dwi_files.append(dwi_path)
+
+        # Single run: use folder name as subject_id (the folder IS the subject)
+        # This prevents collisions when different subject folders contain
+        # identically-named DWI files (e.g., 10_1003/DTI64.nii.gz vs 10_1005/DTI64.nii.gz)
+        if len(results) == 1:
+            results[0].subject_id = os.path.basename(self.folder_path)
 
         # Look for reverse PE images for each result
         for subject in results:
