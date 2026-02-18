@@ -967,16 +967,28 @@ class DTIALPSApplication(tk.Tk):
         """
         Discover all DWI runs in folder and add each as a separate subject entry.
 
+        If no DWI files are found directly in the selected folder, checks
+        immediate subdirectories for DWI data. This allows users to select a
+        parent folder containing multiple subject folders.
+
         Returns the number of runs successfully added.
         """
         try:
             discovery = SubjectDiscovery(folder_path)
             discovered_runs = discovery.discover_files()
 
+            # If nothing found at this level, check immediate subdirectories
+            if not discovered_runs:
+                subdirs = sorted(p for p in Path(folder_path).iterdir() if p.is_dir())
+                for subdir in subdirs:
+                    sub_discovery = SubjectDiscovery(str(subdir))
+                    discovered_runs.extend(sub_discovery.discover_files())
+
             if not discovered_runs:
                 messagebox.showinfo(
                     "No Data Found",
-                    f"No DWI files with matching bvec/bval files found in:\n{folder_path}",
+                    f"No DWI files with matching bvec/bval files found in:\n{folder_path}\n\n"
+                    "Also checked immediate subdirectories.",
                 )
                 return 0
 
@@ -1000,7 +1012,7 @@ class DTIALPSApplication(tk.Tk):
                     tk.END,
                     values=(
                         subject_files.subject_id,
-                        folder_path,
+                        subject_files.folder_path,
                         files_found,
                     ),
                 )
