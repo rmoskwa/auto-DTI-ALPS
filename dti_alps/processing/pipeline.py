@@ -620,6 +620,9 @@ class PipelineRunner:
         - Standard: dwifslpreproc (default)
         - synB0-DISCO: synB0 + topup + eddy (requires T1 image)
 
+        When staging is enabled, input files are copied to fast local storage
+        before processing, and results are copied back afterward.
+
         Returns
         -------
         bool
@@ -627,6 +630,32 @@ class PipelineRunner:
         """
         self.cancelled = False
 
+        # --- Staging setup ---
+        staging_ctx = None
+        staging_mgr = None
+        if self.state.staging_enabled:
+            from .staging import StagingManager
+
+            staging_mgr = StagingManager(log_callback=self._log)
+            staging_ctx = staging_mgr.stage_in(self.state)
+
+        try:
+            return self._run_pipeline_stages()
+        finally:
+            if staging_ctx is not None:
+                staging_mgr.stage_out(self.state, staging_ctx)
+                staging_mgr.cleanup(staging_ctx)
+                if staging_ctx.copy_back_failed:
+                    self._log(f"WARNING: Results preserved at: {staging_ctx.output_dir}")
+
+    def _run_pipeline_stages(self) -> bool:
+        """Execute all pipeline stages sequentially.
+
+        Returns
+        -------
+        bool
+            True if all stages completed successfully
+        """
         # Ensure output directory exists
         os.makedirs(self.state.output_dir, exist_ok=True)
 

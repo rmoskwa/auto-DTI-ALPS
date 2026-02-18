@@ -38,6 +38,9 @@ from .pipeline import PipelineRunner
 
 # Report generation
 from .report import generate_reports, run_report
+
+# Staging
+from .staging import StagingManager
 from .state import BatchConfig, BatchState, PipelineState, SubjectResult
 
 # Background workers
@@ -70,4 +73,6 @@ __all__ = [
     # Report generation
     "generate_reports",
     "run_report",
+    # Staging
+    "StagingManager",
 ]

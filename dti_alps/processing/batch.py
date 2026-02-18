@@ -145,6 +145,9 @@ class BatchRunner:
             output_dir=subject_output_dir,
             output_prefix=subject_files.subject_id,
             output_config=batch_config.output_config,
+            # Staging settings
+            staging_enabled=batch_config.staging_enabled,
+            staging_dir=batch_config.staging_dir,
         )
 
         return state

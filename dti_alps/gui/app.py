@@ -602,6 +602,41 @@ class DTIALPSApplication(tk.Tk):
             row=0, column=2, pady=2
         )
 
+        # Staging option
+        self.staging_enabled_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            out_frame,
+            text="Stage files to local storage",
+            variable=self.staging_enabled_var,
+            command=self._on_staging_toggle,
+        ).grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+
+        ttk.Label(
+            out_frame,
+            text="Copy inputs to fast local disk before processing (recommended for WSL2/VM)",
+            foreground="gray",
+        ).grid(row=2, column=0, columnspan=3, sticky=tk.W, padx=(20, 0), pady=(0, 2))
+
+        ttk.Label(out_frame, text="Staging Directory:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        self.staging_dir_var = tk.StringVar()
+        self.staging_dir_entry = ttk.Entry(
+            out_frame, textvariable=self.staging_dir_var, width=50, state=tk.DISABLED
+        )
+        self.staging_dir_entry.grid(row=3, column=1, sticky=tk.EW, padx=5, pady=2)
+        self.staging_dir_browse_btn = ttk.Button(
+            out_frame,
+            text="Browse...",
+            command=self._browse_staging_dir,
+            state=tk.DISABLED,
+        )
+        self.staging_dir_browse_btn.grid(row=3, column=2, pady=2)
+
+        ttk.Label(
+            out_frame,
+            text="Leave empty to use system temp directory",
+            foreground="gray",
+        ).grid(row=4, column=1, sticky=tk.W, padx=5, pady=(0, 2))
+
         out_frame.columnconfigure(1, weight=1)
 
     def _on_pe_auto_change(self):
@@ -1883,6 +1918,21 @@ class DTIALPSApplication(tk.Tk):
             self.output_dir_var.set(path)
             user_config.set_from_path(UserConfig.KEY_OUTPUT_DIR, path)
 
+    def _on_staging_toggle(self):
+        """Enable/disable staging directory controls based on checkbox."""
+        if self.staging_enabled_var.get():
+            self.staging_dir_entry.config(state=tk.NORMAL)
+            self.staging_dir_browse_btn.config(state=tk.NORMAL)
+        else:
+            self.staging_dir_entry.config(state=tk.DISABLED)
+            self.staging_dir_browse_btn.config(state=tk.DISABLED)
+
+    def _browse_staging_dir(self):
+        """Open directory browser for staging directory."""
+        path = filedialog.askdirectory()
+        if path:
+            self.staging_dir_var.set(path)
+
     def _show_stage(self, stage_idx):
         """Show the specified pipeline stage."""
         self.current_stage = stage_idx
@@ -2048,6 +2098,9 @@ class DTIALPSApplication(tk.Tk):
             # Output
             output_dir=self.output_dir_var.get(),
             output_config=self._collect_output_config(),
+            # Staging settings
+            staging_enabled=self.staging_enabled_var.get(),
+            staging_dir=self.staging_dir_var.get() or None,
         )
 
         # Create batch state

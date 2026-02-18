@@ -152,6 +152,10 @@ class PipelineState:
     output_prefix: str = "subject"
     output_config: OutputConfig = field(default_factory=OutputConfig)
 
+    # Staging settings (copy to local storage for performance)
+    staging_enabled: bool = False
+    staging_dir: str | None = None  # Custom staging base dir; None = system temp
+
     # Intermediate outputs (set during processing)
     denoised_dwi_path: str | None = None
     degibbs_dwi_path: str | None = None
@@ -278,6 +282,10 @@ class BatchConfig:
     # Output settings
     output_dir: str = ""
     output_config: OutputConfig = field(default_factory=OutputConfig)
+
+    # Staging settings
+    staging_enabled: bool = False
+    staging_dir: str | None = None
 
 
 @dataclass
