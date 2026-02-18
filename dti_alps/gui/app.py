@@ -1656,12 +1656,20 @@ class DTIALPSApplication(tk.Tk):
 
         # ROI refinement option
         row = 3
-        self.refine_roi_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
+        ttk.Label(param_frame, text="ROI Refinement:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self.refine_roi_var = tk.StringVar(value=config.DEFAULT_ROI_REFINEMENT)
+        ttk.Combobox(
             param_frame,
-            text="Enable ROI refinement (±3 X, ±2 Y, ±2 Z voxels; ±1 Y/Z drift between proj/assoc)",
-            variable=self.refine_roi_var,
-        ).grid(row=row, column=0, columnspan=3, sticky=tk.W, pady=5)
+            textvariable=self.refine_roi_var,
+            values=config.ROI_REFINEMENT_OPTIONS,
+            state="readonly",
+            width=12,
+        ).grid(row=row, column=1, sticky=tk.W, padx=5)
+        ttk.Label(
+            param_frame,
+            text="Refined: ±3 X, ±2 Y, ±2 Z voxels; ±1 Y/Z drift between proj/assoc",
+            foreground="gray",
+        ).grid(row=row, column=2, sticky=tk.W, padx=10)
 
         # Info about the process
         info_frame = ttk.LabelFrame(frame, text="ROI Placement Process", padding=10)

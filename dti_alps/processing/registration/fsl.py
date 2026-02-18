@@ -434,55 +434,65 @@ class FSLRegistration(RegistrationBackend):
         if not roi_shapes:
             roi_shapes = [{"type": "sphere", "radius": 3.0}]
 
-        # Check if refinement is enabled
-        do_refinement = getattr(state, "refine_roi_placement", True)
+        # Determine which refinement modes to run
+        refinement_setting = getattr(state, "refine_roi_placement", "Refined")
+        # Support legacy bool values
+        if isinstance(refinement_setting, bool):
+            refinement_modes = [refinement_setting]
+        elif refinement_setting == "Both":
+            refinement_modes = [False, True]
+        else:
+            refinement_modes = [refinement_setting == "Refined"]
 
-        # Process each ROI shape
+        # Process each ROI shape × refinement mode
         all_results = {}
-        for shape_config in roi_shapes:
-            shape_type = shape_config.get("type", "sphere")
-            sphere_radius = shape_config.get("radius", 3.0) if shape_type == "sphere" else None
+        for do_refinement in refinement_modes:
+            for shape_config in roi_shapes:
+                shape_type = shape_config.get("type", "sphere")
+                sphere_radius = shape_config.get("radius", 3.0) if shape_type == "sphere" else None
 
-            # Create descriptive directory name
-            if shape_type == "sphere":
-                # Format: sphere3, sphere2p5, sphere3p5
-                r_str = str(sphere_radius).replace(".", "p").rstrip("0").rstrip("p")
-                shape_name = f"sphere{r_str}"
-            else:
-                shape_name = shape_type  # squarev9, squarev4
+                # Create descriptive directory name
+                if shape_type == "sphere":
+                    # Format: sphere3, sphere2p5, sphere3p5
+                    r_str = str(sphere_radius).replace(".", "p").rstrip("0").rstrip("p")
+                    shape_name = f"sphere{r_str}"
+                else:
+                    shape_name = shape_type  # squarev9, squarev4
 
-            # Add _refined suffix if refinement is enabled
-            if do_refinement:
-                dir_name = f"rois_{shape_name}_refined"
-            else:
-                dir_name = f"rois_{shape_name}"
+                # Add _refined suffix if refinement is enabled
+                if do_refinement:
+                    dir_name = f"rois_{shape_name}_refined"
+                else:
+                    dir_name = f"rois_{shape_name}"
 
-            roi_dir = Path(state.output_dir) / dir_name
-            roi_dir.mkdir(parents=True, exist_ok=True)
+                roi_dir = Path(state.output_dir) / dir_name
+                roi_dir.mkdir(parents=True, exist_ok=True)
 
-            log(
-                f"Creating {shape_name} ROIs (refinement: {'enabled' if do_refinement else 'disabled'})..."
-            )
+                log(
+                    f"Creating {shape_name} ROIs "
+                    f"(refinement: {'enabled' if do_refinement else 'disabled'})..."
+                )
 
-            result = self._transform_rois_to_native(
-                state=state,
-                fsl_bin=fsl_bin,
-                inverse_warp=Path(inverse_warp),
-                roi_templates=roi_templates,
-                reg_dir=reg_dir,
-                roi_dir=roi_dir,
-                shape_type=shape_type,
-                sphere_radius=sphere_radius,
-                log=log,
-            )
+                result = self._transform_rois_to_native(
+                    state=state,
+                    fsl_bin=fsl_bin,
+                    inverse_warp=Path(inverse_warp),
+                    roi_templates=roi_templates,
+                    reg_dir=reg_dir,
+                    roi_dir=roi_dir,
+                    shape_type=shape_type,
+                    sphere_radius=sphere_radius,
+                    do_refinement=do_refinement,
+                    log=log,
+                )
 
-            if not result.success:
-                return result
+                if not result.success:
+                    return result
 
-            all_results[dir_name] = {
-                "roi_mask_paths": result.roi_mask_paths,
-                "roi_centers": result.roi_centers,
-            }
+                all_results[dir_name] = {
+                    "roi_mask_paths": result.roi_mask_paths,
+                    "roi_centers": result.roi_centers,
+                }
 
         # Return composite result with all shapes
         # The primary roi_mask_paths/roi_centers are from the first shape (backward compatibility)
@@ -504,6 +514,7 @@ class FSLRegistration(RegistrationBackend):
         roi_dir: Path,
         shape_type: str,
         sphere_radius: float | None,
+        do_refinement: bool,
         log: Callable[[str], None],
     ) -> ROIPlacementResult:
         """Transform ROI templates to native space and create ROI masks."""
@@ -521,8 +532,6 @@ class FSLRegistration(RegistrationBackend):
         else:
             log(f"  Shape: {shape_type}")
 
-        # Check if ROI refinement is enabled
-        do_refinement = getattr(state, "refine_roi_placement", True)
         v1_data = None
 
         # Load V1 data if refinement is enabled OR if using squarev4 (needs V1 for config selection)

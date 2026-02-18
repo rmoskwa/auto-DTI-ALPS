@@ -36,6 +36,10 @@ FA_THRESHOLD = 0.2  # Minimum FA value for ROI voxels (filters out CSF)
 ALPS_METHODS = ["ALPS-LAB", "ALPS-PAS", "Both"]
 DEFAULT_ALPS_METHOD = "Both"
 
+# ROI refinement options
+ROI_REFINEMENT_OPTIONS = ["Refined", "Standard", "Both"]
+DEFAULT_ROI_REFINEMENT = "Both"
+
 # Parameter ranges for validation
 ROI_SPHERE_RADIUS_RANGE = (1.0, 4.0)  # Range for ROI sphere radius (mm)
 READOUT_TIME_RANGE = (0.001, 1.0)

@@ -144,8 +144,8 @@ class PipelineState:
     fa_threshold: float = config.FA_THRESHOLD
     # ALPS calculation method (ALPS-LAB or ALPS-PAS)
     alps_method: str = "Both"
-    # Enable ROI refinement to optimize fiber purity (search ±3 X, ±2 Y, ±1 Z voxels)
-    refine_roi_placement: bool = True
+    # ROI refinement mode: "Refined", "Standard", or "Both"
+    refine_roi_placement: str = "Refined"
 
     # Output settings
     output_dir: str = ""
@@ -277,7 +277,7 @@ class BatchConfig:
     )
     fa_threshold: float = config.FA_THRESHOLD  # FA threshold for filtering CSF voxels
     alps_method: str = "Both"  # ALPS calculation method (ALPS-LAB, ALPS-PAS, or Both)
-    refine_roi_placement: bool = True  # Enable ROI refinement (±3 X, ±2 Y, ±1 Z voxels)
+    refine_roi_placement: str = "Refined"  # "Refined", "Standard", or "Both"
 
     # Output settings
     output_dir: str = ""
