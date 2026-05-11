@@ -110,6 +110,21 @@ class TestSubjectIdDerivation:
         assert len(results) == 1
         assert results[0].subject_id == "sub-03"
 
+    def test_flywheel_style_json_sidecar_is_matched(self, tmp_path):
+        """JSON sidecar with embedded .nii.gz (Flywheel convention) → matched to DWI."""
+        subject_dir = tmp_path / "10_1042"
+        subject_dir.mkdir()
+        stem = "501_DTI64_b1300_Gmax"
+        _make_dwi_set(str(subject_dir), stem)
+        json_path = os.path.join(str(subject_dir), f"{stem}.nii.gz.flywheel.json")
+        _create_empty_file(json_path)
+
+        discovery = SubjectDiscovery(str(subject_dir))
+        results = discovery.discover_files()
+
+        assert len(results) == 1
+        assert results[0].json_sidecar_path == json_path
+
     def test_single_dwi_preserves_file_paths(self, tmp_path):
         """Changing subject_id doesn't affect discovered file paths."""
         subject_dir = tmp_path / "10_1003"
