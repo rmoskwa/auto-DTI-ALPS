@@ -184,14 +184,20 @@ class SubjectDiscovery:
         """
         Get the filename stem (without extensions).
 
-        Handles double extensions like .nii.gz
+        Handles double extensions like .nii.gz, and sidecar files that embed
+        the original .nii / .nii.gz inside their basename (e.g. Flywheel's
+        `<dwi>.nii.gz.flywheel.json`), so the stem matches the corresponding
+        DWI file.
         """
         filename = os.path.basename(filepath)
-        # Handle .nii.gz
         if filename.endswith(".nii.gz"):
             return filename[:-7]
-        # Handle other extensions
-        return os.path.splitext(filename)[0]
+        base = os.path.splitext(filename)[0]
+        for nii_ext in (".nii.gz", ".nii"):
+            idx = base.find(nii_ext)
+            if idx >= 0:
+                return base[:idx]
+        return base
 
     def _find_reverse_pe(self, all_dwi_files: list[str], current_dwi: str | None) -> str | None:
         """
