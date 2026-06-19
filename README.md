@@ -1,5 +1,5 @@
 >[!NOTE]
->This is currently a personal tool. While completely usable in its current state, the application will be updated and guidance docs will be clarified soon to allow outside users ease-of-use.
+>This is currently a personal tool. While completely usable in its current state, the application will be updated and guidance docs will be created to allow outside users ease-of-use.
 
 # autoDTI-ALPS
 
