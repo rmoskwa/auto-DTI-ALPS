@@ -6,12 +6,16 @@ how a stage reacts to an exit code / missing binary / user cancel -- with no
 toolchain installed and nothing written to disk. They never patch ``subprocess``
 and never touch the filesystem.
 
-Scope: this increment routes the commands the pipeline module issues directly via
-``_run_command`` (denoise, degibbs, preproc, DTI fitting, eddy/synB0). The
-registration and ROI-placement backends still own their own execution until the
-fsl/synB0 conversions land, so they are not asserted here yet.
+Scope: the pipeline module issues many commands directly via ``_run_command``
+(denoise, degibbs, preproc, DTI fitting, eddy/synB0). Since the fsl conversion
+landed, the pipeline also forwards its runner into the registration backend, so
+the backend's FSL commands cross the same seam -- asserted here by
+``test_run_registration_forwards_runner_to_backend`` and exercised end-to-end at
+the backend level in ``tests/test_registration_seam.py``. The synB0 and
+reanalysis entries still own their own execution until those conversions land.
 """
 
+from dti_alps.processing import registration
 from dti_alps.processing.pipeline import PipelineRunner, PipelineState
 from tests.fakes import FakeToolRunner
 
@@ -181,3 +185,32 @@ def test_failure_scripted_by_predicate_not_position(tmp_path):
     assert runner.run_dti_fitting() is False
     # dwi2tensor ran and succeeded; tensor2metric was reached and failed.
     assert [c[0] for c in fake.calls] == ["dwi2tensor", "tensor2metric"]
+
+
+# --- Registration seam (closes deviation #2 for fsl) ------------------------
+
+
+def test_run_registration_forwards_runner_to_backend(tmp_path, monkeypatch):
+    # Deviation #2 closure (fsl): the single fake injected at the pipeline must
+    # reach the registration backend, so the backend's FSL commands cross the
+    # same seam. We assert the pipeline forwards *its own* runner to the
+    # get_backend factory -- the seam-crossing call. (run_registration then fails
+    # at the real check_available() gate because no FSL is installed; that is
+    # expected and not what this test is about. The backend actually routing FSL
+    # commands through that runner is covered in tests/test_registration_seam.py.)
+    state = _make_state(tmp_path)
+    fake = FakeToolRunner()
+    pipeline = _runner(state, fake)
+
+    captured: dict[str, object] = {}
+    real_get_backend = registration.get_backend
+
+    def spy(name, runner=None):
+        captured["runner"] = runner
+        return real_get_backend(name, runner=runner)
+
+    monkeypatch.setattr(registration, "get_backend", spy)
+
+    pipeline.run_registration()
+
+    assert captured["runner"] is fake

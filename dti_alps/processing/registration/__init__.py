@@ -24,6 +24,7 @@ Example usage:
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from ..tool_runner import ToolRunner
 from .base import (
     RegistrationBackend,
     RegistrationResult,
@@ -75,7 +76,7 @@ _BACKENDS: dict[str, type[RegistrationBackend]] = {
 }
 
 
-def get_backend(name: str = "fsl") -> RegistrationBackend:
+def get_backend(name: str = "fsl", runner: ToolRunner | None = None) -> RegistrationBackend:
     """
     Get a registration backend by name.
 
@@ -83,6 +84,11 @@ def get_backend(name: str = "fsl") -> RegistrationBackend:
     ----------
     name : str
         Backend name ('fsl', 'ants' in future)
+    runner : ToolRunner | None
+        Seam for external command execution, threaded into the backend so a
+        single fake injected at the top-level entry captures every command the
+        backend issues. Defaults to a real subprocess-backed runner (the backend
+        constructs one when given None).
 
     Returns
     -------
@@ -98,7 +104,7 @@ def get_backend(name: str = "fsl") -> RegistrationBackend:
         available = ", ".join(_BACKENDS.keys())
         raise ValueError(f"Unknown registration backend: {name}. Available: {available}")
 
-    return _BACKENDS[name]()
+    return _BACKENDS[name](runner=runner)
 
 
 def register_backend(name: str, backend_class: type[RegistrationBackend]) -> None:
@@ -123,6 +129,7 @@ def register_backend(name: str, backend_class: type[RegistrationBackend]) -> Non
 def register_fa_to_template(
     state: "PipelineState",
     log_callback: Callable[[str], None] | None = None,
+    runner: ToolRunner | None = None,
 ) -> bool:
     """
     Register subject FA to JHU template and transform ROI masks to native space.
@@ -136,6 +143,9 @@ def register_fa_to_template(
         Pipeline state with fa_path set
     log_callback : callable, optional
         Function to call with log messages
+    runner : ToolRunner | None
+        Seam for external command execution, forwarded to the backend.
+        Defaults to a real subprocess-backed runner.
 
     Returns
     -------
@@ -146,7 +156,7 @@ def register_fa_to_template(
     backend_name = getattr(state, "registration_backend", "fsl")
 
     # Get backend instance
-    backend = get_backend(backend_name)
+    backend = get_backend(backend_name, runner=runner)
 
     # Run registration
     reg_result = backend.register(state, log_callback)

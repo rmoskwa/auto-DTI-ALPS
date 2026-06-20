@@ -10,6 +10,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .tool_runner import SubprocessToolRunner, ToolRunner
+
 
 @dataclass
 class B0ExtractionResult:
@@ -273,6 +275,7 @@ def create_brain_mask_from_dwi(
     bvals_path: str,
     output_mask_path: str,
     log: Callable[[str], None] | None = None,
+    runner: ToolRunner | None = None,
 ) -> tuple[bool, str]:
     """
     Create a brain mask from DWI data using dwi2mask.
@@ -289,6 +292,9 @@ def create_brain_mask_from_dwi(
         Path for the output brain mask
     log : Callable[[str], None] | None
         Optional logging callback
+    runner : ToolRunner | None
+        Seam for external command execution. Defaults to a real
+        subprocess-backed runner; tests inject a fake.
 
     Returns
     -------
@@ -297,6 +303,8 @@ def create_brain_mask_from_dwi(
     """
     if log is None:
         log = lambda x: None  # noqa: E731
+    if runner is None:
+        runner = SubprocessToolRunner()
 
     # Create output directory if needed
     output_dir = Path(output_mask_path).parent
@@ -316,17 +324,12 @@ def create_brain_mask_from_dwi(
     log("  Creating brain mask with dwi2mask...")
     log(f"  Command: {' '.join(mask_cmd)}")
 
-    try:
-        subprocess.run(
-            mask_cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except subprocess.CalledProcessError as e:
-        return False, f"dwi2mask failed: {e.stderr}"
-    except FileNotFoundError:
-        return False, "dwi2mask not found. Is MRtrix3 installed and in PATH?"
+    # The runner never raises: a non-zero exit (including a missing binary,
+    # which surfaces as returncode 127 with an explanatory output) is reported
+    # here, so there is no CalledProcessError/FileNotFoundError to catch.
+    result = runner.run(mask_cmd)
+    if result.returncode != 0:
+        return False, f"dwi2mask failed: {result.output}"
 
     # Verify output exists
     if not Path(output_mask_path).exists():
@@ -341,6 +344,7 @@ def apply_mask_to_image(
     mask_path: str,
     output_path: str,
     log: Callable[[str], None] | None = None,
+    runner: ToolRunner | None = None,
 ) -> tuple[bool, str]:
     """
     Apply a binary mask to an image using fslmaths.
@@ -355,6 +359,9 @@ def apply_mask_to_image(
         Path for the output masked image
     log : Callable[[str], None] | None
         Optional logging callback
+    runner : ToolRunner | None
+        Seam for external command execution. Defaults to a real
+        subprocess-backed runner; tests inject a fake.
 
     Returns
     -------
@@ -363,6 +370,8 @@ def apply_mask_to_image(
     """
     if log is None:
         log = lambda x: None  # noqa: E731
+    if runner is None:
+        runner = SubprocessToolRunner()
 
     # Create output directory if needed
     output_dir = Path(output_path).parent
@@ -374,17 +383,12 @@ def apply_mask_to_image(
     log("  Applying brain mask to image...")
     log(f"  Command: {' '.join(mask_cmd)}")
 
-    try:
-        subprocess.run(
-            mask_cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except subprocess.CalledProcessError as e:
-        return False, f"fslmaths failed: {e.stderr}"
-    except FileNotFoundError:
-        return False, "fslmaths not found. Is FSL installed and in PATH?"
+    # The runner never raises: a non-zero exit (including a missing binary,
+    # which surfaces as returncode 127 with an explanatory output) is reported
+    # here, so there is no CalledProcessError/FileNotFoundError to catch.
+    result = runner.run(mask_cmd)
+    if result.returncode != 0:
+        return False, f"fslmaths failed: {result.output}"
 
     # Verify output exists
     if not Path(output_path).exists():

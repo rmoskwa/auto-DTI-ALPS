@@ -411,7 +411,7 @@ class PipelineRunner:
         self._log(f"Starting FA-to-template registration using {backend_name} backend...")
 
         try:
-            backend = registration.get_backend(backend_name)
+            backend = registration.get_backend(backend_name, runner=self.runner)
         except ValueError as e:
             self._log(f"ERROR: {e}")
             self._update_stage("registration", "failed")
@@ -458,7 +458,7 @@ class PipelineRunner:
         self._log("Starting ROI placement...")
 
         try:
-            backend = registration.get_backend(backend_name)
+            backend = registration.get_backend(backend_name, runner=self.runner)
         except ValueError as e:
             self._log(f"ERROR: {e}")
             self._update_stage("roi", "failed")
