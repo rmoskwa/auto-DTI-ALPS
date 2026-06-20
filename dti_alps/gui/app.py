@@ -17,6 +17,7 @@ from ..processing.pipeline import (
     OutputConfig,
     PipelineState,
 )
+from ..processing.validators import validate_synb0_output_dir
 from . import config
 from .user_config import UserConfig, get_user_config
 
@@ -1276,27 +1277,8 @@ class DTIALPSApplication(tk.Tk):
 
     def _validate_synb0_output_dir(self, path):
         """Validate synB0-DISCO output directory contents."""
-        import os
-
-        required_files = [
-            ("topup_fieldcoef.nii.gz", "topup field coefficients"),
-            ("topup_movpar.txt", "topup movement parameters"),
-        ]
-
-        missing = []
-        for filename, desc in required_files:
-            if not os.path.exists(os.path.join(path, filename)):
-                missing.append(f"{filename} ({desc})")
-
-        # Check for acqparams.txt in OUTPUTS or ../INPUTS
-        acqparams_found = os.path.exists(os.path.join(path, "acqparams.txt"))
-        if not acqparams_found:
-            parent = os.path.dirname(path)
-            acqparams_found = os.path.exists(os.path.join(parent, "INPUTS", "acqparams.txt"))
-        if not acqparams_found:
-            missing.append("acqparams.txt (acquisition parameters)")
-
-        if missing:
+        ok, missing = validate_synb0_output_dir(path)
+        if not ok:
             self.synb0_validation_label.config(
                 text=f"Missing: {', '.join(missing)}", foreground="red"
             )

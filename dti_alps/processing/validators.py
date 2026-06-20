@@ -161,6 +161,48 @@ def validate_readout_time(value: str) -> tuple[bool, str]:
         return False, "Readout time must be a number"
 
 
+def validate_synb0_output_dir(path: str) -> tuple[bool, list[str]]:
+    """
+    Validate the contents of a synB0-DISCO OUTPUTS directory.
+
+    Checks for the topup outputs the eddy step consumes. ``acqparams.txt`` is
+    accepted either in ``path`` itself or in a sibling ``../INPUTS`` directory,
+    matching the synB0-DISCO layout.
+
+    Parameters
+    ----------
+    path : str
+        Path to the synB0-DISCO OUTPUTS directory.
+
+    Returns
+    -------
+    tuple of (bool, list[str])
+        ``(ok, missing)`` where ``ok`` is True when nothing is missing and
+        ``missing`` is the list of absent-file descriptions (e.g.
+        ``"topup_fieldcoef.nii.gz (topup field coefficients)"``). The caller
+        owns any user-facing phrasing/colour.
+    """
+    required_files = [
+        ("topup_fieldcoef.nii.gz", "topup field coefficients"),
+        ("topup_movpar.txt", "topup movement parameters"),
+    ]
+
+    missing: list[str] = []
+    for filename, desc in required_files:
+        if not os.path.exists(os.path.join(path, filename)):
+            missing.append(f"{filename} ({desc})")
+
+    # acqparams.txt may live in OUTPUTS or in the sibling ../INPUTS directory
+    acqparams_found = os.path.exists(os.path.join(path, "acqparams.txt"))
+    if not acqparams_found:
+        parent = os.path.dirname(path)
+        acqparams_found = os.path.exists(os.path.join(parent, "INPUTS", "acqparams.txt"))
+    if not acqparams_found:
+        missing.append("acqparams.txt (acquisition parameters)")
+
+    return (not missing, missing)
+
+
 def validate_directory(path: str, create: bool = False) -> tuple[bool, str]:
     """
     Validate output directory.
