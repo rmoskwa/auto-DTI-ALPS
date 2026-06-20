@@ -27,6 +27,7 @@ from .alps_calculation import (
     load_pas_components,
     load_roi_masks,
 )
+from .constants import FA_THRESHOLD
 from .registration.base import (
     calculate_roi_quality,
     create_sphere_mask,
@@ -482,7 +483,7 @@ def run_reanalysis(
     roi_shape: ROIShape,
     enable_refinement: bool = False,
     alps_method: str = "Both",
-    fa_threshold: float = 0.2,
+    fa_threshold: float = FA_THRESHOLD,
     log_callback: Callable[[str], None] | None = None,
     runner: ToolRunner | None = None,
 ) -> list[ReanalysisResult]:

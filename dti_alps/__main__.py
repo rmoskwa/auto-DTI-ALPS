@@ -65,6 +65,8 @@ def _validate_sphere_radii(value: str) -> list[float]:
 
 def _parse_reanalysis_args() -> argparse.Namespace:
     """Parse command line arguments for reanalysis mode."""
+    from .processing.constants import FA_THRESHOLD
+
     parser = argparse.ArgumentParser(
         description="DTI-ALPS ROI Reanalysis",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -138,9 +140,9 @@ Examples:
     parser.add_argument(
         "--fa-threshold",
         type=float,
-        default=0.2,
+        default=FA_THRESHOLD,
         metavar="THRESHOLD",
-        help="FA threshold for filtering CSF voxels (default: 0.2)",
+        help=f"FA threshold for filtering CSF voxels (default: {FA_THRESHOLD})",
     )
 
     return parser.parse_args()
