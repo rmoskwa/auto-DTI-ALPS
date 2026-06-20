@@ -19,12 +19,18 @@ from dti_alps.processing.results_layout import (
     METHOD_BOTH,
     METHOD_LAB,
     METHOD_PAS,
+    ROI_NAMES,
+    AlpsRow,
     AlpsTable,
+    alps_columns,
     alps_csv_name,
     detect_method,
     parse_roi_dir,
     read_alps_csv,
     roi_dir_name,
+    roi_mask_glob,
+    roi_mask_name,
+    write_alps_csv,
 )
 
 
@@ -227,3 +233,247 @@ class TestReadAlpsCsvEdges:
         table = read_alps_csv(path)
 
         assert list(table.rows.keys()) == ["sub-01"]
+
+
+# --------------------------------------------------------------------------- #
+# Writer twin: alps_columns / write_alps_csv (the inverse of read_alps_csv)
+# --------------------------------------------------------------------------- #
+class TestAlpsColumns:
+    """The canonical ordered header is a property of the method."""
+
+    def test_lab_header(self):
+        assert alps_columns(METHOD_LAB) == [
+            "Filename",
+            "Left Hemisphere ALPS-LAB",
+            "Right Hemisphere ALPS-LAB",
+            "Combined ALPS-LAB",
+            "Status",
+            "Error",
+        ]
+
+    def test_pas_header(self):
+        assert alps_columns(METHOD_PAS) == [
+            "Filename",
+            "Left Hemisphere ALPS-PAS",
+            "Right Hemisphere ALPS-PAS",
+            "Combined ALPS-PAS",
+            "Status",
+            "Error",
+        ]
+
+    def test_both_header_is_lab_then_pas(self):
+        assert alps_columns(METHOD_BOTH) == [
+            "Filename",
+            "Left Hemisphere ALPS-LAB",
+            "Right Hemisphere ALPS-LAB",
+            "Combined ALPS-LAB",
+            "Left Hemisphere ALPS-PAS",
+            "Right Hemisphere ALPS-PAS",
+            "Combined ALPS-PAS",
+            "Status",
+            "Error",
+        ]
+
+
+def _expected_bytes(header: list[str], rows: list[list[str]]) -> bytes:
+    """The exact bytes csv.writer emits: comma-joined, CRLF-terminated."""
+    lines = [",".join(header), *(",".join(r) for r in rows)]
+    return "".join(line + "\r\n" for line in lines).encode()
+
+
+class TestWriteAlpsCsv:
+    """write_alps_csv emits the suffixed schema with .6f cells and CRLF lines."""
+
+    def test_lab_bytes(self, tmp_path):
+        table = AlpsTable(
+            method=METHOD_LAB,
+            rows={
+                "sub-01": AlpsRow(
+                    subject_id="sub-01",
+                    status="completed",
+                    error="",
+                    lab_left=1.1,
+                    lab_right=1.2,
+                    lab_combined=1.15,
+                )
+            },
+        )
+        path = tmp_path / "alps_results.csv"
+        write_alps_csv(path, table)
+
+        assert path.read_bytes() == _expected_bytes(
+            alps_columns(METHOD_LAB),
+            [["sub-01", "1.100000", "1.200000", "1.150000", "completed", ""]],
+        )
+
+    def test_pas_bytes(self, tmp_path):
+        table = AlpsTable(
+            method=METHOD_PAS,
+            rows={
+                "sub-02": AlpsRow(
+                    subject_id="sub-02",
+                    status="completed",
+                    error="",
+                    pas_left=0.9,
+                    pas_right=0.95,
+                    pas_combined=0.925,
+                )
+            },
+        )
+        path = tmp_path / "alps_results_squarev9.csv"
+        write_alps_csv(path, table)
+
+        assert path.read_bytes() == _expected_bytes(
+            alps_columns(METHOD_PAS),
+            [["sub-02", "0.900000", "0.950000", "0.925000", "completed", ""]],
+        )
+
+    def test_both_bytes(self, tmp_path):
+        table = AlpsTable(
+            method=METHOD_BOTH,
+            rows={
+                "sub-03": AlpsRow(
+                    subject_id="sub-03",
+                    status="completed",
+                    error="",
+                    lab_left=1.1,
+                    lab_right=1.2,
+                    lab_combined=1.15,
+                    pas_left=0.9,
+                    pas_right=0.95,
+                    pas_combined=0.925,
+                )
+            },
+        )
+        path = tmp_path / "alps_results.csv"
+        write_alps_csv(path, table)
+
+        assert path.read_bytes() == _expected_bytes(
+            alps_columns(METHOD_BOTH),
+            [
+                [
+                    "sub-03",
+                    "1.100000",
+                    "1.200000",
+                    "1.150000",
+                    "0.900000",
+                    "0.950000",
+                    "0.925000",
+                    "completed",
+                    "",
+                ]
+            ],
+        )
+
+    def test_missing_values_become_empty_cells(self, tmp_path):
+        table = AlpsTable(
+            method=METHOD_LAB,
+            rows={
+                "sub-bad": AlpsRow(
+                    subject_id="sub-bad",
+                    status="failed",
+                    error="boom",
+                    lab_left=None,
+                    lab_right=None,
+                    lab_combined=1.15,
+                )
+            },
+        )
+        path = tmp_path / "alps_results.csv"
+        write_alps_csv(path, table)
+
+        assert path.read_bytes() == _expected_bytes(
+            alps_columns(METHOD_LAB),
+            [["sub-bad", "", "", "1.150000", "failed", "boom"]],
+        )
+
+    def test_rows_written_in_table_order(self, tmp_path):
+        table = AlpsTable(
+            method=METHOD_LAB,
+            rows={
+                "sub-02": AlpsRow(subject_id="sub-02", status="completed", error=""),
+                "sub-01": AlpsRow(subject_id="sub-01", status="completed", error=""),
+            },
+        )
+        path = tmp_path / "alps_results.csv"
+        write_alps_csv(path, table)
+
+        body = path.read_bytes().decode().splitlines()
+        assert [line.split(",")[0] for line in body[1:]] == ["sub-02", "sub-01"]
+
+
+class TestReadWriteRoundTrip:
+    """AlpsTable is the single currency: read(write(table)) == table to .6f."""
+
+    @pytest.mark.parametrize(
+        "table",
+        [
+            AlpsTable(
+                method=METHOD_LAB,
+                rows={
+                    "sub-01": AlpsRow(
+                        subject_id="sub-01",
+                        status="completed",
+                        error="",
+                        lab_left=1.1,
+                        lab_right=1.2,
+                        lab_combined=1.15,
+                    )
+                },
+            ),
+            AlpsTable(
+                method=METHOD_PAS,
+                rows={
+                    "sub-02": AlpsRow(
+                        subject_id="sub-02",
+                        status="completed",
+                        error="",
+                        pas_left=0.9,
+                        pas_right=0.95,
+                        pas_combined=0.925,
+                    )
+                },
+            ),
+            AlpsTable(
+                method=METHOD_BOTH,
+                rows={
+                    "sub-03": AlpsRow(
+                        subject_id="sub-03",
+                        status="failed",
+                        error="boom",
+                        lab_left=1.1,
+                        lab_right=1.2,
+                        lab_combined=1.15,
+                        pas_left=0.9,
+                        pas_right=0.95,
+                        pas_combined=0.925,
+                    )
+                },
+            ),
+        ],
+    )
+    def test_round_trips(self, tmp_path, table):
+        path = tmp_path / "alps_results.csv"
+        write_alps_csv(path, table)
+        assert read_alps_csv(path) == table
+
+
+class TestRoiMaskNaming:
+    """roi_mask_name / roi_mask_glob: a producer/consumer pair over one template."""
+
+    def test_name_is_subject_prefixed(self):
+        assert roi_mask_name("sub-01", "left_proj") == "sub-01_left_proj.nii.gz"
+
+    def test_glob_wildcards_the_subject(self):
+        assert roi_mask_glob("left_proj") == "*_left_proj.nii.gz"
+
+    def test_glob_matches_what_name_writes(self):
+        # The written name and the glob that finds it share one template.
+        import fnmatch
+
+        for roi_name in ROI_NAMES:
+            written = roi_mask_name("sub-01", roi_name)
+            assert fnmatch.fnmatch(written, roi_mask_glob(roi_name))
+
+    def test_canonical_set_has_the_four_names(self):
+        assert set(ROI_NAMES) == {"left_proj", "right_proj", "left_assoc", "right_assoc"}

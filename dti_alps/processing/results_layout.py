@@ -11,10 +11,15 @@ the viewer/reports read:
   via :func:`roi_dir_name` / :func:`parse_roi_dir`,
 * the ALPS-results CSV naming (``alps_results.csv`` / ``alps_results_{token}.csv``)
   via :func:`alps_csv_name`, and
-* the ALPS column schema plus the one typed reader :func:`read_alps_csv`, which
-  detects the ALPS method from the present columns and parses the per-subject
-  rows (preserving the legacy no-suffix ``... ALPS`` fallback the old viewer
-  carried, even though the current writers never emit it).
+* the ALPS column schema (:func:`alps_columns`) plus the symmetric reader/writer
+  pair over the same :class:`AlpsTable` value -- :func:`read_alps_csv` detects
+  the ALPS method from the present columns and parses the per-subject rows
+  (preserving the legacy no-suffix ``... ALPS`` fallback the old viewer carried,
+  even though the writers never emit it), and :func:`write_alps_csv` emits the
+  suffixed schema so ``read(write(table))`` round-trips, and
+* the canonical ROI-mask identity: the four :data:`ROI_NAMES` and the mask
+  filename pattern as a producer/consumer pair (:func:`roi_mask_name` /
+  :func:`roi_mask_glob`).
 
 Only the viewer's consumers are repointed onto this module for now (PRD 0005,
 Decision 4); repointing the processing-side writers/parsers (``batch``,
@@ -61,6 +66,18 @@ COL_LEGACY_COMBINED = "Combined ALPS"
 # The default ROI token: the bare ``rois/`` directory and ``alps_results.csv``.
 DEFAULT_ROI_TOKEN = "rois"
 _ROI_DIR_PREFIX = "rois_"
+
+# --- ROI-mask identity ------------------------------------------------------
+# The four canonical ROI-mask names (projection/association x left/right). The
+# single home for the set: the registration backend builds its template-path
+# dict from it and the viewer globs each name. Order is functionally inert --
+# every consumer keys by name or combines masks.
+ROI_NAMES = ("left_proj", "right_proj", "left_assoc", "right_assoc")
+
+# The on-disk ROI-mask filename pattern, shared by the producer
+# (:func:`roi_mask_name`) and the consumer (:func:`roi_mask_glob`) so the name a
+# backend writes and the glob the viewer uses to find it cannot drift.
+_ROI_MASK_TEMPLATE = "{subject}_{roi_name}.nii.gz"
 
 
 def roi_dir_name(token: str, refined: bool = False) -> str:
@@ -126,6 +143,32 @@ def alps_csv_name(token: str, refined: bool = False) -> str:
     if token == DEFAULT_ROI_TOKEN:
         return "alps_results.csv"
     return f"alps_results_{token}.csv"
+
+
+def roi_mask_name(subject: str, roi_name: str) -> str:
+    """
+    Build the on-disk ROI-mask filename a backend writes for one subject + ROI.
+
+    The producer half of the mask-filename pair; :func:`roi_mask_glob` is the
+    consumer half over the same private template.
+
+    >>> roi_mask_name("sub-01", "left_proj")
+    'sub-01_left_proj.nii.gz'
+    """
+    return _ROI_MASK_TEMPLATE.format(subject=subject, roi_name=roi_name)
+
+
+def roi_mask_glob(roi_name: str) -> str:
+    """
+    Build the glob the viewer uses to find an ROI mask regardless of subject.
+
+    The consumer half of the mask-filename pair; the wildcard stands in for the
+    subject prefix :func:`roi_mask_name` writes.
+
+    >>> roi_mask_glob("left_proj")
+    '*_left_proj.nii.gz'
+    """
+    return _ROI_MASK_TEMPLATE.format(subject="*", roi_name=roi_name)
 
 
 @dataclass(frozen=True)
@@ -232,3 +275,66 @@ def read_alps_csv(path: str | Path) -> AlpsTable:
             )
 
     return AlpsTable(method=method, rows=rows)
+
+
+def alps_columns(method: str) -> list[str]:
+    """
+    The canonical ordered header an ALPS-results CSV carries for ``method``.
+
+    The single source of the schema the writer emits and (by detection) the
+    reader consumes: ``Filename``, the per-method LAB/PAS hemisphere columns,
+    then ``Status`` and ``Error``. The writer emits only the suffixed columns;
+    the legacy no-suffix names are a read-only fallback and never appear here.
+
+    >>> alps_columns(METHOD_LAB)
+    ['Filename', 'Left Hemisphere ALPS-LAB', 'Right Hemisphere ALPS-LAB', 'Combined ALPS-LAB', 'Status', 'Error']
+    """
+    columns = [COL_FILENAME]
+    if method in (METHOD_LAB, METHOD_BOTH):
+        columns += [COL_LAB_LEFT, COL_LAB_RIGHT, COL_LAB_COMBINED]
+    if method in (METHOD_PAS, METHOD_BOTH):
+        columns += [COL_PAS_LEFT, COL_PAS_RIGHT, COL_PAS_COMBINED]
+    columns += [COL_STATUS, COL_ERROR]
+    return columns
+
+
+def _format_value(value: float | None) -> str:
+    """Format an ALPS cell: ``.6f`` for a value, empty string for ``None``."""
+    return f"{value:.6f}" if value is not None else ""
+
+
+def write_alps_csv(path: str | Path, table: AlpsTable) -> None:
+    """
+    Write an :class:`AlpsTable` to an ALPS-results CSV (the inverse of
+    :func:`read_alps_csv`).
+
+    The header comes from :func:`alps_columns` for ``table.method``; each
+    :class:`AlpsRow` is formatted against it (``.6f`` cells, ``None`` -> empty
+    string) using the stdlib CSV writer, so the line terminators match the
+    engine's existing output exactly. ``read_alps_csv(write_alps_csv(table))``
+    round-trips to ``.6f`` precision.
+
+    A pure file-I/O leaf: it creates no directories, logs nothing, and swallows
+    no errors -- each caller keeps its own logging and failure policy.
+    """
+    method = table.method
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(alps_columns(method))
+
+        for row in table.rows.values():
+            cells = [row.subject_id]
+            if method in (METHOD_LAB, METHOD_BOTH):
+                cells += [
+                    _format_value(row.lab_left),
+                    _format_value(row.lab_right),
+                    _format_value(row.lab_combined),
+                ]
+            if method in (METHOD_PAS, METHOD_BOTH):
+                cells += [
+                    _format_value(row.pas_left),
+                    _format_value(row.pas_right),
+                    _format_value(row.pas_combined),
+                ]
+            cells += [row.status, row.error]
+            writer.writerow(cells)
