@@ -49,22 +49,8 @@ class ShowBatchResults:
     batch_state: BatchState
 
 
-@dataclass(frozen=True)
-class ShowResults:
-    """Display the single-subject (legacy) results view."""
-
-    data: dict
-
-
 # Union of all view-intents the adapter knows how to apply.
-Intent = (
-    AppendLog
-    | SetRowStatus
-    | UpdateStageStatus
-    | ResetStageButtons
-    | ShowBatchResults
-    | ShowResults
-)
+Intent = AppendLog | SetRowStatus | UpdateStageStatus | ResetStageButtons | ShowBatchResults
 
 
 class ResultModel:
@@ -88,9 +74,9 @@ class ResultModel:
         """
         Map one worker message ``(msg_type, data)`` to its view-intents.
 
-        Reproduces every branch of the former ``_handle_result`` dispatch,
-        including the legacy single-subject ``complete``/``failed``/``cancelled``
-        path and the exact log phrasing. Unknown message types yield no intents.
+        Covers the batch lifecycle (``batch_*``) plus the shared ``log``,
+        ``stage``, and ``error`` messages, reproducing the exact log phrasing.
+        Unknown message types yield no intents.
         """
         msg_type = msg[0]
         data = msg[1] if len(msg) > 1 else None
@@ -153,16 +139,6 @@ class ResultModel:
 
         if msg_type == "batch_cancelled":
             return [AppendLog("Batch processing cancelled.")]
-
-        if msg_type == "complete":
-            # Single subject complete (legacy)
-            return [AppendLog("Pipeline completed successfully!"), ShowResults(data)]
-
-        if msg_type == "failed":
-            return [AppendLog("Pipeline failed.")]
-
-        if msg_type == "cancelled":
-            return [AppendLog("Pipeline cancelled.")]
 
         if msg_type == "error":
             return [AppendLog(f"Error: {data}")]

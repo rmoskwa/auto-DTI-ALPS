@@ -15,7 +15,6 @@ from dti_alps.gui.result_model import (
     ResultModel,
     SetRowStatus,
     ShowBatchResults,
-    ShowResults,
     UpdateStageStatus,
 )
 
@@ -101,25 +100,15 @@ def test_batch_partial_and_cancelled_golden():
     ]
 
 
-def test_legacy_single_subject_and_terminal_golden():
-    """The legacy single-subject path and the terminal branches are reproduced."""
+def test_error_survives_and_legacy_trio_is_gone():
+    """``error`` is batch-reachable and stays; the removed single-subject trio yields nothing."""
     model = ResultModel(["only"])
-    alps = {"ALPS_left": 1.23}
 
-    messages = [
-        ("complete", alps),
-        ("failed", None),
-        ("cancelled", None),
-        ("error", "boom"),
-    ]
-
-    assert _replay(model, messages) == [
-        AppendLog("Pipeline completed successfully!"),
-        ShowResults(alps),
-        AppendLog("Pipeline failed."),
-        AppendLog("Pipeline cancelled."),
-        AppendLog("Error: boom"),
-    ]
+    assert model.handle(("error", "boom")) == [AppendLog("Error: boom")]
+    # The legacy single-subject branches were deleted with their view (PRD 0006).
+    assert model.handle(("complete", {"ALPS_left": 1.23})) == []
+    assert model.handle(("failed", None)) == []
+    assert model.handle(("cancelled", None)) == []
 
 
 def test_log_and_stage_passthrough():

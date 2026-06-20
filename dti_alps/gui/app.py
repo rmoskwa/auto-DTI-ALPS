@@ -19,7 +19,6 @@ from ..processing.pipeline import (
     BatchState,
     BatchWorker,
     OutputConfig,
-    PipelineState,
 )
 from ..processing.validators import (
     resolve_readout_time,
@@ -33,7 +32,6 @@ from .result_model import (
     ResultModel,
     SetRowStatus,
     ShowBatchResults,
-    ShowResults,
     UpdateStageStatus,
 )
 from .user_config import UserConfig, get_user_config
@@ -58,7 +56,6 @@ class DTIALPSApplication(tk.Tk):
 
         # State
         self.current_stage = 0
-        self.pipeline_state = PipelineState()
         self.worker = None
         self.result_queue = None
         self.result_model = None  # Presentation model translating worker messages to intents
@@ -2209,8 +2206,6 @@ class DTIALPSApplication(tk.Tk):
             self._reset_stage_button_styles()
         elif isinstance(intent, ShowBatchResults):
             self._show_batch_results(intent.batch_state)
-        elif isinstance(intent, ShowResults):
-            self._show_results(intent.data)
 
     def _init_log_file(self, output_dir: str):
         """Initialize log file in the output directory."""
@@ -2303,108 +2298,6 @@ class DTIALPSApplication(tk.Tk):
                     self.stage_buttons[btn_idx].configure(style="Processing.TButton")
                 elif status == "complete":
                     self.stage_buttons[btn_idx].configure(style="Completed.TButton")
-
-    def _show_results(self, alps_results):
-        """Display ALPS results."""
-        if not alps_results:
-            return
-
-        # Switch to results stage (last stage, index varies by mode)
-        results_stage_index = len(self.stage_buttons) - 1
-        self._show_stage(results_stage_index)
-
-        # Update results frame
-        frame = self.stage_frames["results"]
-
-        # Clear previous content
-        for child in frame.winfo_children():
-            child.destroy()
-
-        # Title
-        ttk.Label(frame, text="DTI-ALPS Results", font=("TkDefaultFont", 12, "bold")).pack(
-            anchor=tk.W, pady=10
-        )
-
-        # Results table
-        results_frame = ttk.LabelFrame(frame, text="ALPS Index", padding=10)
-        results_frame.pack(fill=tk.X, pady=5)
-
-        # Create treeview for results
-        columns = ("Metric", "Left", "Right", "Bilateral")
-        tree = ttk.Treeview(results_frame, columns=columns, show="headings", height=6)
-
-        for col in columns:
-            tree.heading(col, text=col)
-            tree.column(col, width=120, anchor=tk.CENTER)
-
-        # Add data rows
-        alps_left = alps_results.get("ALPS_left", 0)
-        alps_right = alps_results.get("ALPS_right", 0)
-        alps_bilateral = alps_results.get("ALPS_bilateral", 0)
-
-        tree.insert(
-            "",
-            tk.END,
-            values=("ALPS Index", f"{alps_left:.4f}", f"{alps_right:.4f}", f"{alps_bilateral:.4f}"),
-        )
-
-        # Add component values
-        tree.insert(
-            "",
-            tk.END,
-            values=(
-                "Dxx (proj)",
-                f"{alps_results.get('Dxx_proj_left', 0):.6f}",
-                f"{alps_results.get('Dxx_proj_right', 0):.6f}",
-                "",
-            ),
-        )
-
-        tree.insert(
-            "",
-            tk.END,
-            values=(
-                "Dxx (assoc)",
-                f"{alps_results.get('Dxx_assoc_left', 0):.6f}",
-                f"{alps_results.get('Dxx_assoc_right', 0):.6f}",
-                "",
-            ),
-        )
-
-        tree.insert(
-            "",
-            tk.END,
-            values=(
-                "Dyy (proj)",
-                f"{alps_results.get('Dyy_proj_left', 0):.6f}",
-                f"{alps_results.get('Dyy_proj_right', 0):.6f}",
-                "",
-            ),
-        )
-
-        tree.insert(
-            "",
-            tk.END,
-            values=(
-                "Dzz (assoc)",
-                f"{alps_results.get('Dzz_assoc_left', 0):.6f}",
-                f"{alps_results.get('Dzz_assoc_right', 0):.6f}",
-                "",
-            ),
-        )
-
-        tree.pack(fill=tk.X)
-
-        # Export buttons
-        btn_frame = ttk.Frame(frame)
-        btn_frame.pack(fill=tk.X, pady=10)
-
-        ttk.Button(btn_frame, text="Save CSV Report", command=self._export_csv).pack(
-            side=tk.LEFT, padx=5
-        )
-        ttk.Button(btn_frame, text="View ROI Masks", command=self._view_rois).pack(
-            side=tk.LEFT, padx=5
-        )
 
     def _show_batch_results(self, batch_state: BatchState):
         """Display batch processing results with method-specific column names."""
@@ -2611,49 +2504,6 @@ class DTIALPSApplication(tk.Tk):
 
         viewer = ResultsViewer(self, output_folder)
         viewer.focus_set()
-
-    def _export_csv(self):
-        """Export results to CSV."""
-        user_config = get_user_config()
-        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CSV_EXPORT)
-        path = filedialog.asksaveasfilename(
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-            initialdir=initial_dir,
-        )
-        if path and self.pipeline_state.alps_results:
-            user_config.set_from_path(UserConfig.KEY_CSV_EXPORT, path)
-            import csv
-
-            with open(path, "w", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(["Metric", "Left", "Right", "Bilateral"])
-
-                results = self.pipeline_state.alps_results
-                writer.writerow(
-                    [
-                        "ALPS_Index",
-                        results.get("ALPS_left", ""),
-                        results.get("ALPS_right", ""),
-                        results.get("ALPS_bilateral", ""),
-                    ]
-                )
-
-            messagebox.showinfo("Export", f"Results saved to {path}")
-
-    def _view_rois(self):
-        """Open ROI directory."""
-        import subprocess
-        import sys
-
-        roi_dir = self.pipeline_state.output_dir
-        if roi_dir and Path(roi_dir).exists():
-            if sys.platform == "darwin":
-                subprocess.run(["open", roi_dir])
-            elif sys.platform == "linux":
-                subprocess.run(["xdg-open", roi_dir])
-            else:
-                subprocess.run(["explorer", roi_dir])
 
     def _load_settings(self):
         """Load settings from file."""
