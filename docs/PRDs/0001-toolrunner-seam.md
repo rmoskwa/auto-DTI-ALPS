@@ -137,20 +137,29 @@ class FakeToolRunner:
 ### 9. A banned-`subprocess`-import guardrail, switched on after migration
 After the last call site is converted, add a lint rule (ruff `flake8-tidy-imports` banned-api or equivalent) forbidding `import subprocess` anywhere except `processing/tool_runner.py`, with a single carve-out for the GUI's desktop-open helper. Not enabled mid-migration, where it would fail on every un-converted site.
 
+> **✅ Enabled (Increment 4, 2026-06-20).** Implemented as ruff `TID251`
+> (`flake8-tidy-imports` banned-api) on `"subprocess"` in `pyproject.toml`, with
+> `per-file-ignores` carve-outs for `dti_alps/processing/tool_runner.py` (the
+> seam), `dti_alps/gui/app.py` (the desktop-open helper, Decision 6), and the two
+> kept real-binary integration-smoke scripts (`tests/test_pipeline.py`,
+> `tests/test_registration.py`). Banning the top-level import is the single lever
+> (no module can import it → none can call it); verified to fire on a stray import
+> and clean afterward.
+
 ### 10. Migration is a strangler in fidelity order
-> **Progress:** steps 1–5 done (1–3 on 2026-06-19; 4–5 on 2026-06-20). Step 3
-> converted the **2 live** b0-extraction sites early; step 5 (this increment)
-> finished the **3 dormant** ones in `extract_and_average_b0`, so b0-extraction is
-> now fully on the seam. Step 4 converted all **15 synB0 sites**. See the
-> **Implementation Progress** section below for what landed and the pick-up point.
-> Only step 6 (reanalysis, 1 site) and the Decision 9 guardrail remain.
+> **Progress: MIGRATION COMPLETE.** All steps 1–6 done (1–3 on 2026-06-19; 4–6 on
+> 2026-06-20) and the Decision 9 guardrail is enabled. Every toolchain site now
+> crosses the `ToolRunner` seam; the only remaining `import subprocess` is the seam
+> itself plus the deliberate GUI desktop-open and integration-smoke carve-outs.
+> See the **Implementation Progress** section below for the full record.
 
 1. **[✅ DONE]** Build `ToolResult`, the `ToolRunner` Protocol, `SubprocessToolRunner`, and `FakeToolRunner`. Model the adapter on `pipeline.py`'s `_run_command` — the **superset** behavior (`select` + cancel + 30s heartbeat); the fsl helper's simpler loop is a subset and is subsumed.
 2. **[✅ DONE]** **Pipeline first** — it's the caller the adapter was modeled on (highest-fidelity behavior check) and the only cancellable one. Land the first command-construction and control-flow tests here.
 3. **[✅ DONE]** **fsl** — deletes the duplicate streaming loop (the locality win). Also threaded the runner through the **2 live** b0-extraction helpers (their `check=True` → returncode rewrite landed here, ahead of step 5) and closed deviation #2 for fsl: the pipeline now forwards `self.runner` into the backend, so a fake injected at the pipeline reaches FSL registration commands.
 4. **[✅ DONE]** **synB0** (15 sites) — mechanical bulk, all the same pattern. `Synb0Backend.__init__` and `run_topup_eddy(...)` gained a `runner` param (default real); all 15 `subprocess.run(...)` sites became `self.runner.run(...)` / `runner.run(...)`, with `result.stderr` → `result.output`. The torch-pulling `run_inference` import was made lazy so the backend imports without torch (see deviation #3).
 5. **[✅ DONE]** **b0-extraction** (the **3 remaining** dormant sites in `extract_and_average_b0` — `dwiextract`, `mrconvert`, `mrmath`) — carried the `check=True` → returncode rewrite (Decision 3); landed with step 4 so synB0's `_extract_b0` could thread its runner all the way down. `import subprocess` is now gone from `b0_extraction.py`.
-6. **[ ] TODO** **reanalysis** (1 site).
+6. **[✅ DONE]** **reanalysis** (1 site) — the `applywarp` in `reanalyze_subject` now routes through a `runner` threaded from `run_reanalysis` (created once per run, shared across subjects); `check=True` → returncode rewrite (Decision 3) replaced the `except CalledProcessError`. `import subprocess` removed.
+- **[✅ DONE]** **Decision 9 guardrail** — `TID251` banned-api on `subprocess` enabled in `pyproject.toml`, with per-file carve-outs for `tool_runner.py` (the seam), `gui/app.py` (desktop-open), and the two integration-smoke test scripts. Proven to fire on a stray import.
 - Known cosmetic diff: fsl/synB0 commands now emit the 30s "still processing…" heartbeat they didn't before.
 
 ## Testing Decisions
@@ -302,6 +311,42 @@ check` / `ruff format --check` clean on all touched files. Production path
 unchanged: `Synb0Backend()` / `run_topup_eddy(...)` / `extract_and_average_b0(...)`
 all default to the real adapter; synB0 remains dormant (no callers).
 
+### Increment 4 — reanalysis + the guardrail (MIGRATION COMPLETE) (2026-06-20, branch `refactor/ToolRunner-seam`)
+
+**Strangler step 6 complete, and the Decision 9 guardrail enabled.** Every
+toolchain site now crosses the seam.
+
+**Added**
+- `tests/test_reanalysis_seam.py` — fake-driven tests: the `applywarp` command
+  routes through the injected runner (argv asserted); a non-zero exit / 127
+  missing-binary becomes a failed `ReanalysisResult` (Decision-3 rewrite, no
+  raise); `run_reanalysis` threads one runner into every subject and defaults to
+  the real adapter without one. The `applywarp` sits behind an FSL-presence gate
+  (`_get_fsl_bin_dir`) and template/FA gates, satisfied here with a monkeypatched
+  bin dir + template map and a real FA volume. **5 tests.**
+
+**Changed**
+- `dti_alps/processing/reanalysis.py` — `reanalyze_subject` and `run_reanalysis`
+  gained a `runner` param (default real); `run_reanalysis` creates one runner and
+  threads it into each `reanalyze_subject`. The `applywarp` `subprocess.run(...,
+  check=True)` became `runner.run(...)` with the returncode rewrite, and the
+  surrounding `except subprocess.CalledProcessError` was removed (the generic
+  `except Exception` stays). `import subprocess` removed.
+- `pyproject.toml` — enabled the Decision 9 guardrail: `TID251` added to
+  `select`, a `flake8-tidy-imports.banned-api` rule on `"subprocess"`, and
+  `per-file-ignores` carve-outs for `tool_runner.py`, `gui/app.py`, and the two
+  integration-smoke scripts. (No production-code carve-out was needed beyond the
+  seam — the audit `grep -rn "import subprocess" dti_alps/` showed only
+  `tool_runner.py` and `gui/app.py` remaining.)
+
+**Test status:** `pytest tests/` → 58 passed (the 53 above + 5 reanalysis seam);
+3 pre-existing warnings. `ruff check` / `ruff format --check` clean across
+`dti_alps/` and `tests/` — which, with `TID251` on, is itself the proof that every
+toolchain site now crosses the seam. The guardrail was verified to fire on a
+stray `import subprocess` in a non-carved module and pass once reverted.
+Production path unchanged: the reanalysis CLI (`__main__._run_reanalysis`) calls
+`run_reanalysis(...)` with no `runner`, defaulting to the real adapter.
+
 ### Deviations from the PRD as written (read before continuing)
 
 1. **`SubprocessToolRunner.run()` catches `OSError`, not only `FileNotFoundError`
@@ -356,33 +401,26 @@ all default to the real adapter; synB0 remains dormant (no callers).
   `FSLRegistration` gained an `__init__` storing `runner`.)*
 - **reanalysis** (step 6): the live entry is `__main__._run_reanalysis` →
   `run_reanalysis(...)` → `reanalyze_subject(...)` (the `applywarp` `subprocess.run`
-  is at ~`reanalysis.py:287`, wrapped by a function-level `except CalledProcessError`
-  at ~`:450`). Thread `runner` from the CLI entry down through both functions.
+  was at ~`reanalysis.py:287`, wrapped by a function-level `except CalledProcessError`
+  at ~`:450`). *(Done in Increment 4 — `runner` threaded through both functions
+  (created once in `run_reanalysis`), returncode rewrite applied, `except
+  CalledProcessError` removed, `import subprocess` gone. The CLI entry passes no
+  `runner`, defaulting to real.)*
 
-### Pick up here (next: step 6, reanalysis — then the Decision 9 guardrail)
+### Migration complete — nothing left to pick up
 
-Steps 1–5 are done (Increments 1–3). The only un-converted toolchain site is
-reanalysis, and after it the banned-import guardrail can be switched on.
+All six strangler steps and the Decision 9 guardrail have landed (Increments
+1–4). The seam now owns every toolchain command: pipeline, fsl, synB0,
+b0-extraction, and reanalysis all route through `ToolRunner`, and `TID251`
+forbids a future bypass. `pytest tests/` → 58 passed with no toolchain installed;
+`ruff check` clean (which, with the guardrail on, *is* the completeness proof).
 
-**Step 6 — reanalysis (1 site).** The live entry is `__main__._run_reanalysis` →
-`run_reanalysis(...)` → `reanalyze_subject(...)`. The `applywarp` `subprocess.run`
-is at ~`reanalysis.py:287`, wrapped by a function-level `except CalledProcessError`
-at ~`:450`. Thread `runner` from the CLI entry down through both functions
-(default real), rewrite the call to `runner.run(...)` with the `check=True` →
-returncode rewrite (Decision 3 — remove the surrounding `try/except
-CalledProcessError`), and swap any `.stderr` → `.output`. Add fake-driven tests
-(same style as the other `*_seam.py` files). After this, `import subprocess`
-should be gone from `reanalysis.py`.
-
-**Then the Decision 9 guardrail.** Once reanalysis is converted, no toolchain
-module should import `subprocess` except `processing/tool_runner.py`. Add a ruff
-`flake8-tidy-imports` banned-api rule (`[tool.ruff.lint.flake8-tidy-imports]` /
-`banned-api`, with per-file-ignores carving out `tool_runner.py` and the GUI's
-desktop-open helper) and enable it in `pyproject.toml`. Confirm `ruff check`
-passes, which proves every toolchain site now crosses the seam. (Quick audit
-before enabling: `grep -rn "subprocess" dti_alps/` — at the time of writing the
-only remaining toolchain user is `reanalysis.py`; the GUI desktop-open calls are
-the deliberate carve-out per Decision 6.)
+What this seam unblocks but does **not** itself deliver (see Out of Scope): the
+arrays-in ALPS module, the pure ROI-geometry module, and the real-binary
+integration smoke / cropped-fixture work. Two named fast-follows remain filed:
+extending real cancellation to synB0/fsl/b0-extraction (the signature already
+supports it; only the pipeline is wired today), and lifting the domain constants
+out of `gui.config` into a processing-owned module.
 
 ## Further Notes
 
