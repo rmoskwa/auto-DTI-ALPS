@@ -8,7 +8,11 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from ..processing.discovery import SubjectDiscovery, SubjectFiles
+from ..processing.discovery import (
+    SubjectFiles,
+    discover_with_subdir_fallback,
+    new_unique_runs,
+)
 from ..processing.pipeline import (
     BatchConfig,
     BatchRunner,
@@ -975,15 +979,7 @@ class DTIALPSApplication(tk.Tk):
         Returns the number of runs successfully added.
         """
         try:
-            discovery = SubjectDiscovery(folder_path)
-            discovered_runs = discovery.discover_files()
-
-            # If nothing found at this level, check immediate subdirectories
-            if not discovered_runs:
-                subdirs = sorted(p for p in Path(folder_path).iterdir() if p.is_dir())
-                for subdir in subdirs:
-                    sub_discovery = SubjectDiscovery(str(subdir))
-                    discovered_runs.extend(sub_discovery.discover_files())
+            discovered_runs = discover_with_subdir_fallback(folder_path)
 
             if not discovered_runs:
                 messagebox.showinfo(
@@ -993,18 +989,11 @@ class DTIALPSApplication(tk.Tk):
                 )
                 return 0
 
-            added = 0
-            for subject_files in discovered_runs:
-                # Check for duplicates by DWI path (more specific than folder)
-                is_duplicate = False
-                for existing in self.subject_files_list:
-                    if existing.dwi_path == subject_files.dwi_path:
-                        is_duplicate = True
-                        break
+            # Track if we cross from <=1 to >1 subjects (for the synB0 batch warning)
+            count_before = len(self.subject_files_list)
+            new_runs = new_unique_runs(self.subject_files_list, discovered_runs)
 
-                if is_duplicate:
-                    continue
-
+            for subject_files in new_runs:
                 files_found = subject_files.get_files_summary()
 
                 # Add to Data Input tree (without status)
@@ -1020,11 +1009,9 @@ class DTIALPSApplication(tk.Tk):
 
                 # Store SubjectFiles object
                 self.subject_files_list.append(subject_files)
-                added += 1
 
+            added = len(new_runs)
             if added > 0:
-                # Track if we crossed from <=1 to >1 subjects
-                count_before = len(self.subject_files_list) - added
                 now_multiple = len(self.subject_files_list) > 1
 
                 self._log(f"Added {added} DWI run(s) from {folder_path}")

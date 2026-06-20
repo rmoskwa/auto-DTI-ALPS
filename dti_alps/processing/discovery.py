@@ -10,6 +10,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from glob import glob
+from pathlib import Path
 
 
 @dataclass
@@ -238,6 +239,70 @@ class SubjectDiscovery:
                         return match
 
         return None
+
+
+def discover_with_subdir_fallback(folder: str) -> list[SubjectFiles]:
+    """
+    Discover DWI runs in a folder, falling back to immediate subdirectories.
+
+    Runs :meth:`SubjectDiscovery.discover_files` on ``folder``. If that finds
+    nothing, each immediate subdirectory is scanned in sorted order and the
+    results are concatenated. This lets a user select either a single subject
+    folder or a parent folder containing several subject folders.
+
+    Parameters
+    ----------
+    folder : str
+        Folder to scan (a subject folder or a parent of subject folders).
+
+    Returns
+    -------
+    list[SubjectFiles]
+        Discovered runs. The subdirectory fallback fires only when the
+        top-level scan is empty; an empty list means nothing was found at
+        either level.
+    """
+    discovered = SubjectDiscovery(folder).discover_files()
+    if discovered:
+        return discovered
+
+    runs: list[SubjectFiles] = []
+    subdirs = sorted(p for p in Path(folder).iterdir() if p.is_dir())
+    for subdir in subdirs:
+        runs.extend(SubjectDiscovery(str(subdir)).discover_files())
+    return runs
+
+
+def new_unique_runs(
+    existing: list[SubjectFiles], discovered: list[SubjectFiles]
+) -> list[SubjectFiles]:
+    """
+    Filter discovered runs down to those not already present, deduped by DWI path.
+
+    A discovered run is dropped when its ``dwi_path`` matches that of an entry in
+    ``existing`` or of an earlier run in ``discovered`` (so duplicates within the
+    same scan are also collapsed). Order of the surviving runs is preserved.
+
+    Parameters
+    ----------
+    existing : list[SubjectFiles]
+        Runs already in the session list.
+    discovered : list[SubjectFiles]
+        Newly discovered runs to filter.
+
+    Returns
+    -------
+    list[SubjectFiles]
+        The subset of ``discovered`` whose DWI paths are new.
+    """
+    seen = {s.dwi_path for s in existing}
+    unique: list[SubjectFiles] = []
+    for run in discovered:
+        if run.dwi_path in seen:
+            continue
+        seen.add(run.dwi_path)
+        unique.append(run)
+    return unique
 
 
 def parse_json_sidecar(json_path: str) -> dict:

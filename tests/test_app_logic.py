@@ -8,6 +8,11 @@ return value of the extracted decision, not a widget effect.
 
 import os
 
+from dti_alps.processing.discovery import (
+    SubjectFiles,
+    discover_with_subdir_fallback,
+    new_unique_runs,
+)
 from dti_alps.processing.validators import (
     resolve_readout_time,
     validate_synb0_output_dir,
@@ -18,6 +23,13 @@ def _touch(path: str) -> None:
     """Create an empty file, making parent dirs as needed."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     open(path, "w").close()
+
+
+def _make_dwi_set(folder: str, stem: str) -> None:
+    """Create a matching DWI + bvec + bval file set in folder."""
+    _touch(os.path.join(folder, f"{stem}.nii.gz"))
+    _touch(os.path.join(folder, f"{stem}.bvec"))
+    _touch(os.path.join(folder, f"{stem}.bval"))
 
 
 class TestValidateSynb0OutputDir:
@@ -99,3 +111,69 @@ class TestResolveReadoutTime:
         assert resolve_readout_time(False, "999", 0.05) == 999.0
         assert resolve_readout_time(False, "-1", 0.05) == -1.0
         assert resolve_readout_time(False, "0", 0.05) == 0.0
+
+
+class TestDiscoverWithSubdirFallback:
+    """Tests for discover_with_subdir_fallback()."""
+
+    def test_top_level_hit(self, tmp_path):
+        """A DWI set directly in the folder is returned without a subdir scan."""
+        subject = tmp_path / "10_1003"
+        subject.mkdir()
+        _make_dwi_set(str(subject), "DTI64")
+
+        runs = discover_with_subdir_fallback(str(subject))
+
+        assert len(runs) == 1
+        assert runs[0].subject_id == "10_1003"
+
+    def test_subdir_fallback(self, tmp_path):
+        """No DWI at top level → immediate subdirectories are scanned, in order."""
+        parent = tmp_path / "cohort"
+        parent.mkdir()
+        _make_dwi_set(str(parent / "sub-a"), "DTI64")
+        _make_dwi_set(str(parent / "sub-b"), "DTI64")
+
+        runs = discover_with_subdir_fallback(str(parent))
+
+        assert [r.subject_id for r in runs] == ["sub-a", "sub-b"]
+
+    def test_nothing_anywhere(self, tmp_path):
+        """No DWI at top level or in subdirs → empty list."""
+        empty = tmp_path / "empty"
+        (empty / "junk").mkdir(parents=True)
+
+        assert discover_with_subdir_fallback(str(empty)) == []
+
+
+class TestNewUniqueRuns:
+    """Tests for new_unique_runs()."""
+
+    @staticmethod
+    def _run(dwi_path: str) -> SubjectFiles:
+        return SubjectFiles(folder_path="/f", subject_id=dwi_path, dwi_path=dwi_path)
+
+    def test_dedup_against_existing(self):
+        """Runs whose dwi_path is already in existing are dropped."""
+        existing = [self._run("/a.nii.gz")]
+        discovered = [self._run("/a.nii.gz"), self._run("/b.nii.gz")]
+
+        unique = new_unique_runs(existing, discovered)
+
+        assert [r.dwi_path for r in unique] == ["/b.nii.gz"]
+
+    def test_intra_batch_dedup(self):
+        """Duplicate dwi_paths within the discovered batch collapse to one."""
+        discovered = [self._run("/a.nii.gz"), self._run("/a.nii.gz")]
+
+        unique = new_unique_runs([], discovered)
+
+        assert [r.dwi_path for r in unique] == ["/a.nii.gz"]
+
+    def test_order_preserved(self):
+        """Surviving runs keep their discovered order."""
+        discovered = [self._run("/c.nii.gz"), self._run("/a.nii.gz"), self._run("/b.nii.gz")]
+
+        unique = new_unique_runs([], discovered)
+
+        assert [r.dwi_path for r in unique] == ["/c.nii.gz", "/a.nii.gz", "/b.nii.gz"]
