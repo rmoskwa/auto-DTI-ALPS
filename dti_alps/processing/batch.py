@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from ..gui import config
+from .constants import DEFAULT_READOUT_TIME
 from .state import BatchState, PipelineState, SubjectResult
 
 if TYPE_CHECKING:
@@ -82,7 +82,7 @@ class BatchRunner:
             readout_time = extract_readout_time(json_data, subject_files.dwi_path)
 
         if readout_time is None:
-            readout_time = config.DEFAULT_READOUT_TIME  # fallback default
+            readout_time = DEFAULT_READOUT_TIME  # fallback default
             self._notify(
                 "log",
                 f"  Warning: Could not extract readout time for {subject_files.subject_id}, "

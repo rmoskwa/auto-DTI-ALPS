@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 import nibabel as nib
 import numpy as np
 
-from ..gui import config
+from .constants import TENSOR_DXX_INDEX, TENSOR_DYY_INDEX, TENSOR_DZZ_INDEX
 
 if TYPE_CHECKING:
     from .state import PipelineState
@@ -68,9 +68,9 @@ def load_lab_components(
     log = log_callback or (lambda msg: None)
     log(f"Loading tensor: {tensor_path}")
     tensor_data = nib.load(tensor_path).get_fdata()
-    dxx = tensor_data[:, :, :, config.TENSOR_DXX_INDEX]
-    dyy = tensor_data[:, :, :, config.TENSOR_DYY_INDEX]
-    dzz = tensor_data[:, :, :, config.TENSOR_DZZ_INDEX]
+    dxx = tensor_data[:, :, :, TENSOR_DXX_INDEX]
+    dyy = tensor_data[:, :, :, TENSOR_DYY_INDEX]
+    dzz = tensor_data[:, :, :, TENSOR_DZZ_INDEX]
     return dxx, dyy, dzz
 
 

@@ -2,6 +2,22 @@
 Configuration constants and default values for DTI-ALPS GUI.
 """
 
+# Domain constants live in the engine (processing/constants.py). They are
+# re-exported here (not redefined) so the GUI's existing ``config.X`` references
+# keep resolving and the GUI and engine cannot disagree about a value. The
+# engine is the source of truth -- change a value in processing/constants.py,
+# not here. (noqa: these names are intentional re-exports, not dead imports.)
+from ..processing.constants import (  # noqa: F401
+    DEFAULT_PE_DIRECTION,
+    DEFAULT_READOUT_TIME,
+    DEFAULT_RPE_SCHEME,
+    FA_THRESHOLD,
+    READOUT_TIME_RANGE,
+    TENSOR_DXX_INDEX,
+    TENSOR_DYY_INDEX,
+    TENSOR_DZZ_INDEX,
+)
+
 # Application info
 APP_NAME = "DTI-ALPS Processing Tool"
 APP_VERSION = "0.1.0"
@@ -23,14 +39,8 @@ RPE_SCHEMES = {
     "header": "PE info from image headers",
 }
 
-# Default preprocessing parameters
-DEFAULT_READOUT_TIME = 0.05  # seconds
-DEFAULT_PE_DIRECTION = "AP"
-DEFAULT_RPE_SCHEME = "none"
-
 # Registration-based ROI placement parameters
 DEFAULT_ROI_SPHERE_RADIUS = 2.0  # Sphere radius in mm for ROI placement
-FA_THRESHOLD = 0.2  # Minimum FA value for ROI voxels (filters out CSF)
 
 # ALPS calculation methods
 ALPS_METHODS = ["ALPS-LAB", "ALPS-PAS", "Both"]
@@ -42,7 +52,6 @@ DEFAULT_ROI_REFINEMENT = "Both"
 
 # Parameter ranges for validation
 ROI_SPHERE_RADIUS_RANGE = (1.0, 4.0)  # Range for ROI sphere radius (mm)
-READOUT_TIME_RANGE = (0.001, 1.0)
 
 # File type filters for file dialogs
 NIFTI_FILETYPES = [("NIfTI files", "*.nii *.nii.gz"), ("All files", "*.*")]
@@ -240,12 +249,6 @@ SYNB0_EDDY_OPTIONS = [
 
 # synB0 eddy slm choices
 SYNB0_EDDY_SLM_CHOICES = ["none", "linear", "quadratic"]
-
-# MRtrix3 tensor volume indices
-# dwi2tensor outputs: D11, D22, D33, D12, D13, D23
-TENSOR_DXX_INDEX = 0  # D11
-TENSOR_DYY_INDEX = 1  # D22
-TENSOR_DZZ_INDEX = 2  # D33
 
 # Color scheme
 COLORS = {

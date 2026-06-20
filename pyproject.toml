@@ -93,6 +93,9 @@ known-first-party = ["dti_alps"]
 # actual MRtrix3/FSL on a machine that has them.
 "tests/test_pipeline.py" = ["TID251"]
 "tests/test_registration.py" = ["TID251"]
+# Engine import-guard (PRD 0003): spawns a fresh Python interpreter to get a
+# clean sys.modules, not a toolchain command -- legitimately outside the seam.
+"tests/test_engine_independence.py" = ["TID251"]
 
 [tool.ruff.format]
 quote-style = "double"

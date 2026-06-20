@@ -6,7 +6,7 @@ import os
 
 import numpy as np
 
-from ..gui import config
+from .constants import READOUT_TIME_RANGE
 
 
 def validate_file_exists(path: str, file_type: str) -> tuple[bool, str]:
@@ -146,7 +146,7 @@ def validate_readout_time(value: str) -> tuple[bool, str]:
     """
     try:
         rt = float(value)
-        min_rt, max_rt = config.READOUT_TIME_RANGE
+        min_rt, max_rt = READOUT_TIME_RANGE
 
         if rt <= 0:
             return False, "Readout time must be positive"
