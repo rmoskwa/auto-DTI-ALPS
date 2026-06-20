@@ -37,10 +37,21 @@ ViewerModel work).
   otherwise (`alps_csv_name`).
 - **ALPS column schema** — the canonical column names of the results CSV
   (`Left/Right Hemisphere ALPS-LAB/-PAS`, `Combined ALPS-*`, plus the legacy
-  no-suffix `…ALPS`). `read_alps_csv(path) -> AlpsTable` is the one typed reader; it
-  detects the **ALPS method** (`ALPS-LAB`, `ALPS-PAS`, or `Both`) from the present
-  columns. Writers (`batch`, `reanalysis`) are repointed to this schema as a
-  follow-up.
+  no-suffix `…ALPS`), ordered by `alps_columns(method)`. `read_alps_csv(path) ->
+  AlpsTable` is the one typed reader; it detects the **ALPS method** (`ALPS-LAB`,
+  `ALPS-PAS`, or `Both`) from the present columns.
+- **Writer twin** — `write_alps_csv(path, table)` is the inverse of
+  `read_alps_csv` over the same `AlpsTable` value, so `read(write(table))`
+  round-trips. It emits only the suffixed columns (never the legacy ones) with
+  `.6f` cells. The `batch` and `reanalysis` writers convert their result objects
+  into an `AlpsTable` at the call site and write through it; the writer is the
+  intended sink for any future CSV writer too. A pure file-I/O leaf — no
+  directory creation, logging, or error-swallowing (those stay with the caller).
+- **ROI-mask identity** — the four canonical mask names live in one place as
+  `ROI_NAMES`, and the on-disk filename `{subject}_{roi_name}.nii.gz` is a
+  producer/consumer pair over one template: `roi_mask_name` (writers) and
+  `roi_mask_glob` (viewer), so the written name and the glob that finds it
+  cannot drift.
 
 ## Presentation models (tk-free, GUI-side)
 

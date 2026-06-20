@@ -5,7 +5,6 @@ This module handles processing multiple subjects sequentially,
 tracking results, and writing output files.
 """
 
-import csv
 import os
 import time
 from collections.abc import Callable
@@ -399,145 +398,78 @@ class BatchRunner:
             self._notify("log", f"ERROR: Failed to write CSV: {e}")
 
     def _write_single_csv(self, alps_method: str) -> None:
-        """Write single CSV file (backward compatibility mode)."""
+        """Write single CSV file (backward compatibility mode) via the contract."""
         csv_path = os.path.join(
             self.batch_state.config.output_dir,
             results_layout.alps_csv_name(results_layout.DEFAULT_ROI_TOKEN),
         )
 
-        with open(csv_path, "w", newline="") as f:
-            writer = csv.writer(f)
-            header = self._get_csv_header(alps_method)
-            writer.writerow(header)
-
-            for result in self.batch_state.results:
-                row = self._get_csv_row(result, alps_method)
-                writer.writerow(row)
+        table = results_layout.AlpsTable(
+            method=alps_method,
+            rows={
+                result.subject_id: self._alps_row(
+                    result,
+                    lab_left=result.alps_lab_left,
+                    lab_right=result.alps_lab_right,
+                    lab_combined=result.alps_lab_bilateral,
+                    pas_left=result.alps_pas_left,
+                    pas_right=result.alps_pas_right,
+                    pas_combined=result.alps_pas_bilateral,
+                )
+                for result in self.batch_state.results
+            },
+        )
+        results_layout.write_alps_csv(csv_path, table)
 
         self._notify("log", f"Results saved to {csv_path}")
 
     def _write_shape_csv(self, csv_path: str, shape_name: str, alps_method: str) -> None:
-        """Write CSV file for a specific ROI shape."""
-        with open(csv_path, "w", newline="") as f:
-            writer = csv.writer(f)
-            header = self._get_csv_header(alps_method)
-            writer.writerow(header)
+        """Write CSV file for a specific ROI shape via the contract."""
+        rows = {}
+        for result in self.batch_state.results:
+            # The per-shape path reads its shape-keyed dict (vs the primary fields).
+            shape_data = result.alps_results_by_shape.get(shape_name, {})
+            rows[result.subject_id] = self._alps_row(
+                result,
+                lab_left=shape_data.get("alps_lab_left"),
+                lab_right=shape_data.get("alps_lab_right"),
+                lab_combined=shape_data.get("alps_lab_bilateral"),
+                pas_left=shape_data.get("alps_pas_left"),
+                pas_right=shape_data.get("alps_pas_right"),
+                pas_combined=shape_data.get("alps_pas_bilateral"),
+            )
+        results_layout.write_alps_csv(
+            csv_path, results_layout.AlpsTable(method=alps_method, rows=rows)
+        )
 
-            for result in self.batch_state.results:
-                row = self._get_csv_row_for_shape(result, shape_name, alps_method)
-                writer.writerow(row)
+    def _alps_row(
+        self,
+        result: SubjectResult,
+        *,
+        lab_left: float | None,
+        lab_right: float | None,
+        lab_combined: float | None,
+        pas_left: float | None,
+        pas_right: float | None,
+        pas_combined: float | None,
+    ) -> results_layout.AlpsRow:
+        """Map a SubjectResult onto an AlpsRow.
 
-    def _get_csv_header(self, alps_method: str) -> list[str]:
-        """Get CSV header based on ALPS method."""
-        if alps_method == "ALPS-LAB":
-            return [
-                "Filename",
-                "Left Hemisphere ALPS-LAB",
-                "Right Hemisphere ALPS-LAB",
-                "Combined ALPS-LAB",
-                "Status",
-                "Error",
-            ]
-        elif alps_method == "ALPS-PAS":
-            return [
-                "Filename",
-                "Left Hemisphere ALPS-PAS",
-                "Right Hemisphere ALPS-PAS",
-                "Combined ALPS-PAS",
-                "Status",
-                "Error",
-            ]
-        else:  # Both
-            return [
-                "Filename",
-                "Left Hemisphere ALPS-LAB",
-                "Right Hemisphere ALPS-LAB",
-                "Combined ALPS-LAB",
-                "Left Hemisphere ALPS-PAS",
-                "Right Hemisphere ALPS-PAS",
-                "Combined ALPS-PAS",
-                "Status",
-                "Error",
-            ]
-
-    def _get_csv_row(self, result: SubjectResult, alps_method: str) -> list[str]:
-        """Get CSV row for a subject result (backward compatibility)."""
-        if alps_method == "ALPS-LAB":
-            return [
-                result.subject_id,
-                f"{result.alps_lab_left:.6f}" if result.alps_lab_left is not None else "",
-                f"{result.alps_lab_right:.6f}" if result.alps_lab_right is not None else "",
-                f"{result.alps_lab_bilateral:.6f}" if result.alps_lab_bilateral is not None else "",
-                result.status,
-                result.error_message or "",
-            ]
-        elif alps_method == "ALPS-PAS":
-            return [
-                result.subject_id,
-                f"{result.alps_pas_left:.6f}" if result.alps_pas_left is not None else "",
-                f"{result.alps_pas_right:.6f}" if result.alps_pas_right is not None else "",
-                f"{result.alps_pas_bilateral:.6f}" if result.alps_pas_bilateral is not None else "",
-                result.status,
-                result.error_message or "",
-            ]
-        else:  # Both
-            return [
-                result.subject_id,
-                f"{result.alps_lab_left:.6f}" if result.alps_lab_left is not None else "",
-                f"{result.alps_lab_right:.6f}" if result.alps_lab_right is not None else "",
-                f"{result.alps_lab_bilateral:.6f}" if result.alps_lab_bilateral is not None else "",
-                f"{result.alps_pas_left:.6f}" if result.alps_pas_left is not None else "",
-                f"{result.alps_pas_right:.6f}" if result.alps_pas_right is not None else "",
-                f"{result.alps_pas_bilateral:.6f}" if result.alps_pas_bilateral is not None else "",
-                result.status,
-                result.error_message or "",
-            ]
-
-    def _get_csv_row_for_shape(
-        self, result: SubjectResult, shape_name: str, alps_method: str
-    ) -> list[str]:
-        """Get CSV row for a specific ROI shape."""
-        # Get shape-specific results if available
-        shape_data = result.alps_results_by_shape.get(shape_name, {})
-
-        # Extract values
-        lab_left = shape_data.get("alps_lab_left")
-        lab_right = shape_data.get("alps_lab_right")
-        lab_bilateral = shape_data.get("alps_lab_bilateral")
-        pas_left = shape_data.get("alps_pas_left")
-        pas_right = shape_data.get("alps_pas_right")
-        pas_bilateral = shape_data.get("alps_pas_bilateral")
-
-        if alps_method == "ALPS-LAB":
-            return [
-                result.subject_id,
-                f"{lab_left:.6f}" if lab_left is not None else "",
-                f"{lab_right:.6f}" if lab_right is not None else "",
-                f"{lab_bilateral:.6f}" if lab_bilateral is not None else "",
-                result.status,
-                result.error_message or "",
-            ]
-        elif alps_method == "ALPS-PAS":
-            return [
-                result.subject_id,
-                f"{pas_left:.6f}" if pas_left is not None else "",
-                f"{pas_right:.6f}" if pas_right is not None else "",
-                f"{pas_bilateral:.6f}" if pas_bilateral is not None else "",
-                result.status,
-                result.error_message or "",
-            ]
-        else:  # Both
-            return [
-                result.subject_id,
-                f"{lab_left:.6f}" if lab_left is not None else "",
-                f"{lab_right:.6f}" if lab_right is not None else "",
-                f"{lab_bilateral:.6f}" if lab_bilateral is not None else "",
-                f"{pas_left:.6f}" if pas_left is not None else "",
-                f"{pas_right:.6f}" if pas_right is not None else "",
-                f"{pas_bilateral:.6f}" if pas_bilateral is not None else "",
-                result.status,
-                result.error_message or "",
-            ]
+        Status/Error come from the result; the metrics come from the caller --
+        the primary fields (single-file path) or the shape-keyed dict (per-shape
+        path). The result's ``bilateral`` becomes the row's ``combined``.
+        """
+        return results_layout.AlpsRow(
+            subject_id=result.subject_id,
+            status=result.status,
+            error=result.error_message or "",
+            lab_left=lab_left,
+            lab_right=lab_right,
+            lab_combined=lab_combined,
+            pas_left=pas_left,
+            pas_right=pas_right,
+            pas_combined=pas_combined,
+        )
 
     def cancel(self) -> None:
         """Request batch cancellation."""

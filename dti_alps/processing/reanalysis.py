@@ -11,7 +11,6 @@ Usage:
     python -m dti_alps --reanalyze /path/to/output --sphere 2.5 --refine
 """
 
-import csv
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -576,82 +575,27 @@ def _write_reanalysis_csv(
     results: list[ReanalysisResult],
     alps_method: str,
 ) -> None:
-    """Write reanalysis results to CSV file."""
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.writer(f)
+    """Write reanalysis results through the results-on-disk contract.
 
-        # Build header based on method
-        if alps_method == "ALPS-LAB":
-            header = [
-                "Filename",
-                "Left Hemisphere ALPS-LAB",
-                "Right Hemisphere ALPS-LAB",
-                "Combined ALPS-LAB",
-                "Status",
-                "Error",
-            ]
-        elif alps_method == "ALPS-PAS":
-            header = [
-                "Filename",
-                "Left Hemisphere ALPS-PAS",
-                "Right Hemisphere ALPS-PAS",
-                "Combined ALPS-PAS",
-                "Status",
-                "Error",
-            ]
-        else:  # Both
-            header = [
-                "Filename",
-                "Left Hemisphere ALPS-LAB",
-                "Right Hemisphere ALPS-LAB",
-                "Combined ALPS-LAB",
-                "Left Hemisphere ALPS-PAS",
-                "Right Hemisphere ALPS-PAS",
-                "Combined ALPS-PAS",
-                "Status",
-                "Error",
-            ]
-
-        writer.writerow(header)
-
-        for result in results:
-            if alps_method == "ALPS-LAB":
-                row = [
-                    result.subject_id,
-                    f"{result.alps_lab_left:.6f}" if result.alps_lab_left is not None else "",
-                    f"{result.alps_lab_right:.6f}" if result.alps_lab_right is not None else "",
-                    f"{result.alps_lab_bilateral:.6f}"
-                    if result.alps_lab_bilateral is not None
-                    else "",
-                    result.status,
-                    result.error_message or "",
-                ]
-            elif alps_method == "ALPS-PAS":
-                row = [
-                    result.subject_id,
-                    f"{result.alps_pas_left:.6f}" if result.alps_pas_left is not None else "",
-                    f"{result.alps_pas_right:.6f}" if result.alps_pas_right is not None else "",
-                    f"{result.alps_pas_bilateral:.6f}"
-                    if result.alps_pas_bilateral is not None
-                    else "",
-                    result.status,
-                    result.error_message or "",
-                ]
-            else:  # Both
-                row = [
-                    result.subject_id,
-                    f"{result.alps_lab_left:.6f}" if result.alps_lab_left is not None else "",
-                    f"{result.alps_lab_right:.6f}" if result.alps_lab_right is not None else "",
-                    f"{result.alps_lab_bilateral:.6f}"
-                    if result.alps_lab_bilateral is not None
-                    else "",
-                    f"{result.alps_pas_left:.6f}" if result.alps_pas_left is not None else "",
-                    f"{result.alps_pas_right:.6f}" if result.alps_pas_right is not None else "",
-                    f"{result.alps_pas_bilateral:.6f}"
-                    if result.alps_pas_bilateral is not None
-                    else "",
-                    result.status,
-                    result.error_message or "",
-                ]
-
-            writer.writerow(row)
+    Each ``ReanalysisResult`` maps onto an ``AlpsRow`` (its ``bilateral`` field
+    becomes the table's ``combined``, ``error_message`` becomes ``error``); the
+    column schema and ``.6f`` formatting live in ``results_layout.write_alps_csv``.
+    """
+    table = results_layout.AlpsTable(
+        method=alps_method,
+        rows={
+            r.subject_id: results_layout.AlpsRow(
+                subject_id=r.subject_id,
+                status=r.status,
+                error=r.error_message or "",
+                lab_left=r.alps_lab_left,
+                lab_right=r.alps_lab_right,
+                lab_combined=r.alps_lab_bilateral,
+                pas_left=r.alps_pas_left,
+                pas_right=r.alps_pas_right,
+                pas_combined=r.alps_pas_bilateral,
+            )
+            for r in results
+        },
+    )
+    results_layout.write_alps_csv(csv_path, table)
