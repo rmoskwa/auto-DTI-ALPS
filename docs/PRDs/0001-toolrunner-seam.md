@@ -137,13 +137,29 @@ class FakeToolRunner:
 ### 9. A banned-`subprocess`-import guardrail, switched on after migration
 After the last call site is converted, add a lint rule (ruff `flake8-tidy-imports` banned-api or equivalent) forbidding `import subprocess` anywhere except `processing/tool_runner.py`, with a single carve-out for the GUI's desktop-open helper. Not enabled mid-migration, where it would fail on every un-converted site.
 
+> **✅ Enabled (Increment 4, 2026-06-20).** Implemented as ruff `TID251`
+> (`flake8-tidy-imports` banned-api) on `"subprocess"` in `pyproject.toml`, with
+> `per-file-ignores` carve-outs for `dti_alps/processing/tool_runner.py` (the
+> seam), `dti_alps/gui/app.py` (the desktop-open helper, Decision 6), and the two
+> kept real-binary integration-smoke scripts (`tests/test_pipeline.py`,
+> `tests/test_registration.py`). Banning the top-level import is the single lever
+> (no module can import it → none can call it); verified to fire on a stray import
+> and clean afterward.
+
 ### 10. Migration is a strangler in fidelity order
-1. Build `ToolResult`, the `ToolRunner` Protocol, `SubprocessToolRunner`, and `FakeToolRunner`. Model the adapter on `pipeline.py`'s `_run_command` — the **superset** behavior (`select` + cancel + 30s heartbeat); the fsl helper's simpler loop is a subset and is subsumed.
-2. **Pipeline first** — it's the caller the adapter was modeled on (highest-fidelity behavior check) and the only cancellable one. Land the first command-construction and control-flow tests here.
-3. **fsl** — deletes the duplicate streaming loop (the locality win).
-4. **synB0** (15 sites) — mechanical bulk, all the same pattern.
-5. **b0-extraction** (5 sites) — carries the `check=True` → returncode rewrite (Decision 3); done late, when the runner is proven.
-6. **reanalysis** (1 site).
+> **Progress: MIGRATION COMPLETE.** All steps 1–6 done (1–3 on 2026-06-19; 4–6 on
+> 2026-06-20) and the Decision 9 guardrail is enabled. Every toolchain site now
+> crosses the `ToolRunner` seam; the only remaining `import subprocess` is the seam
+> itself plus the deliberate GUI desktop-open and integration-smoke carve-outs.
+> See the **Implementation Progress** section below for the full record.
+
+1. **[✅ DONE]** Build `ToolResult`, the `ToolRunner` Protocol, `SubprocessToolRunner`, and `FakeToolRunner`. Model the adapter on `pipeline.py`'s `_run_command` — the **superset** behavior (`select` + cancel + 30s heartbeat); the fsl helper's simpler loop is a subset and is subsumed.
+2. **[✅ DONE]** **Pipeline first** — it's the caller the adapter was modeled on (highest-fidelity behavior check) and the only cancellable one. Land the first command-construction and control-flow tests here.
+3. **[✅ DONE]** **fsl** — deletes the duplicate streaming loop (the locality win). Also threaded the runner through the **2 live** b0-extraction helpers (their `check=True` → returncode rewrite landed here, ahead of step 5) and closed deviation #2 for fsl: the pipeline now forwards `self.runner` into the backend, so a fake injected at the pipeline reaches FSL registration commands.
+4. **[✅ DONE]** **synB0** (15 sites) — mechanical bulk, all the same pattern. `Synb0Backend.__init__` and `run_topup_eddy(...)` gained a `runner` param (default real); all 15 `subprocess.run(...)` sites became `self.runner.run(...)` / `runner.run(...)`, with `result.stderr` → `result.output`. The torch-pulling `run_inference` import was made lazy so the backend imports without torch (see deviation #3).
+5. **[✅ DONE]** **b0-extraction** (the **3 remaining** dormant sites in `extract_and_average_b0` — `dwiextract`, `mrconvert`, `mrmath`) — carried the `check=True` → returncode rewrite (Decision 3); landed with step 4 so synB0's `_extract_b0` could thread its runner all the way down. `import subprocess` is now gone from `b0_extraction.py`.
+6. **[✅ DONE]** **reanalysis** (1 site) — the `applywarp` in `reanalyze_subject` now routes through a `runner` threaded from `run_reanalysis` (created once per run, shared across subjects); `check=True` → returncode rewrite (Decision 3) replaced the `except CalledProcessError`. `import subprocess` removed.
+- **[✅ DONE]** **Decision 9 guardrail** — `TID251` banned-api on `subprocess` enabled in `pyproject.toml`, with per-file carve-outs for `tool_runner.py` (the seam), `gui/app.py` (desktop-open), and the two integration-smoke test scripts. Proven to fire on a stray import.
 - Known cosmetic diff: fsl/synB0 commands now emit the 30s "still processing…" heartbeat they didn't before.
 
 ## Testing Decisions
@@ -169,6 +185,242 @@ After the last call site is converted, add a lint rule (ruff `flake8-tidy-import
 - **Refactoring command *construction*** (the `commands.py` builders). The seam tests *that* the right argv is produced; it does not change how argv is built.
 - **Windows support for the streaming adapter.** `select`-on-pipes is POSIX-only; the toolchain runs on Linux/macOS. Not addressed here.
 - **Structured stderr.** Merged into one `output` stream; splitting it is a future change if a caller ever needs it.
+
+## Implementation Progress
+
+This section is the running record of what has shipped against the strangler plan
+(Decision 10), so a future developer knows exactly where to resume. Update it as
+each step lands.
+
+### Increment 1 — foundation + pipeline (2026-06-19, branch `refactor/ToolRunner-seam`)
+
+**Strangler steps 1–2 complete.** Steps 3–6 (fsl, synB0, b0-extraction, reanalysis)
+and the Decision 9 guardrail are **not started**.
+
+**Added**
+- `dti_alps/processing/tool_runner.py` — `ToolResult` value object, `ToolRunner`
+  `Protocol`, and `SubprocessToolRunner` (the real adapter, modeled on the
+  pipeline's former `_run_command` superset: `select` streaming + cancel + 30s
+  heartbeat; stderr merged into one `output`; never raises).
+- `tests/fakes.py` — `FakeToolRunner` (stateless, predicate-scripted recorder).
+- `tests/test_tool_runner.py` — the real-adapter regression net vs POSIX coreutils
+  (`echo`/`printf`/`false`/`sh`/missing-binary/cancel). Built before any caller was
+  touched, per User Story 15. **7 tests.**
+- `tests/test_pipeline_seam.py` — fake-driven `PipelineRunner` tests covering User
+  Stories 1–9, scoped to pipeline-issued commands. **9 tests.**
+
+**Changed**
+- `dti_alps/processing/pipeline.py` — `PipelineRunner.__init__` gained
+  `runner: ToolRunner | None = None` (`runner or SubprocessToolRunner()`); the
+  ~70-line duplicate streaming loop in `_run_command` collapsed to a delegation
+  that preserves the `Running:` prelude, cancel reporting, and exit-code
+  semantics. Removed now-unused `import select/subprocess/time`.
+
+**Test status:** `pytest tests/` → 27 passed (7 adapter + 9 pipeline-seam + 11
+pre-existing). `ruff check` / `ruff format --check` clean on all touched files.
+Production path unchanged: GUI builds `BatchRunner(...)` → `PipelineRunner(...)`
+with no `runner` arg → defaults to the real adapter.
+
+### Increment 2 — fsl backend (2026-06-19, branch `refactor/ToolRunner-seam`)
+
+**Strangler step 3 complete**, and with it the **2 live** b0-extraction sites and
+the fsl half of deviation #2 (below). Steps 4 (synB0), 5 (the 3 dormant
+b0-extraction sites), 6 (reanalysis), and the Decision 9 guardrail are **not
+started**.
+
+**Added**
+- `tests/test_registration_seam.py` — fake-driven FSL-backend tests: `get_backend`
+  threads the runner into the backend (and defaults to real without one); the four
+  FSL commands route through `_run_fsl_command` (stream + exit-code); the two live
+  b0 helpers issue `dwi2mask`/`fslmaths` through the runner and report a non-zero /
+  127 outcome as a `(False, msg)` instead of raising. **7 tests.**
+- `tests/test_pipeline_seam.py::test_run_registration_forwards_runner_to_backend`
+  — asserts `PipelineRunner.run_registration` forwards `self.runner` to
+  `registration.get_backend(...)`, the seam-crossing call. **1 test.**
+
+**Changed**
+- `dti_alps/processing/registration/fsl.py` — `FSLRegistration` gained
+  `__init__(self, runner=None)` (`runner or SubprocessToolRunner()`); the ~40-line
+  duplicate `Popen` streaming loop in `_run_fsl_command` collapsed to
+  `self.runner.run(cmd, on_line=log).returncode == 0`; `register()` now passes
+  `runner=self.runner` to the two b0 helpers. Removed now-unused `import subprocess`.
+- `dti_alps/processing/b0_extraction.py` — `create_brain_mask_from_dwi` and
+  `apply_mask_to_image` gained a `runner` param (default real); their
+  `subprocess.run(..., check=True)` + `except CalledProcessError/FileNotFoundError`
+  blocks collapsed to `result = runner.run(cmd); if result.returncode != 0: return
+  False, f"… failed: {result.output}"` (Decision 3, early — these are the 2 live
+  sites). `import subprocess` stays for the 3 still-dormant `extract_and_average_b0`
+  sites (step 5).
+- `dti_alps/processing/registration/__init__.py` — `get_backend(name, runner=None)`
+  passes `runner` to `FSLRegistration(runner=...)`; `register_fa_to_template`
+  (backward-compat, no production callers) gained a `runner` param it forwards.
+- `dti_alps/processing/pipeline.py` — `run_registration` / `run_roi_placement`
+  pass `runner=self.runner` into `registration.get_backend(...)`.
+
+**Test status:** `pytest tests/` → 35 passed (7 adapter + 17 seam: 9 pipeline + 1
+new pipeline-forwarding + 7 registration + 11 pre-existing). `ruff check` /
+`ruff format --check` clean on all touched files. Production path unchanged:
+`get_backend('fsl')` / `FSLRegistration()` / the four FSL backward-compat helpers
+all default to the real adapter; `get_backend('ants')` still raises `ValueError`.
+
+### Increment 3 — synB0 backend + dormant b0-extraction sites (2026-06-20, branch `refactor/ToolRunner-seam`)
+
+**Strangler steps 4 and 5 complete.** They landed together because synB0's
+`_extract_b0` calls `extract_and_average_b0`, so step 4's "thread the runner all
+the way down" needs step 5's `runner` param to exist (mirrors how Increment 2
+pulled the 2 live b0 sites into step 3). Only step 6 (reanalysis, 1 site) and the
+Decision 9 guardrail remain.
+
+**Added**
+- `tests/test_synb0_seam.py` — fake-driven tests for the dormant synB0 backend
+  and the 3 dormant `extract_and_average_b0` sites. Constructor threading
+  (`runner` stored / defaults to real); all 15 synB0 commands' argv and
+  failure/return handling; the 3 b0-extraction commands (`dwiextract` →
+  `mrconvert`/`mrmath`) and their non-zero / 127 handling. Helpers with
+  file-existence gates between commands are driven to the gate and asserted from
+  `fake.calls`; `run_topup_eddy` is driven all the way to `eddy` with real gate
+  fixtures (b0-pair, acqparams, brain mask, a real 4-D nibabel volume).
+  **18 tests.**
+
+**Changed**
+- `dti_alps/processing/synb0/backend.py` — `Synb0Backend.__init__` and the
+  module-level `run_topup_eddy(...)` gained `runner: ToolRunner | None = None`
+  (`runner or SubprocessToolRunner()`). All 15 `subprocess.run(cmd,
+  capture_output=True, text=True)` sites became `self.runner.run(cmd)` (13 backend
+  methods) / `runner.run(cmd)` (2 in `run_topup_eddy`), with every
+  `{result.stderr}` → `{result.output}`. `_extract_b0` now passes
+  `runner=self.runner` to `extract_and_average_b0`; `run_topup_eddy` passes
+  `runner=runner` to `create_brain_mask_from_dwi`. Removed `import subprocess`;
+  added `from ..tool_runner import SubprocessToolRunner, ToolRunner`. The
+  `run_inference` import was moved from module scope into `run()` (deviation #3).
+- `dti_alps/processing/synb0/__init__.py` — `run_inference` re-export made lazy
+  via PEP 562 `__getattr__` so `import dti_alps.processing.synb0` (triggered by
+  importing the backend submodule) no longer pulls torch; `Synb0Backend` /
+  `check_synb0_available` stay eager (neither needs torch at import). The public
+  `from ...synb0 import run_inference` API is preserved.
+- `dti_alps/processing/b0_extraction.py` — `extract_and_average_b0` gained a
+  `runner` param (default real); its 3 `subprocess.run(..., check=True)` +
+  `try/except CalledProcessError/FileNotFoundError` blocks collapsed to
+  `result = runner.run(cmd); if result.returncode != 0: return ...{result.output}`
+  (Decision 3). `import subprocess` removed — the module is now fully on the seam.
+
+**Test status:** `pytest tests/` → 53 passed (7 adapter + 35 seam: 9 pipeline + 1
+pipeline-forwarding + 7 registration + 18 synB0 + 11 pre-existing). The 3 warnings
+are pre-existing (`test_pipeline.py` integration scripts `return` a bool). `ruff
+check` / `ruff format --check` clean on all touched files. Production path
+unchanged: `Synb0Backend()` / `run_topup_eddy(...)` / `extract_and_average_b0(...)`
+all default to the real adapter; synB0 remains dormant (no callers).
+
+### Increment 4 — reanalysis + the guardrail (MIGRATION COMPLETE) (2026-06-20, branch `refactor/ToolRunner-seam`)
+
+**Strangler step 6 complete, and the Decision 9 guardrail enabled.** Every
+toolchain site now crosses the seam.
+
+**Added**
+- `tests/test_reanalysis_seam.py` — fake-driven tests: the `applywarp` command
+  routes through the injected runner (argv asserted); a non-zero exit / 127
+  missing-binary becomes a failed `ReanalysisResult` (Decision-3 rewrite, no
+  raise); `run_reanalysis` threads one runner into every subject and defaults to
+  the real adapter without one. The `applywarp` sits behind an FSL-presence gate
+  (`_get_fsl_bin_dir`) and template/FA gates, satisfied here with a monkeypatched
+  bin dir + template map and a real FA volume. **5 tests.**
+
+**Changed**
+- `dti_alps/processing/reanalysis.py` — `reanalyze_subject` and `run_reanalysis`
+  gained a `runner` param (default real); `run_reanalysis` creates one runner and
+  threads it into each `reanalyze_subject`. The `applywarp` `subprocess.run(...,
+  check=True)` became `runner.run(...)` with the returncode rewrite, and the
+  surrounding `except subprocess.CalledProcessError` was removed (the generic
+  `except Exception` stays). `import subprocess` removed.
+- `pyproject.toml` — enabled the Decision 9 guardrail: `TID251` added to
+  `select`, a `flake8-tidy-imports.banned-api` rule on `"subprocess"`, and
+  `per-file-ignores` carve-outs for `tool_runner.py`, `gui/app.py`, and the two
+  integration-smoke scripts. (No production-code carve-out was needed beyond the
+  seam — the audit `grep -rn "import subprocess" dti_alps/` showed only
+  `tool_runner.py` and `gui/app.py` remaining.)
+
+**Test status:** `pytest tests/` → 58 passed (the 53 above + 5 reanalysis seam);
+3 pre-existing warnings. `ruff check` / `ruff format --check` clean across
+`dti_alps/` and `tests/` — which, with `TID251` on, is itself the proof that every
+toolchain site now crosses the seam. The guardrail was verified to fire on a
+stray `import subprocess` in a non-carved module and pass once reverted.
+Production path unchanged: the reanalysis CLI (`__main__._run_reanalysis`) calls
+`run_reanalysis(...)` with no `runner`, defaulting to the real adapter.
+
+### Deviations from the PRD as written (read before continuing)
+
+1. **`SubprocessToolRunner.run()` catches `OSError`, not only `FileNotFoundError`
+   (Decision 3).** On the dev/CI machine (WSL) a *bare* missing command name
+   raises `PermissionError`, not `FileNotFoundError`, so catching only the latter
+   would let the engine crash here — violating the real invariant ("run() never
+   raises"). The catch was widened to `OSError`; the `FileNotFoundError` case
+   still yields the `"Command not found: …"` message, other launch failures yield
+   `"Could not execute …: <err>"`. Both return `returncode=127`.
+
+2. **`registration.get_backend(...)` is NOT yet threaded with the runner.**
+   *(Increment 1 deviation — RESOLVED for fsl in Increment 2.)* As of Increment 2,
+   `get_backend(name, runner=...)` threads the runner into the FSL backend and the
+   pipeline forwards `self.runner`, so a fake injected at the pipeline reaches FSL
+   registration / ROI-placement commands (`tests/test_registration_seam.py` +
+   `test_run_registration_forwards_runner_to_backend`). The single-injection-point
+   property is now **fully realized for fsl**; the only remaining gap is synB0's
+   dormant backend (step 4) and reanalysis (step 6), neither of which is on the live
+   pipeline path. Note the pipeline-seam tests still don't drive `register()`
+   end-to-end (its real `check_available()` / file gates and nibabel loads need
+   `.nii.gz` inputs the fake can't produce — that's the integration smoke's job);
+   the seam is asserted at the command-issuing helpers instead.
+
+3. **synB0's `run_inference` (torch) import was made lazy (Increment 3).** The
+   conversion's whole point is that the dormant synB0 backend becomes testable in
+   the toolchain-free CI — but `backend.py` and `synb0/__init__.py` both imported
+   `run_inference` at module scope, which pulls `torch` (an *optional* dependency
+   absent from the dev/CI env). Importing `Synb0Backend` therefore crashed before
+   any seam test could run. The fix: `backend.py` imports `run_inference` lazily
+   inside `run()` (its only call site, the NN-inference step), and `synb0/__init__`
+   re-exports it via PEP 562 `__getattr__`. No behavior change for a real synB0
+   run; the public `from ...synb0 import run_inference` API is preserved. This is
+   strictly in service of the PRD's stated CI goal, not a scope expansion.
+
+### Findings that shape the remaining steps
+
+- **synB0's 15 sites are dormant.** `Synb0Backend` and `run_topup_eddy`
+  (`processing/synb0/backend.py`) have **no callers anywhere** — the live synB0
+  route uses pre-computed external outputs via `PipelineRunner.run_eddy_with_synb0`,
+  which issues its commands through `_run_command` (already on the seam).
+  *(Done in Increment 3 — `runner` added to `Synb0Backend.__init__` and
+  `run_topup_eddy(...)`, all 15 sites rewritten, `result.stderr` → `result.output`,
+  tests inject the fake directly since nothing constructs the backend.)*
+- **2 of the 5 b0-extraction sites are live** via `FSLRegistration.register`:
+  `create_brain_mask_from_dwi` and `apply_mask_to_image` (`processing/b0_extraction.py`).
+  *(Done in Increment 2 — both now take a `runner` param and use the returncode
+  rewrite.)* The other 3 (`extract_and_average_b0`) are reached only through dormant
+  synB0; *(Done in Increment 3 — same `check=True` → returncode rewrite (Decision 3),
+  and `import subprocess` removed from the module.)*
+- **`_run_fsl_command` has 4 call sites** (flirt, fnirt, invwarp, applywarp) all
+  routing through the one helper. *(Done in Increment 2 — single body rewritten;
+  `FSLRegistration` gained an `__init__` storing `runner`.)*
+- **reanalysis** (step 6): the live entry is `__main__._run_reanalysis` →
+  `run_reanalysis(...)` → `reanalyze_subject(...)` (the `applywarp` `subprocess.run`
+  was at ~`reanalysis.py:287`, wrapped by a function-level `except CalledProcessError`
+  at ~`:450`). *(Done in Increment 4 — `runner` threaded through both functions
+  (created once in `run_reanalysis`), returncode rewrite applied, `except
+  CalledProcessError` removed, `import subprocess` gone. The CLI entry passes no
+  `runner`, defaulting to real.)*
+
+### Migration complete — nothing left to pick up
+
+All six strangler steps and the Decision 9 guardrail have landed (Increments
+1–4). The seam now owns every toolchain command: pipeline, fsl, synB0,
+b0-extraction, and reanalysis all route through `ToolRunner`, and `TID251`
+forbids a future bypass. `pytest tests/` → 58 passed with no toolchain installed;
+`ruff check` clean (which, with the guardrail on, *is* the completeness proof).
+
+What this seam unblocks but does **not** itself deliver (see Out of Scope): the
+arrays-in ALPS module, the pure ROI-geometry module, and the real-binary
+integration smoke / cropped-fixture work. Two named fast-follows remain filed:
+extending real cancellation to synB0/fsl/b0-extraction (the signature already
+supports it; only the pipeline is wired today), and lifting the domain constants
+out of `gui.config` into a processing-owned module.
 
 ## Further Notes
 

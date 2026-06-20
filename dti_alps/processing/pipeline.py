@@ -6,9 +6,6 @@ the execution of individual pipeline stages.
 """
 
 import os
-import select
-import subprocess
-import time
 from collections.abc import Callable
 from typing import Any
 
@@ -18,6 +15,7 @@ from .alps_calculation import run_alps_calculation
 # Re-export classes for backward compatibility
 from .batch import BatchRunner
 from .state import BatchConfig, BatchState, OutputConfig, PipelineState, SubjectResult
+from .tool_runner import SubprocessToolRunner, ToolRunner
 from .workers import BatchWorker, PipelineWorker
 
 __all__ = [
@@ -48,7 +46,10 @@ class PipelineRunner:
     """
 
     def __init__(
-        self, state: PipelineState, progress_callback: Callable[[str, Any], None] | None = None
+        self,
+        state: PipelineState,
+        progress_callback: Callable[[str, Any], None] | None = None,
+        runner: ToolRunner | None = None,
     ):
         """
         Initialize the pipeline runner.
@@ -60,9 +61,14 @@ class PipelineRunner:
         progress_callback : callable, optional
             Callback function for progress updates: callback(message_type, data)
             message_type can be: "stage", "progress", "log", "error"
+        runner : ToolRunner, optional
+            Seam for external command execution. Defaults to a real
+            subprocess-backed runner; tests inject a fake so that every command
+            this pipeline issues is captured without any toolchain installed.
         """
         self.state = state
         self.progress_callback = progress_callback or (lambda t, d: None)
+        self.runner = runner or SubprocessToolRunner()
         self.cancelled = False
 
     def _log(self, message: str) -> None:
@@ -75,7 +81,11 @@ class PipelineRunner:
 
     def _run_command(self, cmd: list[str], stage_name: str) -> bool:
         """
-        Execute a command and stream output with non-blocking I/O.
+        Execute a command through the tool runner, streaming its output.
+
+        Streaming, heartbeat, exit-code handling, and missing-binary handling all
+        live in the runner now; this method only translates the runner's result
+        into the pipeline's success/cancel/failure semantics.
 
         Parameters
         ----------
@@ -91,74 +101,24 @@ class PipelineRunner:
         """
         self._log(f"Running: {' '.join(cmd)}")
 
-        try:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=0,  # Unbuffered
-            )
+        result = self.runner.run(
+            cmd,
+            on_line=self._log,
+            cancel_check=lambda: self.cancelled,
+        )
 
-            last_heartbeat = time.time()
-            heartbeat_interval = 30  # seconds
-
-            while True:
-                # Check if cancelled
-                if self.cancelled:
-                    process.terminate()
-                    process.wait(timeout=5)
-                    self._log("Pipeline cancelled by user")
-                    return False
-
-                # Non-blocking check for output using select
-                ready, _, _ = select.select([process.stdout], [], [], 1.0)
-
-                if ready:
-                    line = process.stdout.readline()
-                    if line:
-                        line = line.rstrip()
-                        if line:
-                            self._log(line)
-                        last_heartbeat = time.time()
-                    elif process.poll() is not None:
-                        # Process finished and no more output
-                        break
-                else:
-                    # No output available, check if process is still running
-                    if process.poll() is not None:
-                        # Process finished
-                        break
-
-                    # Send heartbeat message periodically
-                    current_time = time.time()
-                    if current_time - last_heartbeat > heartbeat_interval:
-                        elapsed = int(current_time - last_heartbeat)
-                        self._log(
-                            f"  [{stage_name}] Still processing... ({elapsed}s since last output)"
-                        )
-                        last_heartbeat = current_time
-
-            # Read any remaining output
-            remaining = process.stdout.read()
-            if remaining:
-                for line in remaining.strip().split("\n"):
-                    if line:
-                        self._log(line)
-
-            if process.returncode != 0:
-                self._log(f"ERROR: {stage_name} failed with exit code {process.returncode}")
-                return False
-
-            return True
-
-        except FileNotFoundError:
-            self._log(f"ERROR: Command not found: {cmd[0]}")
-            self._log("Please ensure MRtrix3 is installed and in your PATH")
+        # The runner terminates the process once cancel_check() turns true; our
+        # own cancel flag (which fed cancel_check) distinguishes cancel from a
+        # genuine failure, so the result needs no special cancelled field.
+        if self.cancelled:
+            self._log("Pipeline cancelled by user")
             return False
-        except Exception as e:
-            self._log(f"ERROR: Unexpected error in {stage_name}: {str(e)}")
+
+        if result.returncode != 0:
+            self._log(f"ERROR: {stage_name} failed with exit code {result.returncode}")
             return False
+
+        return True
 
     def run_denoising(self) -> bool:
         """
@@ -451,7 +411,7 @@ class PipelineRunner:
         self._log(f"Starting FA-to-template registration using {backend_name} backend...")
 
         try:
-            backend = registration.get_backend(backend_name)
+            backend = registration.get_backend(backend_name, runner=self.runner)
         except ValueError as e:
             self._log(f"ERROR: {e}")
             self._update_stage("registration", "failed")
@@ -498,7 +458,7 @@ class PipelineRunner:
         self._log("Starting ROI placement...")
 
         try:
-            backend = registration.get_backend(backend_name)
+            backend = registration.get_backend(backend_name, runner=self.runner)
         except ValueError as e:
             self._log(f"ERROR: {e}")
             self._update_stage("roi", "failed")

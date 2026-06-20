@@ -5,10 +5,11 @@ This module provides functions to extract and average b0 volumes from DWI data
 for use in brain mask generation.
 """
 
-import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+from .tool_runner import SubprocessToolRunner, ToolRunner
 
 
 @dataclass
@@ -111,6 +112,7 @@ def extract_and_average_b0(
     output_path: str,
     b0_threshold: float = 50.0,
     log: Callable[[str], None] | None = None,
+    runner: ToolRunner | None = None,
 ) -> B0ExtractionResult:
     """
     Extract b0 volumes from DWI and average them.
@@ -132,6 +134,9 @@ def extract_and_average_b0(
         Maximum b-value to be considered a b0 volume (default: 50)
     log : Callable[[str], None] | None
         Optional logging callback
+    runner : ToolRunner | None
+        Seam for external command execution. Defaults to a real
+        subprocess-backed runner; tests inject a fake.
 
     Returns
     -------
@@ -140,6 +145,8 @@ def extract_and_average_b0(
     """
     if log is None:
         log = lambda x: None  # noqa: E731
+    if runner is None:
+        runner = SubprocessToolRunner()
 
     # Validate b0 exists
     is_valid, message, n_b0 = validate_b0_exists(bvals_path, b0_threshold)
@@ -174,24 +181,14 @@ def extract_and_average_b0(
 
     log(f"  Extracting b0 volumes: {' '.join(extract_cmd)}")
 
-    try:
-        subprocess.run(
-            extract_cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except subprocess.CalledProcessError as e:
+    # The runner never raises: a non-zero exit (including a missing binary,
+    # which surfaces as returncode 127 with an explanatory output) is reported
+    # here, so there is no CalledProcessError/FileNotFoundError to catch.
+    result = runner.run(extract_cmd)
+    if result.returncode != 0:
         return B0ExtractionResult(
             success=False,
-            error_message=f"dwiextract failed: {e.stderr}",
-            n_b0_volumes=n_b0,
-            b0_indices=b0_indices,
-        )
-    except FileNotFoundError:
-        return B0ExtractionResult(
-            success=False,
-            error_message="dwiextract not found. Is MRtrix3 installed and in PATH?",
+            error_message=f"dwiextract failed: {result.output}",
             n_b0_volumes=n_b0,
             b0_indices=b0_indices,
         )
@@ -201,12 +198,11 @@ def extract_and_average_b0(
         log("  Single b0 volume found, using directly")
         # Use mrconvert to ensure proper format
         convert_cmd = ["mrconvert", b0_extracted_path, output_path, "-force"]
-        try:
-            subprocess.run(convert_cmd, capture_output=True, text=True, check=True)
-        except subprocess.CalledProcessError as e:
+        result = runner.run(convert_cmd)
+        if result.returncode != 0:
             return B0ExtractionResult(
                 success=False,
-                error_message=f"mrconvert failed: {e.stderr}",
+                error_message=f"mrconvert failed: {result.output}",
                 n_b0_volumes=n_b0,
                 b0_indices=b0_indices,
             )
@@ -228,19 +224,11 @@ def extract_and_average_b0(
 
         log(f"  Command: {' '.join(mean_cmd)}")
 
-        try:
-            subprocess.run(mean_cmd, capture_output=True, text=True, check=True)
-        except subprocess.CalledProcessError as e:
+        result = runner.run(mean_cmd)
+        if result.returncode != 0:
             return B0ExtractionResult(
                 success=False,
-                error_message=f"mrmath failed: {e.stderr}",
-                n_b0_volumes=n_b0,
-                b0_indices=b0_indices,
-            )
-        except FileNotFoundError:
-            return B0ExtractionResult(
-                success=False,
-                error_message="mrmath not found. Is MRtrix3 installed and in PATH?",
+                error_message=f"mrmath failed: {result.output}",
                 n_b0_volumes=n_b0,
                 b0_indices=b0_indices,
             )
@@ -273,6 +261,7 @@ def create_brain_mask_from_dwi(
     bvals_path: str,
     output_mask_path: str,
     log: Callable[[str], None] | None = None,
+    runner: ToolRunner | None = None,
 ) -> tuple[bool, str]:
     """
     Create a brain mask from DWI data using dwi2mask.
@@ -289,6 +278,9 @@ def create_brain_mask_from_dwi(
         Path for the output brain mask
     log : Callable[[str], None] | None
         Optional logging callback
+    runner : ToolRunner | None
+        Seam for external command execution. Defaults to a real
+        subprocess-backed runner; tests inject a fake.
 
     Returns
     -------
@@ -297,6 +289,8 @@ def create_brain_mask_from_dwi(
     """
     if log is None:
         log = lambda x: None  # noqa: E731
+    if runner is None:
+        runner = SubprocessToolRunner()
 
     # Create output directory if needed
     output_dir = Path(output_mask_path).parent
@@ -316,17 +310,12 @@ def create_brain_mask_from_dwi(
     log("  Creating brain mask with dwi2mask...")
     log(f"  Command: {' '.join(mask_cmd)}")
 
-    try:
-        subprocess.run(
-            mask_cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except subprocess.CalledProcessError as e:
-        return False, f"dwi2mask failed: {e.stderr}"
-    except FileNotFoundError:
-        return False, "dwi2mask not found. Is MRtrix3 installed and in PATH?"
+    # The runner never raises: a non-zero exit (including a missing binary,
+    # which surfaces as returncode 127 with an explanatory output) is reported
+    # here, so there is no CalledProcessError/FileNotFoundError to catch.
+    result = runner.run(mask_cmd)
+    if result.returncode != 0:
+        return False, f"dwi2mask failed: {result.output}"
 
     # Verify output exists
     if not Path(output_mask_path).exists():
@@ -341,6 +330,7 @@ def apply_mask_to_image(
     mask_path: str,
     output_path: str,
     log: Callable[[str], None] | None = None,
+    runner: ToolRunner | None = None,
 ) -> tuple[bool, str]:
     """
     Apply a binary mask to an image using fslmaths.
@@ -355,6 +345,9 @@ def apply_mask_to_image(
         Path for the output masked image
     log : Callable[[str], None] | None
         Optional logging callback
+    runner : ToolRunner | None
+        Seam for external command execution. Defaults to a real
+        subprocess-backed runner; tests inject a fake.
 
     Returns
     -------
@@ -363,6 +356,8 @@ def apply_mask_to_image(
     """
     if log is None:
         log = lambda x: None  # noqa: E731
+    if runner is None:
+        runner = SubprocessToolRunner()
 
     # Create output directory if needed
     output_dir = Path(output_path).parent
@@ -374,17 +369,12 @@ def apply_mask_to_image(
     log("  Applying brain mask to image...")
     log(f"  Command: {' '.join(mask_cmd)}")
 
-    try:
-        subprocess.run(
-            mask_cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except subprocess.CalledProcessError as e:
-        return False, f"fslmaths failed: {e.stderr}"
-    except FileNotFoundError:
-        return False, "fslmaths not found. Is FSL installed and in PATH?"
+    # The runner never raises: a non-zero exit (including a missing binary,
+    # which surfaces as returncode 127 with an explanatory output) is reported
+    # here, so there is no CalledProcessError/FileNotFoundError to catch.
+    result = runner.run(mask_cmd)
+    if result.returncode != 0:
+        return False, f"fslmaths failed: {result.output}"
 
     # Verify output exists
     if not Path(output_path).exists():

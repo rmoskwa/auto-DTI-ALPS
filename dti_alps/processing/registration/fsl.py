@@ -10,7 +10,6 @@ DWI data, which provides more reliable results than BET2 on FA images.
 
 import os
 import shutil
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -23,6 +22,7 @@ from ..b0_extraction import (
     create_brain_mask_from_dwi,
     validate_b0_exists,
 )
+from ..tool_runner import SubprocessToolRunner, ToolRunner
 from .base import (
     RegistrationBackend,
     RegistrationResult,
@@ -47,6 +47,17 @@ class FSLRegistration(RegistrationBackend):
     Uses FLIRT for linear registration and FNIRT for nonlinear registration
     to transform ROI templates from JHU space to subject native space.
     """
+
+    def __init__(self, runner: ToolRunner | None = None) -> None:
+        """
+        Parameters
+        ----------
+        runner : ToolRunner | None
+            Seam for external command execution. Defaults to a real
+            subprocess-backed runner; tests inject a fake so that every FSL
+            command this backend issues is captured without FSL installed.
+        """
+        self.runner = runner or SubprocessToolRunner()
 
     @property
     def name(self) -> str:
@@ -207,6 +218,7 @@ class FSLRegistration(RegistrationBackend):
             bvals_path=bvals_preproc,
             output_mask_path=str(brain_mask),
             log=log,
+            runner=self.runner,
         )
         if not success:
             return RegistrationResult(
@@ -232,6 +244,7 @@ class FSLRegistration(RegistrationBackend):
             mask_path=str(brain_mask),
             output_path=str(fa_brain),
             log=log,
+            runner=self.runner,
         )
         if not success:
             return RegistrationResult(
@@ -869,7 +882,12 @@ class FSLRegistration(RegistrationBackend):
         log_callback: Callable[[str], None] | None = None,
     ) -> bool:
         """
-        Execute an FSL command and capture output.
+        Execute an FSL command through the tool runner, streaming its output.
+
+        Streaming, exit-code handling, and missing-binary handling all live in
+        the runner now; this helper only maps the result to a success boolean.
+        The runner emits a 30s "still processing..." heartbeat during long silent
+        stretches that the former Popen loop did not -- a deliberate cosmetic diff.
 
         Parameters
         ----------
@@ -884,29 +902,7 @@ class FSLRegistration(RegistrationBackend):
             True if command succeeded
         """
         log = log_callback or (lambda x: None)
-
-        try:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-
-            for line in iter(process.stdout.readline, ""):
-                line = line.rstrip()
-                if line:
-                    log(line)
-
-            process.wait()
-            return process.returncode == 0
-
-        except FileNotFoundError:
-            log(f"ERROR: Command not found: {cmd[0]}")
-            return False
-        except Exception as e:
-            log(f"ERROR: {e}")
-            return False
+        return self.runner.run(cmd, on_line=log).returncode == 0
 
 
 # =============================================================================

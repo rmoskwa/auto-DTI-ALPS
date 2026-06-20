@@ -13,7 +13,6 @@ Usage:
 
 import csv
 import os
-import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +30,7 @@ from .registration.base import (
     get_roi_template_paths,
     refine_roi_pair_placement,
 )
+from .tool_runner import SubprocessToolRunner, ToolRunner
 
 
 @dataclass
@@ -144,6 +144,7 @@ def reanalyze_subject(
     alps_method: str,
     fa_threshold: float,
     log_callback: Callable[[str], None] | None = None,
+    runner: ToolRunner | None = None,
 ) -> ReanalysisResult:
     """
     Reanalyze a single subject with new ROI shape.
@@ -164,6 +165,9 @@ def reanalyze_subject(
         FA threshold for filtering CSF voxels
     log_callback : callable, optional
         Callback for log messages
+    runner : ToolRunner | None
+        Seam for external command execution. Defaults to a real
+        subprocess-backed runner; tests inject a fake.
 
     Returns
     -------
@@ -171,6 +175,7 @@ def reanalyze_subject(
         Result of the reanalysis
     """
     log = log_callback or (lambda x: None)
+    runner = runner or SubprocessToolRunner()
     result = ReanalysisResult(subject_id=subject_id, status="running")
 
     try:
@@ -284,7 +289,14 @@ def reanalyze_subject(
                     f"--out={roi_transformed}",
                     "--interp=nn",
                 ]
-                subprocess.run(applywarp_cmd, capture_output=True, check=True)
+                # The runner never raises: a non-zero exit (including a missing
+                # binary, returncode 127 with an explanatory output) is reported
+                # here, so there is no CalledProcessError to catch.
+                applywarp_result = runner.run(applywarp_cmd)
+                if applywarp_result.returncode != 0:
+                    result.status = "failed"
+                    result.error_message = f"FSL applywarp failed: {applywarp_result.output}"
+                    return result
 
             # Find centroid
             transformed_data = nib.load(str(roi_transformed)).get_fdata()
@@ -447,9 +459,6 @@ def reanalyze_subject(
             f"  Done: ALPS-LAB={result.alps_lab_bilateral:.4f}" if result.alps_lab_bilateral else ""
         )
 
-    except subprocess.CalledProcessError as e:
-        result.status = "failed"
-        result.error_message = f"FSL command failed: {e}"
     except Exception as e:
         result.status = "failed"
         result.error_message = str(e)
@@ -464,6 +473,7 @@ def run_reanalysis(
     alps_method: str = "Both",
     fa_threshold: float = 0.2,
     log_callback: Callable[[str], None] | None = None,
+    runner: ToolRunner | None = None,
 ) -> list[ReanalysisResult]:
     """
     Run reanalysis on all processed subjects in output directory.
@@ -482,6 +492,10 @@ def run_reanalysis(
         FA threshold for filtering CSF voxels
     log_callback : callable, optional
         Callback for log messages
+    runner : ToolRunner | None
+        Seam for external command execution, created once here and threaded into
+        each subject. Defaults to a real subprocess-backed runner; tests inject
+        a fake.
 
     Returns
     -------
@@ -489,6 +503,7 @@ def run_reanalysis(
         Results for each subject
     """
     log = log_callback or print
+    runner = runner or SubprocessToolRunner()
 
     log(f"Discovering processed subjects in {output_dir}...")
     subjects = discover_processed_subjects(output_dir)
@@ -515,6 +530,7 @@ def run_reanalysis(
             alps_method=alps_method,
             fa_threshold=fa_threshold,
             log_callback=log,
+            runner=runner,
         )
         results.append(result)
 
