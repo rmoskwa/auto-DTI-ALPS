@@ -47,6 +47,14 @@ ViewerModel work).
 - **ResultModel** (`gui/result_model.py`) — translates a worker-queue message into an
   ordered list of **view-intents** (frozen dataclasses the adapter applies). Drives
   the live pipeline run. A *translator*: `handle(msg) -> list[Intent]`.
+  - **BatchResultsView** — the finished batch results screen as plain data, carried by
+    the `ShowBatchResults` intent: `title`, `summary`, `output_dir`, an ordered tuple of
+    **ResultColumn**(`key`, `label`), and `rows` (a tuple of dicts keyed by column key,
+    cells already formatted — the `.4f` precision and `None → ""` rule are baked in).
+    Built by the pure `build_batch_results_table(batch_state) -> BatchResultsView`; the
+    adapter renders it with a generic `for col in columns` loop and an adapter-side
+    key→(width, anchor) map. The live-panel twin of [[render_dec_slice]]. (There is no
+    single-subject results view — the GUI runs every job, even one subject, as a batch.)
 - **ViewerModel** (`gui/viewer_model.py`) — the Results Viewer's stateful **session
   model**. Owns the loaded session and recomputes a rendered slice on demand. Not a
   translator (there is no message stream); a session object with command/query

@@ -28,6 +28,7 @@ from ..processing.validators import (
 from . import config
 from .result_model import (
     AppendLog,
+    BatchResultsView,
     ResetStageButtons,
     ResultModel,
     SetRowStatus,
@@ -46,6 +47,25 @@ class DTIALPSApplication(tk.Tk):
     - Progress tracking and logging
     - Background processing
     """
+
+    # Initial (width, anchor) for each batch-results column, keyed by the stable
+    # column key from build_batch_results_table. Widths are initial sizes on
+    # resizable columns (PRD 0006 Decision 7); the key-based map intentionally
+    # collapses the former per-method subject/status widths to a single value.
+    _BATCH_COLUMN_LAYOUT = {
+        "subject": (120, tk.W),
+        "lab_left": (80, tk.CENTER),
+        "lab_right": (80, tk.CENTER),
+        "lab_combined": (90, tk.CENTER),
+        "pas_left": (80, tk.CENTER),
+        "pas_right": (80, tk.CENTER),
+        "pas_combined": (90, tk.CENTER),
+        "alps_left": (100, tk.CENTER),
+        "alps_right": (100, tk.CENTER),
+        "alps_combined": (100, tk.CENTER),
+        "status": (80, tk.CENTER),
+    }
+    _BATCH_COLUMN_DEFAULT = (100, tk.CENTER)
 
     def __init__(self):
         super().__init__()
@@ -2205,7 +2225,7 @@ class DTIALPSApplication(tk.Tk):
         elif isinstance(intent, ResetStageButtons):
             self._reset_stage_button_styles()
         elif isinstance(intent, ShowBatchResults):
-            self._show_batch_results(intent.batch_state)
+            self._show_batch_results(intent.view)
 
     def _init_log_file(self, output_dir: str):
         """Initialize log file in the output directory."""
@@ -2299,8 +2319,8 @@ class DTIALPSApplication(tk.Tk):
                 elif status == "complete":
                     self.stage_buttons[btn_idx].configure(style="Completed.TButton")
 
-    def _show_batch_results(self, batch_state: BatchState):
-        """Display batch processing results with method-specific column names."""
+    def _show_batch_results(self, view: BatchResultsView):
+        """Render the finished batch-results view (built by build_batch_results_table)."""
         # Switch to results stage (last stage, index varies by mode)
         results_stage_index = len(self.stage_buttons) - 1
         self._show_stage(results_stage_index)
@@ -2315,72 +2335,23 @@ class DTIALPSApplication(tk.Tk):
         # Title with summary
         title_frame = ttk.Frame(frame)
         title_frame.pack(fill=tk.X, pady=10)
-
-        alps_method = batch_state.config.alps_method
         ttk.Label(
             title_frame,
-            text=f"Batch Processing Results ({alps_method})",
+            text=view.title,
             font=("TkDefaultFont", 12, "bold"),
         ).pack(side=tk.LEFT)
+        ttk.Label(title_frame, text=f"  ({view.summary})").pack(side=tk.LEFT)
 
-        summary_text = (
-            f"{batch_state.success_count}/{batch_state.total_subjects} succeeded, "
-            f"{batch_state.failed_count} failed"
-        )
-        ttk.Label(title_frame, text=f"  ({summary_text})").pack(side=tk.LEFT)
-
-        # Results table
+        # Results table — render the columns the builder chose, generically
         results_frame = ttk.LabelFrame(frame, text="Subject Results", padding=10)
         results_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        # Create treeview with columns based on method
-        if alps_method == "Both":
-            columns = (
-                "subject",
-                "lab_left",
-                "lab_right",
-                "lab_combined",
-                "pas_left",
-                "pas_right",
-                "pas_combined",
-                "status",
-            )
-            tree = ttk.Treeview(results_frame, columns=columns, show="headings", height=12)
-
-            tree.heading("subject", text="Subject ID")
-            tree.heading("lab_left", text="Left LAB")
-            tree.heading("lab_right", text="Right LAB")
-            tree.heading("lab_combined", text="Combined LAB")
-            tree.heading("pas_left", text="Left PAS")
-            tree.heading("pas_right", text="Right PAS")
-            tree.heading("pas_combined", text="Combined PAS")
-            tree.heading("status", text="Status")
-
-            tree.column("subject", width=120)
-            tree.column("lab_left", width=80, anchor=tk.CENTER)
-            tree.column("lab_right", width=80, anchor=tk.CENTER)
-            tree.column("lab_combined", width=90, anchor=tk.CENTER)
-            tree.column("pas_left", width=80, anchor=tk.CENTER)
-            tree.column("pas_right", width=80, anchor=tk.CENTER)
-            tree.column("pas_combined", width=90, anchor=tk.CENTER)
-            tree.column("status", width=80, anchor=tk.CENTER)
-        else:
-            # ALPS-LAB or ALPS-PAS
-            method_suffix = "LAB" if alps_method == "ALPS-LAB" else "PAS"
-            columns = ("subject", "alps_left", "alps_right", "alps_combined", "status")
-            tree = ttk.Treeview(results_frame, columns=columns, show="headings", height=12)
-
-            tree.heading("subject", text="Subject ID")
-            tree.heading("alps_left", text=f"Left {method_suffix}")
-            tree.heading("alps_right", text=f"Right {method_suffix}")
-            tree.heading("alps_combined", text=f"Combined {method_suffix}")
-            tree.heading("status", text="Status")
-
-            tree.column("subject", width=150)
-            tree.column("alps_left", width=100, anchor=tk.CENTER)
-            tree.column("alps_right", width=100, anchor=tk.CENTER)
-            tree.column("alps_combined", width=100, anchor=tk.CENTER)
-            tree.column("status", width=100, anchor=tk.CENTER)
+        column_keys = [col.key for col in view.columns]
+        tree = ttk.Treeview(results_frame, columns=column_keys, show="headings", height=12)
+        for col in view.columns:
+            width, anchor = self._BATCH_COLUMN_LAYOUT.get(col.key, self._BATCH_COLUMN_DEFAULT)
+            tree.heading(col.key, text=col.label)
+            tree.column(col.key, width=width, anchor=anchor)
 
         # Add scrollbar
         scrollbar = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=tree.yview)
@@ -2389,84 +2360,18 @@ class DTIALPSApplication(tk.Tk):
         tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Add data rows
-        for result in batch_state.results:
-            if alps_method == "Both":
-                lab_left = f"{result.alps_lab_left:.4f}" if result.alps_lab_left is not None else ""
-                lab_right = (
-                    f"{result.alps_lab_right:.4f}" if result.alps_lab_right is not None else ""
-                )
-                lab_bi = (
-                    f"{result.alps_lab_bilateral:.4f}"
-                    if result.alps_lab_bilateral is not None
-                    else ""
-                )
-                pas_left = f"{result.alps_pas_left:.4f}" if result.alps_pas_left is not None else ""
-                pas_right = (
-                    f"{result.alps_pas_right:.4f}" if result.alps_pas_right is not None else ""
-                )
-                pas_bi = (
-                    f"{result.alps_pas_bilateral:.4f}"
-                    if result.alps_pas_bilateral is not None
-                    else ""
-                )
-                tree.insert(
-                    "",
-                    tk.END,
-                    values=(
-                        result.subject_id,
-                        lab_left,
-                        lab_right,
-                        lab_bi,
-                        pas_left,
-                        pas_right,
-                        pas_bi,
-                        result.status,
-                    ),
-                )
-            elif alps_method == "ALPS-LAB":
-                alps_left = (
-                    f"{result.alps_lab_left:.4f}" if result.alps_lab_left is not None else ""
-                )
-                alps_right = (
-                    f"{result.alps_lab_right:.4f}" if result.alps_lab_right is not None else ""
-                )
-                alps_bi = (
-                    f"{result.alps_lab_bilateral:.4f}"
-                    if result.alps_lab_bilateral is not None
-                    else ""
-                )
-                tree.insert(
-                    "",
-                    tk.END,
-                    values=(result.subject_id, alps_left, alps_right, alps_bi, result.status),
-                )
-            else:  # ALPS-PAS
-                alps_left = (
-                    f"{result.alps_pas_left:.4f}" if result.alps_pas_left is not None else ""
-                )
-                alps_right = (
-                    f"{result.alps_pas_right:.4f}" if result.alps_pas_right is not None else ""
-                )
-                alps_bi = (
-                    f"{result.alps_pas_bilateral:.4f}"
-                    if result.alps_pas_bilateral is not None
-                    else ""
-                )
-                tree.insert(
-                    "",
-                    tk.END,
-                    values=(result.subject_id, alps_left, alps_right, alps_bi, result.status),
-                )
+        # Add data rows — cells are already formatted strings; project by column key
+        for row in view.rows:
+            tree.insert("", tk.END, values=[row[col.key] for col in view.columns])
 
         self.batch_results_tree = tree  # Store for export
 
-        # Export buttons
+        # Footer: results-on-disk label + folder/viewer buttons
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill=tk.X, pady=10)
 
-        # CSV path info
-        csv_path = Path(batch_state.config.output_dir) / "alps_results.csv"
+        # CSV path info (the alps_results.csv literal stays adapter-side; Candidate 2 owns it)
+        csv_path = Path(view.output_dir) / "alps_results.csv"
         ttk.Label(btn_frame, text=f"Results saved to: {csv_path}").pack(side=tk.LEFT, padx=5)
 
         ttk.Button(
@@ -2476,7 +2381,7 @@ class DTIALPSApplication(tk.Tk):
         ttk.Button(
             btn_frame,
             text="Open Results Viewer",
-            command=lambda: self._open_results_viewer(batch_state.config.output_dir),
+            command=lambda: self._open_results_viewer(view.output_dir),
         ).pack(side=tk.RIGHT, padx=5)
 
     def _open_batch_output_folder(self):
