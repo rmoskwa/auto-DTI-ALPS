@@ -138,12 +138,14 @@ class FakeToolRunner:
 After the last call site is converted, add a lint rule (ruff `flake8-tidy-imports` banned-api or equivalent) forbidding `import subprocess` anywhere except `processing/tool_runner.py`, with a single carve-out for the GUI's desktop-open helper. Not enabled mid-migration, where it would fail on every un-converted site.
 
 ### 10. Migration is a strangler in fidelity order
-1. Build `ToolResult`, the `ToolRunner` Protocol, `SubprocessToolRunner`, and `FakeToolRunner`. Model the adapter on `pipeline.py`'s `_run_command` — the **superset** behavior (`select` + cancel + 30s heartbeat); the fsl helper's simpler loop is a subset and is subsumed.
-2. **Pipeline first** — it's the caller the adapter was modeled on (highest-fidelity behavior check) and the only cancellable one. Land the first command-construction and control-flow tests here.
-3. **fsl** — deletes the duplicate streaming loop (the locality win).
-4. **synB0** (15 sites) — mechanical bulk, all the same pattern.
-5. **b0-extraction** (5 sites) — carries the `check=True` → returncode rewrite (Decision 3); done late, when the runner is proven.
-6. **reanalysis** (1 site).
+> **Progress:** steps 1–2 done (2026-06-19). See the **Implementation Progress** section below for what landed, two deviations, and the pick-up point. Steps 3–6 not started.
+
+1. **[✅ DONE]** Build `ToolResult`, the `ToolRunner` Protocol, `SubprocessToolRunner`, and `FakeToolRunner`. Model the adapter on `pipeline.py`'s `_run_command` — the **superset** behavior (`select` + cancel + 30s heartbeat); the fsl helper's simpler loop is a subset and is subsumed.
+2. **[✅ DONE]** **Pipeline first** — it's the caller the adapter was modeled on (highest-fidelity behavior check) and the only cancellable one. Land the first command-construction and control-flow tests here.
+3. **[ ] TODO** **fsl** — deletes the duplicate streaming loop (the locality win).
+4. **[ ] TODO** **synB0** (15 sites) — mechanical bulk, all the same pattern.
+5. **[ ] TODO** **b0-extraction** (5 sites) — carries the `check=True` → returncode rewrite (Decision 3); done late, when the runner is proven.
+6. **[ ] TODO** **reanalysis** (1 site).
 - Known cosmetic diff: fsl/synB0 commands now emit the 30s "still processing…" heartbeat they didn't before.
 
 ## Testing Decisions
@@ -169,6 +171,99 @@ After the last call site is converted, add a lint rule (ruff `flake8-tidy-import
 - **Refactoring command *construction*** (the `commands.py` builders). The seam tests *that* the right argv is produced; it does not change how argv is built.
 - **Windows support for the streaming adapter.** `select`-on-pipes is POSIX-only; the toolchain runs on Linux/macOS. Not addressed here.
 - **Structured stderr.** Merged into one `output` stream; splitting it is a future change if a caller ever needs it.
+
+## Implementation Progress
+
+This section is the running record of what has shipped against the strangler plan
+(Decision 10), so a future developer knows exactly where to resume. Update it as
+each step lands.
+
+### Increment 1 — foundation + pipeline (2026-06-19, branch `refactor/ToolRunner-seam`)
+
+**Strangler steps 1–2 complete.** Steps 3–6 (fsl, synB0, b0-extraction, reanalysis)
+and the Decision 9 guardrail are **not started**.
+
+**Added**
+- `dti_alps/processing/tool_runner.py` — `ToolResult` value object, `ToolRunner`
+  `Protocol`, and `SubprocessToolRunner` (the real adapter, modeled on the
+  pipeline's former `_run_command` superset: `select` streaming + cancel + 30s
+  heartbeat; stderr merged into one `output`; never raises).
+- `tests/fakes.py` — `FakeToolRunner` (stateless, predicate-scripted recorder).
+- `tests/test_tool_runner.py` — the real-adapter regression net vs POSIX coreutils
+  (`echo`/`printf`/`false`/`sh`/missing-binary/cancel). Built before any caller was
+  touched, per User Story 15. **7 tests.**
+- `tests/test_pipeline_seam.py` — fake-driven `PipelineRunner` tests covering User
+  Stories 1–9, scoped to pipeline-issued commands. **9 tests.**
+
+**Changed**
+- `dti_alps/processing/pipeline.py` — `PipelineRunner.__init__` gained
+  `runner: ToolRunner | None = None` (`runner or SubprocessToolRunner()`); the
+  ~70-line duplicate streaming loop in `_run_command` collapsed to a delegation
+  that preserves the `Running:` prelude, cancel reporting, and exit-code
+  semantics. Removed now-unused `import select/subprocess/time`.
+
+**Test status:** `pytest tests/` → 27 passed (7 adapter + 9 pipeline-seam + 11
+pre-existing). `ruff check` / `ruff format --check` clean on all touched files.
+Production path unchanged: GUI builds `BatchRunner(...)` → `PipelineRunner(...)`
+with no `runner` arg → defaults to the real adapter.
+
+### Deviations from the PRD as written (read before continuing)
+
+1. **`SubprocessToolRunner.run()` catches `OSError`, not only `FileNotFoundError`
+   (Decision 3).** On the dev/CI machine (WSL) a *bare* missing command name
+   raises `PermissionError`, not `FileNotFoundError`, so catching only the latter
+   would let the engine crash here — violating the real invariant ("run() never
+   raises"). The catch was widened to `OSError`; the `FileNotFoundError` case
+   still yields the `"Command not found: …"` message, other launch failures yield
+   `"Could not execute …: <err>"`. Both return `returncode=127`.
+
+2. **`registration.get_backend(...)` is NOT yet threaded with the runner.** Per the
+   chosen "pipeline first" scope, this increment routes only the commands the
+   pipeline module issues directly via `_run_command` (denoise, degibbs, preproc,
+   DTI fitting, eddy/synB0). The registration/ROI-placement backend still owns its
+   own execution. **Consequence:** the full single-injection-point property
+   (Decision 5; the Testing Decision that "a fake injected at the pipeline captures
+   registration and synB0 commands too") is only **partially realized** — the
+   pipeline-seam tests are deliberately scoped to pipeline-issued commands and say
+   so in their module docstring. Completing it is part of the fsl/synB0 steps.
+
+### Findings that shape the remaining steps
+
+- **synB0's 15 sites are dormant.** `Synb0Backend` and `run_topup_eddy`
+  (`processing/synb0/backend.py`) have **no callers anywhere** — the live synB0
+  route uses pre-computed external outputs via `PipelineRunner.run_eddy_with_synb0`,
+  which issues its commands through `_run_command` (already on the seam). Step 4 is
+  therefore a self-contained signature + call-site rewrite: add `runner` to
+  `Synb0Backend.__init__` and `run_topup_eddy(...)` (default real), rewrite the 15
+  `subprocess.run(...)` sites to `runner.run(...)`, and swap `result.stderr` →
+  `result.output` in the error strings. Tests inject the fake directly; there is no
+  "thread down from an entry" because nothing constructs it.
+- **2 of the 5 b0-extraction sites are live** via `FSLRegistration.register`:
+  `create_brain_mask_from_dwi` and `apply_mask_to_image` (`processing/b0_extraction.py`).
+  The other 3 (`extract_and_average_b0`) are reached only through dormant synB0. Step
+  3 (fsl) must thread `self.runner` into the two live helpers to keep the
+  registration path faked end-to-end; step 5 finishes the rest with the
+  `check=True` → returncode rewrite (Decision 3).
+- **`_run_fsl_command` has 4 call sites** (flirt, fnirt, invwarp, applywarp) all
+  routing through the one helper, so step 3 rewrites a single body. `FSLRegistration`
+  is currently stateless (no `__init__`) — add one that stores `runner`.
+- **reanalysis** (step 6): the live entry is `__main__._run_reanalysis` →
+  `run_reanalysis(...)` → `reanalyze_subject(...)` (the `applywarp` `subprocess.run`
+  is at ~`reanalysis.py:287`, wrapped by a function-level `except CalledProcessError`
+  at ~`:450`). Thread `runner` from the CLI entry down through both functions.
+
+### Pick up here (next: step 3, fsl)
+
+1. `get_backend(name, runner=None)` → pass `runner` to `FSLRegistration(runner=...)`;
+   add `FSLRegistration.__init__(self, runner=None)` storing `runner or SubprocessToolRunner()`.
+2. Rewrite `_run_fsl_command` to delegate to `self.runner.run(cmd, on_line=log)`
+   (the 4 call sites are unchanged). Delete the duplicate `Popen` loop.
+3. Thread `self.runner` into the two live `b0_extraction` helpers (add `runner`
+   params there).
+4. Update the `register_fa_to_template` backward-compat function to accept/pass `runner`.
+5. Thread `self.runner` into `PipelineRunner.run_registration` / `run_roi_placement`'s
+   `registration.get_backend(...)` calls, then add a pipeline-seam test asserting the
+   pipeline's fake captures a registration command (closes deviation #2 for fsl).
 
 ## Further Notes
 
