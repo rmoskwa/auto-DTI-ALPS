@@ -1,3 +1,6 @@
+>[!NOTE]
+>This is currently a personal tool. While completely usable in its current state, the application will be updated and guidance docs will be created to allow outside users ease-of-use.
+
 # autoDTI-ALPS
 
 Automated DTI-ALPS (Diffusion Tensor Imaging Along the Perivascular Space) analysis tool. Uses template-based registration to place ROIs in projection and association fiber regions, then calculates the DTI-ALPS index from diffusion tensor imaging data.
