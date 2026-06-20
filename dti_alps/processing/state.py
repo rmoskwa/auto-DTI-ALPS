@@ -9,7 +9,12 @@ import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from ..gui import config
+from .constants import (
+    DEFAULT_PE_DIRECTION,
+    DEFAULT_READOUT_TIME,
+    DEFAULT_RPE_SCHEME,
+    FA_THRESHOLD,
+)
 
 if TYPE_CHECKING:
     from .discovery import SubjectFiles
@@ -97,9 +102,9 @@ class PipelineState:
     mrdegibbs_options: dict[str, Any] = field(default_factory=dict)
 
     # Stage 4: Preprocessing parameters (core)
-    pe_direction: str = config.DEFAULT_PE_DIRECTION
-    readout_time: float = config.DEFAULT_READOUT_TIME
-    rpe_scheme: str = config.DEFAULT_RPE_SCHEME
+    pe_direction: str = DEFAULT_PE_DIRECTION
+    readout_time: float = DEFAULT_READOUT_TIME
+    rpe_scheme: str = DEFAULT_RPE_SCHEME
 
     # Stage 4: dwifslpreproc CLI options dict
     # Keys are option names (e.g., "-eddy_mask"), values are option values or True for flags
@@ -141,7 +146,7 @@ class PipelineState:
         default_factory=lambda: [{"type": "sphere", "radius": 3.0}]
     )
     # FA threshold for filtering CSF voxels from ROIs
-    fa_threshold: float = config.FA_THRESHOLD
+    fa_threshold: float = FA_THRESHOLD
     # ALPS calculation method (ALPS-LAB or ALPS-PAS)
     alps_method: str = "Both"
     # ROI refinement mode: "Refined", "Standard", or "Both"
@@ -244,10 +249,10 @@ class BatchConfig:
     mrdegibbs_options: dict[str, Any] = field(default_factory=dict)
 
     # Preprocessing parameters
-    pe_direction: str = config.DEFAULT_PE_DIRECTION
+    pe_direction: str = DEFAULT_PE_DIRECTION
     auto_pe_direction: bool = True  # Auto-extract PE direction from JSON if available
     readout_time: float | None = None  # None = auto-extract from JSON/NIfTI
-    rpe_scheme: str = config.DEFAULT_RPE_SCHEME
+    rpe_scheme: str = DEFAULT_RPE_SCHEME
 
     # CLI options dicts for each stage
     dwifslpreproc_options: dict[str, Any] = field(default_factory=dict)
@@ -275,7 +280,7 @@ class BatchConfig:
     roi_shapes: list[dict[str, Any]] = field(
         default_factory=lambda: [{"type": "sphere", "radius": 3.0}]
     )
-    fa_threshold: float = config.FA_THRESHOLD  # FA threshold for filtering CSF voxels
+    fa_threshold: float = FA_THRESHOLD  # FA threshold for filtering CSF voxels
     alps_method: str = "Both"  # ALPS calculation method (ALPS-LAB, ALPS-PAS, or Both)
     refine_roi_placement: str = "Refined"  # "Refined", "Standard", or "Both"
 

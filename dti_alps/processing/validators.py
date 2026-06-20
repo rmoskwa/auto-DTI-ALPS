@@ -3,14 +3,10 @@ Input validation for DTI-ALPS pipeline.
 """
 
 import os
-from typing import TYPE_CHECKING
 
 import numpy as np
 
-if TYPE_CHECKING:
-    from .pipeline import PipelineState
-
-from ..gui import config
+from .constants import READOUT_TIME_RANGE
 
 
 def validate_file_exists(path: str, file_type: str) -> tuple[bool, str]:
@@ -150,7 +146,7 @@ def validate_readout_time(value: str) -> tuple[bool, str]:
     """
     try:
         rt = float(value)
-        min_rt, max_rt = config.READOUT_TIME_RANGE
+        min_rt, max_rt = READOUT_TIME_RANGE
 
         if rt <= 0:
             return False, "Readout time must be positive"
@@ -202,90 +198,3 @@ def validate_directory(path: str, create: bool = False) -> tuple[bool, str]:
         return False, "Directory is not writable"
 
     return True, ""
-
-
-def validate_pipeline_state(state: "PipelineState") -> list[str]:
-    """
-    Validate all pipeline state parameters before execution.
-
-    Parameters
-    ----------
-    state : PipelineState
-        Pipeline configuration to validate
-
-    Returns
-    -------
-    list of str
-        List of error messages (empty if valid)
-    """
-    errors = []
-
-    # Required files
-    valid, msg = validate_file_exists(state.dwi_path, "DWI")
-    if not valid:
-        errors.append(msg)
-    else:
-        valid, msg = validate_nifti(state.dwi_path)
-        if not valid:
-            errors.append(msg)
-
-    valid, msg = validate_file_exists(state.bvecs_path, "bvecs")
-    if not valid:
-        errors.append(msg)
-
-    valid, msg = validate_file_exists(state.bvals_path, "bvals")
-    if not valid:
-        errors.append(msg)
-
-    # Validate gradient consistency
-    if state.bvecs_path and state.bvals_path and state.dwi_path:
-        if (
-            os.path.isfile(state.bvecs_path)
-            and os.path.isfile(state.bvals_path)
-            and os.path.isfile(state.dwi_path)
-        ):
-            valid, msg = validate_gradients(state.bvecs_path, state.bvals_path, state.dwi_path)
-            if not valid:
-                errors.append(msg)
-
-    # RPE-specific validation
-    if state.rpe_scheme == "pair":
-        if not state.reverse_pe_path:
-            errors.append("Reverse PE b=0 image is required when RPE scheme is 'pair'")
-        else:
-            valid, msg = validate_file_exists(state.reverse_pe_path, "Reverse PE")
-            if not valid:
-                errors.append(msg)
-
-    # Readout time
-    valid, msg = validate_readout_time(str(state.readout_time))
-    if not valid:
-        errors.append(f"Readout time: {msg}")
-
-    # Output directory
-    valid, msg = validate_directory(state.output_dir, create=True)
-    if not valid:
-        errors.append(f"Output directory: {msg}")
-
-    # ROI detection parameters
-    fa_min, fa_max = config.FA_THRESH_RANGE
-    if not (fa_min <= state.fa_thresh <= fa_max):
-        errors.append(f"FA threshold must be between {fa_min} and {fa_max}")
-
-    orient_min, orient_max = config.ORIENT_THRESH_RANGE
-    if not (orient_min <= state.orient_thresh <= orient_max):
-        errors.append(f"Orientation threshold must be between {orient_min} and {orient_max}")
-
-    # Check MRtrix3 availability
-    from . import commands
-
-    mrtrix_ok, missing = commands.check_mrtrix3_available()
-    if not mrtrix_ok:
-        errors.append(f"MRtrix3 commands not found: {', '.join(missing)}")
-
-    # Check FSL availability (needed by dwifslpreproc)
-    fsl_ok, missing = commands.check_fsl_available()
-    if not fsl_ok:
-        errors.append(f"FSL commands not found: {', '.join(missing)}")
-
-    return errors
