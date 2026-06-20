@@ -19,14 +19,13 @@ Pipeline steps:
 """
 
 import shutil
-import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..tool_runner import SubprocessToolRunner, ToolRunner
 from . import commands
-from .inference import run_inference
 
 if TYPE_CHECKING:
     from ..state import PipelineState
@@ -288,9 +287,19 @@ class Synb0Backend:
     T1-based synthetic b0 generation for susceptibility correction.
     """
 
-    def __init__(self):
-        """Initialize the synB0-DISCO backend."""
+    def __init__(self, runner: ToolRunner | None = None):
+        """
+        Initialize the synB0-DISCO backend.
+
+        Parameters
+        ----------
+        runner : ToolRunner | None
+            Seam for external command execution. Defaults to a real
+            subprocess-backed runner; tests inject a fake so that every
+            synB0 command crosses the same seam.
+        """
         self.name = "synb0"
+        self.runner = runner or SubprocessToolRunner()
 
     def check_available(self) -> tuple[bool, list[str]]:
         """
@@ -393,6 +402,12 @@ class Synb0Backend:
 
             # Step 6: Neural network inference
             log("Step 6: Running neural network inference...")
+            # Imported lazily: inference pulls in torch, which is an optional
+            # dependency. Keeping it out of module scope lets the backend (and its
+            # seam tests) import with no torch installed -- the toolchain-free CI
+            # this seam exists to enable.
+            from .inference import run_inference
+
             synb0_atlas_path = str(synb0_dir / "synb0_atlas.nii.gz")
             success, msg = run_inference(
                 t1_atlas_path=t1_atlas_path,
@@ -451,33 +466,33 @@ class Synb0Backend:
         t1_mgz = str(work_dir / "T1.mgz")
         cmd = commands.build_mri_convert_cmd(t1_path, t1_mgz)
         log(f"  Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self.runner.run(cmd)
         if result.returncode != 0:
-            return {"success": False, "error": f"mri_convert failed: {result.stderr}"}
+            return {"success": False, "error": f"mri_convert failed: {result.output}"}
 
         # Bias field correction
         t1_nu_mgz = str(work_dir / "T1_nu.mgz")
         cmd = commands.build_mri_nu_correct_cmd(t1_mgz, t1_nu_mgz)
         log(f"  Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self.runner.run(cmd)
         if result.returncode != 0:
-            return {"success": False, "error": f"mri_nu_correct.mni failed: {result.stderr}"}
+            return {"success": False, "error": f"mri_nu_correct.mni failed: {result.output}"}
 
         # Intensity normalization
         t1_norm_mgz = str(work_dir / "T1_norm.mgz")
         cmd = commands.build_mri_normalize_cmd(t1_nu_mgz, t1_norm_mgz)
         log(f"  Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self.runner.run(cmd)
         if result.returncode != 0:
-            return {"success": False, "error": f"mri_normalize failed: {result.stderr}"}
+            return {"success": False, "error": f"mri_normalize failed: {result.output}"}
 
         # Convert back to NIfTI
         t1_norm_nii = str(work_dir / "T1_norm.nii.gz")
         cmd = commands.build_mri_convert_cmd(t1_norm_mgz, t1_norm_nii)
         log(f"  Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self.runner.run(cmd)
         if result.returncode != 0:
-            return {"success": False, "error": f"mri_convert failed: {result.stderr}"}
+            return {"success": False, "error": f"mri_convert failed: {result.output}"}
 
         # Brain extraction (if not already stripped)
         t1_brain_nii = str(work_dir / "T1_brain.nii.gz")
@@ -488,9 +503,9 @@ class Synb0Backend:
             log("  Running brain extraction with BET...")
             cmd = commands.build_bet_cmd(t1_norm_nii, t1_brain_nii, frac=0.4, robust=True)
             log(f"  Running: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = self.runner.run(cmd)
             if result.returncode != 0:
-                return {"success": False, "error": f"bet failed: {result.stderr}"}
+                return {"success": False, "error": f"bet failed: {result.output}"}
 
         return {
             "success": True,
@@ -523,6 +538,7 @@ class Synb0Backend:
             bvals_path=state.bvals_path,
             output_path=b0_mean_path,
             log=log,
+            runner=self.runner,
         )
 
         if not result.success:
@@ -544,9 +560,9 @@ class Synb0Backend:
         # Run epi_reg
         cmd = commands.build_epi_reg_cmd(b0_path, t1_path, t1_brain_path, output_prefix)
         log(f"  Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self.runner.run(cmd)
         if result.returncode != 0:
-            return {"success": False, "error": f"epi_reg failed: {result.stderr}"}
+            return {"success": False, "error": f"epi_reg failed: {result.output}"}
 
         fsl_mat_path = f"{output_prefix}.mat"
         if not Path(fsl_mat_path).exists():
@@ -561,9 +577,9 @@ class Synb0Backend:
             output_matrix_path=ants_mat_path,
         )
         log(f"  Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self.runner.run(cmd)
         if result.returncode != 0:
-            return {"success": False, "error": f"c3d_affine_tool failed: {result.stderr}"}
+            return {"success": False, "error": f"c3d_affine_tool failed: {result.output}"}
 
         return {
             "success": True,
@@ -588,9 +604,9 @@ class Synb0Backend:
             transform_type="a",  # Affine only for speed
         )
         log(f"  Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self.runner.run(cmd)
         if result.returncode != 0:
-            return {"success": False, "error": f"ANTs registration failed: {result.stderr}"}
+            return {"success": False, "error": f"ANTs registration failed: {result.output}"}
 
         affine_path = f"{output_prefix}0GenericAffine.mat"
         if not Path(affine_path).exists():
@@ -623,9 +639,9 @@ class Synb0Backend:
             interpolation="BSpline",
         )
         log(f"  Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self.runner.run(cmd)
         if result.returncode != 0:
-            return {"success": False, "error": f"antsApplyTransforms (b0) failed: {result.stderr}"}
+            return {"success": False, "error": f"antsApplyTransforms (b0) failed: {result.output}"}
 
         # Transform T1 to atlas space
         t1_atlas_path = str(work_dir / "T1_atlas.nii.gz")
@@ -637,9 +653,9 @@ class Synb0Backend:
             interpolation="BSpline",
         )
         log(f"  Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self.runner.run(cmd)
         if result.returncode != 0:
-            return {"success": False, "error": f"antsApplyTransforms (T1) failed: {result.stderr}"}
+            return {"success": False, "error": f"antsApplyTransforms (T1) failed: {result.output}"}
 
         return {
             "success": True,
@@ -669,9 +685,9 @@ class Synb0Backend:
             invert_flags=[True, True],  # Invert both transforms
         )
         log(f"  Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self.runner.run(cmd)
         if result.returncode != 0:
-            return {"success": False, "error": f"antsApplyTransforms failed: {result.stderr}"}
+            return {"success": False, "error": f"antsApplyTransforms failed: {result.output}"}
 
         return {
             "success": True,
@@ -691,17 +707,17 @@ class Synb0Backend:
         b0_smooth_path = str(work_dir / "b0_smooth.nii.gz")
         cmd = commands.build_fslmaths_smooth_cmd(b0_path, b0_smooth_path, sigma=1.15)
         log(f"  Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self.runner.run(cmd)
         if result.returncode != 0:
-            return {"success": False, "error": f"fslmaths smooth failed: {result.stderr}"}
+            return {"success": False, "error": f"fslmaths smooth failed: {result.output}"}
 
         # Merge b0 volumes for topup
         b0_pair_path = str(work_dir / "b0_pair.nii.gz")
         cmd = commands.build_fslmerge_cmd(b0_pair_path, [b0_smooth_path, synb0_path])
         log(f"  Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self.runner.run(cmd)
         if result.returncode != 0:
-            return {"success": False, "error": f"fslmerge failed: {result.stderr}"}
+            return {"success": False, "error": f"fslmerge failed: {result.output}"}
 
         # Create acquisition parameters file
         acqparams_path = str(work_dir / "acqparams.txt")
@@ -740,6 +756,7 @@ class Synb0Backend:
 def run_topup_eddy(
     state: "PipelineState",
     log: Callable[[str], None] | None = None,
+    runner: ToolRunner | None = None,
 ) -> TopupEddyResult:
     """
     Run FSL topup and eddy for distortion correction.
@@ -753,6 +770,9 @@ def run_topup_eddy(
         Pipeline state with synB0 outputs
     log : Callable[[str], None] | None
         Optional logging callback
+    runner : ToolRunner | None
+        Seam for external command execution. Defaults to a real
+        subprocess-backed runner; tests inject a fake.
 
     Returns
     -------
@@ -761,6 +781,8 @@ def run_topup_eddy(
     """
     if log is None:
         log = lambda x: None  # noqa: E731
+    if runner is None:
+        runner = SubprocessToolRunner()
 
     log("Running topup + eddy distortion correction...")
 
@@ -788,9 +810,9 @@ def run_topup_eddy(
         extra_options=topup_options,
     )
     log(f"  Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = runner.run(cmd)
     if result.returncode != 0:
-        return TopupEddyResult(success=False, error_message=f"topup failed: {result.stderr}")
+        return TopupEddyResult(success=False, error_message=f"topup failed: {result.output}")
 
     # Step 2: Create brain mask for eddy
     log("Step 2: Creating brain mask...")
@@ -811,6 +833,7 @@ def run_topup_eddy(
         bvals_path=state.bvals_path,
         output_mask_path=mask_path,
         log=log,
+        runner=runner,
     )
     if not success:
         return TopupEddyResult(success=False, error_message=msg)
@@ -849,9 +872,9 @@ def run_topup_eddy(
         extra_options=eddy_options,
     )
     log(f"  Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = runner.run(cmd)
     if result.returncode != 0:
-        return TopupEddyResult(success=False, error_message=f"eddy failed: {result.stderr}")
+        return TopupEddyResult(success=False, error_message=f"eddy failed: {result.output}")
 
     # Check outputs
     corrected_dwi = f"{eddy_output}.nii.gz"
