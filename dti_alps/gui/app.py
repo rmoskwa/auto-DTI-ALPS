@@ -27,6 +27,15 @@ from ..processing.validators import (
     validate_synb0_output_dir,
 )
 from . import config
+from .result_model import (
+    AppendLog,
+    ResetStageButtons,
+    ResultModel,
+    SetRowStatus,
+    ShowBatchResults,
+    ShowResults,
+    UpdateStageStatus,
+)
 from .user_config import UserConfig, get_user_config
 
 
@@ -52,6 +61,7 @@ class DTIALPSApplication(tk.Tk):
         self.pipeline_state = PipelineState()
         self.worker = None
         self.result_queue = None
+        self.result_model = None  # Presentation model translating worker messages to intents
         self.log_file = None  # File handle for log output
 
         # Batch processing state
@@ -2154,6 +2164,7 @@ class DTIALPSApplication(tk.Tk):
         # Create batch worker
         self.result_queue = queue.Queue()
         self.cancel_event = threading.Event()
+        self.result_model = ResultModel([s.subject_id for s in self.subject_files_list])
 
         batch_runner = BatchRunner(self.batch_state)
         self.worker = BatchWorker(batch_runner, self.result_queue, self.cancel_event)
@@ -2179,74 +2190,27 @@ class DTIALPSApplication(tk.Tk):
             self.run_btn.config(state=tk.NORMAL)
 
     def _handle_result(self, msg):
-        """Handle message from worker."""
-        msg_type = msg[0]
-        data = msg[1] if len(msg) > 1 else None
+        """Handle a worker message by applying the model's view-intents."""
+        for intent in self.result_model.handle(msg):
+            self._apply_intent(intent)
 
-        if msg_type == "log":
-            self._log(data)
-        elif msg_type == "stage":
-            stage, status = data
-            self._update_stage_status(stage, status)
-        elif msg_type == "batch_start":
-            total = data
-            self._log(f"Processing 0/{total} subjects")
-        elif msg_type == "subject_start":
-            index, subject_id = data
-            total = len(self.subject_files_list)
-            self._log(f"Processing {index + 1}/{total}: {subject_id}")
-            # Update console tree status with processing tag (purple)
+    def _apply_intent(self, intent):
+        """Apply a single view-intent from ResultModel to the widgets."""
+        if isinstance(intent, AppendLog):
+            self._log(intent.text)
+        elif isinstance(intent, UpdateStageStatus):
+            self._update_stage_status(intent.stage, intent.status)
+        elif isinstance(intent, SetRowStatus):
             items = self.console_tree.get_children()
-            if index < len(items):
-                self.console_tree.set(items[index], "status", "Processing")
-                self.console_tree.item(items[index], tags=("processing",))
-            # Reset stage button styles for each new subject
+            if intent.index < len(items):
+                self.console_tree.set(items[intent.index], "status", intent.text)
+                self.console_tree.item(items[intent.index], tags=(intent.tag,))
+        elif isinstance(intent, ResetStageButtons):
             self._reset_stage_button_styles()
-        elif msg_type == "subject_complete":
-            index, result = data
-            total = len(self.subject_files_list)
-            completed = index + 1
-
-            self._log(f"Completed {completed}/{total} subjects")
-
-            # Update console tree status with appropriate tag (green/red)
-            items = self.console_tree.get_children()
-            if index < len(items):
-                if result.status == "completed":
-                    self.console_tree.set(items[index], "status", "Completed")
-                    self.console_tree.item(items[index], tags=("completed",))
-                else:
-                    self.console_tree.set(items[index], "status", "Failed")
-                    self.console_tree.item(items[index], tags=("failed",))
-        elif msg_type == "batch_complete":
-            batch_state = data
-            self._log(
-                f"Batch complete: {batch_state.success_count}/{batch_state.total_subjects} succeeded"
-            )
-            self._show_batch_results(batch_state)
-        elif msg_type == "batch_success":
-            batch_state = data
-            self._log("All subjects processed successfully!")
-            self._show_batch_results(batch_state)
-        elif msg_type == "batch_partial":
-            batch_state = data
-            self._log(
-                f"Batch completed with errors: {batch_state.success_count}/"
-                f"{batch_state.total_subjects} succeeded"
-            )
-            self._show_batch_results(batch_state)
-        elif msg_type == "batch_cancelled":
-            self._log("Batch processing cancelled.")
-        elif msg_type == "complete":
-            # Single subject complete (legacy)
-            self._log("Pipeline completed successfully!")
-            self._show_results(data)
-        elif msg_type == "failed":
-            self._log("Pipeline failed.")
-        elif msg_type == "cancelled":
-            self._log("Pipeline cancelled.")
-        elif msg_type == "error":
-            self._log(f"Error: {data}")
+        elif isinstance(intent, ShowBatchResults):
+            self._show_batch_results(intent.batch_state)
+        elif isinstance(intent, ShowResults):
+            self._show_results(intent.data)
 
     def _init_log_file(self, output_dir: str):
         """Initialize log file in the output directory."""
