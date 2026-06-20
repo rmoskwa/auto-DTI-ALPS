@@ -8,7 +8,11 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from ..processing.discovery import SubjectDiscovery, SubjectFiles
+from ..processing.discovery import (
+    SubjectFiles,
+    discover_with_subdir_fallback,
+    new_unique_runs,
+)
 from ..processing.pipeline import (
     BatchConfig,
     BatchRunner,
@@ -17,7 +21,21 @@ from ..processing.pipeline import (
     OutputConfig,
     PipelineState,
 )
+from ..processing.validators import (
+    resolve_readout_time,
+    validate_runnable,
+    validate_synb0_output_dir,
+)
 from . import config
+from .result_model import (
+    AppendLog,
+    ResetStageButtons,
+    ResultModel,
+    SetRowStatus,
+    ShowBatchResults,
+    ShowResults,
+    UpdateStageStatus,
+)
 from .user_config import UserConfig, get_user_config
 
 
@@ -43,6 +61,7 @@ class DTIALPSApplication(tk.Tk):
         self.pipeline_state = PipelineState()
         self.worker = None
         self.result_queue = None
+        self.result_model = None  # Presentation model translating worker messages to intents
         self.log_file = None  # File handle for log output
 
         # Batch processing state
@@ -974,15 +993,7 @@ class DTIALPSApplication(tk.Tk):
         Returns the number of runs successfully added.
         """
         try:
-            discovery = SubjectDiscovery(folder_path)
-            discovered_runs = discovery.discover_files()
-
-            # If nothing found at this level, check immediate subdirectories
-            if not discovered_runs:
-                subdirs = sorted(p for p in Path(folder_path).iterdir() if p.is_dir())
-                for subdir in subdirs:
-                    sub_discovery = SubjectDiscovery(str(subdir))
-                    discovered_runs.extend(sub_discovery.discover_files())
+            discovered_runs = discover_with_subdir_fallback(folder_path)
 
             if not discovered_runs:
                 messagebox.showinfo(
@@ -992,18 +1003,11 @@ class DTIALPSApplication(tk.Tk):
                 )
                 return 0
 
-            added = 0
-            for subject_files in discovered_runs:
-                # Check for duplicates by DWI path (more specific than folder)
-                is_duplicate = False
-                for existing in self.subject_files_list:
-                    if existing.dwi_path == subject_files.dwi_path:
-                        is_duplicate = True
-                        break
+            # Track if we cross from <=1 to >1 subjects (for the synB0 batch warning)
+            count_before = len(self.subject_files_list)
+            new_runs = new_unique_runs(self.subject_files_list, discovered_runs)
 
-                if is_duplicate:
-                    continue
-
+            for subject_files in new_runs:
                 files_found = subject_files.get_files_summary()
 
                 # Add to Data Input tree (without status)
@@ -1019,11 +1023,9 @@ class DTIALPSApplication(tk.Tk):
 
                 # Store SubjectFiles object
                 self.subject_files_list.append(subject_files)
-                added += 1
 
+            added = len(new_runs)
             if added > 0:
-                # Track if we crossed from <=1 to >1 subjects
-                count_before = len(self.subject_files_list) - added
                 now_multiple = len(self.subject_files_list) > 1
 
                 self._log(f"Added {added} DWI run(s) from {folder_path}")
@@ -1276,27 +1278,8 @@ class DTIALPSApplication(tk.Tk):
 
     def _validate_synb0_output_dir(self, path):
         """Validate synB0-DISCO output directory contents."""
-        import os
-
-        required_files = [
-            ("topup_fieldcoef.nii.gz", "topup field coefficients"),
-            ("topup_movpar.txt", "topup movement parameters"),
-        ]
-
-        missing = []
-        for filename, desc in required_files:
-            if not os.path.exists(os.path.join(path, filename)):
-                missing.append(f"{filename} ({desc})")
-
-        # Check for acqparams.txt in OUTPUTS or ../INPUTS
-        acqparams_found = os.path.exists(os.path.join(path, "acqparams.txt"))
-        if not acqparams_found:
-            parent = os.path.dirname(path)
-            acqparams_found = os.path.exists(os.path.join(parent, "INPUTS", "acqparams.txt"))
-        if not acqparams_found:
-            missing.append("acqparams.txt (acquisition parameters)")
-
-        if missing:
+        ok, missing = validate_synb0_output_dir(path)
+        if not ok:
             self.synb0_validation_label.config(
                 text=f"Missing: {', '.join(missing)}", foreground="red"
             )
@@ -2061,14 +2044,12 @@ class DTIALPSApplication(tk.Tk):
 
     def _collect_batch_state(self) -> BatchState:
         """Collect all UI values into batch state."""
-        # Determine readout time
-        if self.readout_auto_var.get():
-            readout_time = None  # Auto-extract from JSON
-        else:
-            try:
-                readout_time = float(self.readout_var.get())
-            except ValueError:
-                readout_time = config.DEFAULT_READOUT_TIME
+        # Determine readout time (auto → resolved downstream from JSON)
+        readout_time = resolve_readout_time(
+            self.readout_auto_var.get(),
+            self.readout_var.get(),
+            config.DEFAULT_READOUT_TIME,
+        )
 
         # Collect CLI options from each stage
         dwidenoise_options = self._collect_cli_options("dwidenoise")
@@ -2133,28 +2114,23 @@ class DTIALPSApplication(tk.Tk):
 
     def _run_pipeline(self):
         """Start batch pipeline execution."""
-        # Validate we have subjects
-        if not self.subject_files_list:
-            messagebox.showerror("Validation Error", "No subject folders added.")
-            return
-
-        # Check for invalid subjects
-        invalid_subjects = [s for s in self.subject_files_list if not s.is_valid]
-        if invalid_subjects:
-            names = ", ".join(s.subject_id for s in invalid_subjects[:5])
-            if len(invalid_subjects) > 5:
-                names += f" (and {len(invalid_subjects) - 5} more)"
-            messagebox.showerror(
-                "Validation Error",
-                f"Some subjects have missing files:\n{names}\n\n"
-                "Please remove invalid subjects or add missing files.",
-            )
-            return
-
-        # Validate output directory
+        # Pre-flight validation (first-failure-wins); adapter owns dialog phrasing
         output_dir = self.output_dir_var.get()
-        if not output_dir:
-            messagebox.showerror("Validation Error", "Please specify an output directory.")
+        ok, kind, invalid_ids = validate_runnable(self.subject_files_list, output_dir)
+        if not ok:
+            if kind == "no_subjects":
+                messagebox.showerror("Validation Error", "No subject folders added.")
+            elif kind == "invalid_subjects":
+                names = ", ".join(invalid_ids[:5])
+                if len(invalid_ids) > 5:
+                    names += f" (and {len(invalid_ids) - 5} more)"
+                messagebox.showerror(
+                    "Validation Error",
+                    f"Some subjects have missing files:\n{names}\n\n"
+                    "Please remove invalid subjects or add missing files.",
+                )
+            elif kind == "no_output_dir":
+                messagebox.showerror("Validation Error", "Please specify an output directory.")
             return
 
         # Collect batch state
@@ -2188,6 +2164,7 @@ class DTIALPSApplication(tk.Tk):
         # Create batch worker
         self.result_queue = queue.Queue()
         self.cancel_event = threading.Event()
+        self.result_model = ResultModel([s.subject_id for s in self.subject_files_list])
 
         batch_runner = BatchRunner(self.batch_state)
         self.worker = BatchWorker(batch_runner, self.result_queue, self.cancel_event)
@@ -2213,74 +2190,27 @@ class DTIALPSApplication(tk.Tk):
             self.run_btn.config(state=tk.NORMAL)
 
     def _handle_result(self, msg):
-        """Handle message from worker."""
-        msg_type = msg[0]
-        data = msg[1] if len(msg) > 1 else None
+        """Handle a worker message by applying the model's view-intents."""
+        for intent in self.result_model.handle(msg):
+            self._apply_intent(intent)
 
-        if msg_type == "log":
-            self._log(data)
-        elif msg_type == "stage":
-            stage, status = data
-            self._update_stage_status(stage, status)
-        elif msg_type == "batch_start":
-            total = data
-            self._log(f"Processing 0/{total} subjects")
-        elif msg_type == "subject_start":
-            index, subject_id = data
-            total = len(self.subject_files_list)
-            self._log(f"Processing {index + 1}/{total}: {subject_id}")
-            # Update console tree status with processing tag (purple)
+    def _apply_intent(self, intent):
+        """Apply a single view-intent from ResultModel to the widgets."""
+        if isinstance(intent, AppendLog):
+            self._log(intent.text)
+        elif isinstance(intent, UpdateStageStatus):
+            self._update_stage_status(intent.stage, intent.status)
+        elif isinstance(intent, SetRowStatus):
             items = self.console_tree.get_children()
-            if index < len(items):
-                self.console_tree.set(items[index], "status", "Processing")
-                self.console_tree.item(items[index], tags=("processing",))
-            # Reset stage button styles for each new subject
+            if intent.index < len(items):
+                self.console_tree.set(items[intent.index], "status", intent.text)
+                self.console_tree.item(items[intent.index], tags=(intent.tag,))
+        elif isinstance(intent, ResetStageButtons):
             self._reset_stage_button_styles()
-        elif msg_type == "subject_complete":
-            index, result = data
-            total = len(self.subject_files_list)
-            completed = index + 1
-
-            self._log(f"Completed {completed}/{total} subjects")
-
-            # Update console tree status with appropriate tag (green/red)
-            items = self.console_tree.get_children()
-            if index < len(items):
-                if result.status == "completed":
-                    self.console_tree.set(items[index], "status", "Completed")
-                    self.console_tree.item(items[index], tags=("completed",))
-                else:
-                    self.console_tree.set(items[index], "status", "Failed")
-                    self.console_tree.item(items[index], tags=("failed",))
-        elif msg_type == "batch_complete":
-            batch_state = data
-            self._log(
-                f"Batch complete: {batch_state.success_count}/{batch_state.total_subjects} succeeded"
-            )
-            self._show_batch_results(batch_state)
-        elif msg_type == "batch_success":
-            batch_state = data
-            self._log("All subjects processed successfully!")
-            self._show_batch_results(batch_state)
-        elif msg_type == "batch_partial":
-            batch_state = data
-            self._log(
-                f"Batch completed with errors: {batch_state.success_count}/"
-                f"{batch_state.total_subjects} succeeded"
-            )
-            self._show_batch_results(batch_state)
-        elif msg_type == "batch_cancelled":
-            self._log("Batch processing cancelled.")
-        elif msg_type == "complete":
-            # Single subject complete (legacy)
-            self._log("Pipeline completed successfully!")
-            self._show_results(data)
-        elif msg_type == "failed":
-            self._log("Pipeline failed.")
-        elif msg_type == "cancelled":
-            self._log("Pipeline cancelled.")
-        elif msg_type == "error":
-            self._log(f"Error: {data}")
+        elif isinstance(intent, ShowBatchResults):
+            self._show_batch_results(intent.batch_state)
+        elif isinstance(intent, ShowResults):
+            self._show_results(intent.data)
 
     def _init_log_file(self, output_dir: str):
         """Initialize log file in the output directory."""
