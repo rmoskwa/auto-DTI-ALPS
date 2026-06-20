@@ -20,7 +20,13 @@ from pathlib import Path
 import nibabel as nib
 import numpy as np
 
-from .alps_calculation import calculate_alps_lab, calculate_alps_pas
+from .alps_calculation import (
+    calculate_alps_lab,
+    calculate_alps_pas,
+    load_lab_components,
+    load_pas_components,
+    load_roi_masks,
+)
 from .registration.base import (
     calculate_roi_quality,
     create_sphere_mask,
@@ -416,17 +422,19 @@ def reanalyze_subject(
             nib.save(assoc_img, str(assoc_path))
             roi_mask_paths[assoc_name] = str(assoc_path)
 
-        # Load ROI masks for ALPS calculation
-        masks = {}
-        for roi_name, roi_path in roi_mask_paths.items():
-            masks[roi_name] = nib.load(roi_path).get_fdata()
+        # Load ROI masks for ALPS calculation (shared loader -- same IO edge
+        # the pipeline uses, so the two paths cannot drift apart)
+        masks = load_roi_masks(roi_mask_paths)
 
         # Calculate ALPS
         log(f"  Calculating ALPS ({alps_method})...")
 
         if alps_method in ["ALPS-LAB", "Both"]:
+            dxx, dyy, dzz = load_lab_components(str(tensor_path))
             lab_results = calculate_alps_lab(
-                tensor_path=str(tensor_path),
+                dxx=dxx,
+                dyy=dyy,
+                dzz=dzz,
                 fa_data=fa_data,
                 masks=masks,
                 fa_threshold=fa_threshold,
@@ -438,11 +446,14 @@ def reanalyze_subject(
 
         if alps_method in ["ALPS-PAS", "Both"]:
             if all([l2_path, l3_path, v2_path, v3_path]):
+                l2, l3, v2_x, v3_x = load_pas_components(
+                    str(l2_path), str(l3_path), str(v2_path), str(v3_path)
+                )
                 pas_results = calculate_alps_pas(
-                    l2_path=str(l2_path),
-                    l3_path=str(l3_path),
-                    v2_path=str(v2_path),
-                    v3_path=str(v3_path),
+                    l2=l2,
+                    l3=l3,
+                    v2_x=v2_x,
+                    v3_x=v3_x,
                     fa_data=fa_data,
                     masks=masks,
                     fa_threshold=fa_threshold,

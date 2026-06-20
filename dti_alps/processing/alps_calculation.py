@@ -3,6 +3,14 @@ DTI-ALPS index calculation functions.
 
 This module contains the core ALPS calculation logic for both
 ALPS-LAB (tensor diagonal components) and ALPS-PAS (eigenvector-sorted eigenvalues).
+
+The science is pure: ``calculate_alps_lab`` and ``calculate_alps_pas`` take
+pre-loaded NumPy arrays and return a results dict, so they can be exercised with
+tiny synthetic arrays and no ``.nii.gz`` files on disk. All ``nib.load`` and all
+knowledge of on-disk *format* (the MRtrix tensor-component index convention, the
+eigenvector X-component slice) live in the loader functions below, which are the
+single IO edge that both real callers -- the pipeline (via
+``run_alps_calculation``) and reanalysis -- route through.
 """
 
 from collections.abc import Callable
@@ -17,8 +25,96 @@ if TYPE_CHECKING:
     from .state import PipelineState
 
 
-def calculate_alps_lab(
+# ---------------------------------------------------------------------------
+# Loaders -- the single IO edge.
+#
+# These own ``nib.load`` and all on-disk *format* knowledge (the MRtrix tensor
+# component index convention, the eigenvector X-component slice). They are thin
+# IO shells and are intentionally not unit-tested; the science they feed is
+# tested through the pure functions below. Both callers (the pipeline and
+# reanalysis) load through these so the format knowledge cannot drift apart.
+# ---------------------------------------------------------------------------
+
+
+def load_fa_map(fa_path: str) -> np.ndarray:
+    """Load the FA map used for CSF thresholding."""
+    return nib.load(fa_path).get_fdata()
+
+
+def load_roi_masks(
+    roi_mask_paths: dict[str, str],
+    log_callback: Callable[[str], None] | None = None,
+) -> dict[str, np.ndarray]:
+    """Load registered ROI masks keyed by ROI name (e.g. ``left_proj``)."""
+    log = log_callback or (lambda msg: None)
+    masks = {}
+    for roi_name, roi_path in roi_mask_paths.items():
+        log(f"  Loading {roi_name}: {roi_path}")
+        masks[roi_name] = nib.load(roi_path).get_fdata()
+    return masks
+
+
+def load_lab_components(
     tensor_path: str,
+    log_callback: Callable[[str], None] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Load the diffusion tensor and slice out the (Dxx, Dyy, Dzz) diagonal
+    components for the ALPS-LAB method.
+
+    The MRtrix ``dwi2tensor`` output format is D11, D22, D33, D12, D13, D23; the
+    diagonal-component indices are the *format* fact owned here, not by the math.
+    """
+    log = log_callback or (lambda msg: None)
+    log(f"Loading tensor: {tensor_path}")
+    tensor_data = nib.load(tensor_path).get_fdata()
+    dxx = tensor_data[:, :, :, config.TENSOR_DXX_INDEX]
+    dyy = tensor_data[:, :, :, config.TENSOR_DYY_INDEX]
+    dzz = tensor_data[:, :, :, config.TENSOR_DZZ_INDEX]
+    return dxx, dyy, dzz
+
+
+def load_pas_components(
+    l2_path: str,
+    l3_path: str,
+    v2_path: str,
+    v3_path: str,
+    log_callback: Callable[[str], None] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Load eigenvalues L2/L3 and the X-components of eigenvectors V2/V3 for the
+    ALPS-PAS method.
+
+    The X-component slice (``v[:, :, :, 0]``) is *format* and owned here; the
+    eigenvector-sort that uses these arrays is *science* and stays inside
+    ``calculate_alps_pas``.
+    """
+    log = log_callback or (lambda msg: None)
+    log(f"Loading L2: {l2_path}")
+    l2_data = nib.load(l2_path).get_fdata()
+
+    log(f"Loading L3: {l3_path}")
+    l3_data = nib.load(l3_path).get_fdata()
+
+    log(f"Loading V2: {v2_path}")
+    v2_x = nib.load(v2_path).get_fdata()[:, :, :, 0]
+
+    log(f"Loading V3: {v3_path}")
+    v3_x = nib.load(v3_path).get_fdata()[:, :, :, 0]
+
+    return l2_data, l3_data, v2_x, v3_x
+
+
+# ---------------------------------------------------------------------------
+# Pure ALPS calculations -- arrays in, results dict out. No IO, no format
+# knowledge. These are the tested seam.
+# ---------------------------------------------------------------------------
+
+
+def calculate_alps_lab(
+    dxx: np.ndarray,
+    dyy: np.ndarray,
+    dzz: np.ndarray,
     fa_data: np.ndarray,
     masks: dict[str, np.ndarray],
     fa_threshold: float,
@@ -32,8 +128,8 @@ def calculate_alps_lab(
 
     Parameters
     ----------
-    tensor_path : str
-        Path to the diffusion tensor image
+    dxx, dyy, dzz : ndarray
+        Same-shape 3-D tensor diagonal component maps (Dxx, Dyy, Dzz)
     fa_data : ndarray
         FA map data for thresholding
     masks : dict
@@ -51,17 +147,6 @@ def calculate_alps_lab(
         or None if calculation failed
     """
     log = log_callback or (lambda msg: None)
-
-    # Load tensor image
-    log(f"Loading tensor: {tensor_path}")
-    tensor_img = nib.load(tensor_path)
-    tensor_data = tensor_img.get_fdata()
-
-    # Extract directional diffusivities
-    # MRtrix dwi2tensor output format: D11, D22, D33, D12, D13, D23
-    dxx = tensor_data[:, :, :, config.TENSOR_DXX_INDEX]
-    dyy = tensor_data[:, :, :, config.TENSOR_DYY_INDEX]
-    dzz = tensor_data[:, :, :, config.TENSOR_DZZ_INDEX]
 
     # Calculate mean diffusivities in each ROI
     results = {}
@@ -138,10 +223,10 @@ def calculate_alps_lab(
 
 
 def calculate_alps_pas(
-    l2_path: str,
-    l3_path: str,
-    v2_path: str,
-    v3_path: str,
+    l2: np.ndarray,
+    l3: np.ndarray,
+    v2_x: np.ndarray,
+    v3_x: np.ndarray,
     fa_data: np.ndarray,
     masks: dict[str, np.ndarray],
     fa_threshold: float,
@@ -156,14 +241,10 @@ def calculate_alps_pas(
 
     Parameters
     ----------
-    l2_path : str
-        Path to the L2 (second eigenvalue) image
-    l3_path : str
-        Path to the L3 (third eigenvalue) image
-    v2_path : str
-        Path to the V2 (second eigenvector) image
-    v3_path : str
-        Path to the V3 (third eigenvector) image
+    l2, l3 : ndarray
+        Same-shape 3-D second/third eigenvalue maps (L2, L3)
+    v2_x, v3_x : ndarray
+        Same-shape 3-D X-components of the V2/V3 eigenvectors
     fa_data : ndarray
         FA map data for thresholding
     masks : dict
@@ -182,28 +263,11 @@ def calculate_alps_pas(
     """
     log = log_callback or (lambda msg: None)
 
-    # Load eigenvalue and eigenvector maps
-    log(f"Loading L2: {l2_path}")
-    l2_data = nib.load(l2_path).get_fdata()
-
-    log(f"Loading L3: {l3_path}")
-    l3_data = nib.load(l3_path).get_fdata()
-
-    log(f"Loading V2: {v2_path}")
-    v2_data = nib.load(v2_path).get_fdata()
-
-    log(f"Loading V3: {v3_path}")
-    v3_data = nib.load(v3_path).get_fdata()
-
-    # Extract X-components of eigenvectors (first component, index 0)
-    v2_x = v2_data[:, :, :, 0]
-    v3_x = v3_data[:, :, :, 0]
-
     # Sort eigenvalues by X-alignment: the eigenvalue whose eigenvector
     # has greater |X-component| is assigned to diff_X (perivascular direction)
     mask_v2_more_x = np.abs(v2_x) > np.abs(v3_x)
-    diff_X = np.where(mask_v2_more_x, l2_data, l3_data)
-    diff_perp = np.where(mask_v2_more_x, l3_data, l2_data)
+    diff_X = np.where(mask_v2_more_x, l2, l3)
+    diff_perp = np.where(mask_v2_more_x, l3, l2)
 
     # Calculate mean diffusivities in each ROI
     results = {}
@@ -292,6 +356,9 @@ def run_alps_calculation(
     - ALPS-PAS: Uses eigenvalues (L2, L3) sorted by eigenvector X-alignment
     - Both: Calculates both ALPS-LAB and ALPS-PAS
 
+    This is the IO/orchestration shell for the pipeline path: it loads through
+    the shared loaders and hands arrays to the pure ``calculate_*`` functions.
+
     Parameters
     ----------
     state : PipelineState
@@ -315,25 +382,23 @@ def run_alps_calculation(
 
     # Load FA map for thresholding (to filter out CSF voxels)
     log(f"Loading FA map: {state.fa_path}")
-    fa_img = nib.load(state.fa_path)
-    fa_data = fa_img.get_fdata()
+    fa_data = load_fa_map(state.fa_path)
     log(f"  Applying FA threshold > {state.fa_threshold} to filter CSF voxels")
 
     # Load registered ROI masks
     log("Loading registered ROI masks...")
-    masks = {}
-    for roi_name, roi_path in state.roi_mask_paths.items():
-        log(f"  Loading {roi_name}: {roi_path}")
-        roi_img = nib.load(roi_path)
-        masks[roi_name] = roi_img.get_fdata()
+    masks = load_roi_masks(state.roi_mask_paths, log_callback=log)
 
     # Calculate based on method selection
     results: dict[str, Any] = {"method": state.alps_method}
 
     if state.alps_method == "ALPS-LAB":
         log("Calculating ALPS-LAB...")
+        dxx, dyy, dzz = load_lab_components(state.tensor_path, log_callback=log)
         lab_results = calculate_alps_lab(
-            tensor_path=state.tensor_path,
+            dxx=dxx,
+            dyy=dyy,
+            dzz=dzz,
             fa_data=fa_data,
             masks=masks,
             fa_threshold=state.fa_threshold,
@@ -347,11 +412,14 @@ def run_alps_calculation(
 
     elif state.alps_method == "ALPS-PAS":
         log("Calculating ALPS-PAS...")
+        l2, l3, v2_x, v3_x = load_pas_components(
+            state.l2_path, state.l3_path, state.v2_path, state.v3_path, log_callback=log
+        )
         pas_results = calculate_alps_pas(
-            l2_path=state.l2_path,
-            l3_path=state.l3_path,
-            v2_path=state.v2_path,
-            v3_path=state.v3_path,
+            l2=l2,
+            l3=l3,
+            v2_x=v2_x,
+            v3_x=v3_x,
             fa_data=fa_data,
             masks=masks,
             fa_threshold=state.fa_threshold,
@@ -366,8 +434,11 @@ def run_alps_calculation(
     elif state.alps_method == "Both":
         # Calculate both methods
         log("Calculating ALPS-LAB...")
+        dxx, dyy, dzz = load_lab_components(state.tensor_path, log_callback=log)
         lab_results = calculate_alps_lab(
-            tensor_path=state.tensor_path,
+            dxx=dxx,
+            dyy=dyy,
+            dzz=dzz,
             fa_data=fa_data,
             masks=masks,
             fa_threshold=state.fa_threshold,
@@ -379,11 +450,14 @@ def run_alps_calculation(
             results[f"LAB_{key}"] = value
 
         log("Calculating ALPS-PAS...")
+        l2, l3, v2_x, v3_x = load_pas_components(
+            state.l2_path, state.l3_path, state.v2_path, state.v3_path, log_callback=log
+        )
         pas_results = calculate_alps_pas(
-            l2_path=state.l2_path,
-            l3_path=state.l3_path,
-            v2_path=state.v2_path,
-            v3_path=state.v3_path,
+            l2=l2,
+            l3=l3,
+            v2_x=v2_x,
+            v3_x=v3_x,
             fa_data=fa_data,
             masks=masks,
             fa_threshold=state.fa_threshold,
