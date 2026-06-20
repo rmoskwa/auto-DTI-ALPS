@@ -17,7 +17,7 @@ from ..processing.pipeline import (
     OutputConfig,
     PipelineState,
 )
-from ..processing.validators import validate_synb0_output_dir
+from ..processing.validators import resolve_readout_time, validate_synb0_output_dir
 from . import config
 from .user_config import UserConfig, get_user_config
 
@@ -2043,14 +2043,12 @@ class DTIALPSApplication(tk.Tk):
 
     def _collect_batch_state(self) -> BatchState:
         """Collect all UI values into batch state."""
-        # Determine readout time
-        if self.readout_auto_var.get():
-            readout_time = None  # Auto-extract from JSON
-        else:
-            try:
-                readout_time = float(self.readout_var.get())
-            except ValueError:
-                readout_time = config.DEFAULT_READOUT_TIME
+        # Determine readout time (auto → resolved downstream from JSON)
+        readout_time = resolve_readout_time(
+            self.readout_auto_var.get(),
+            self.readout_var.get(),
+            config.DEFAULT_READOUT_TIME,
+        )
 
         # Collect CLI options from each stage
         dwidenoise_options = self._collect_cli_options("dwidenoise")

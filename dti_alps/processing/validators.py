@@ -203,6 +203,38 @@ def validate_synb0_output_dir(path: str) -> tuple[bool, list[str]]:
     return (not missing, missing)
 
 
+def resolve_readout_time(auto: bool, raw: str, default: float) -> float | None:
+    """
+    Resolve the readout time the pipeline should use from the GUI inputs.
+
+    This is the value-resolution counterpart to :func:`validate_readout_time`
+    (which range-checks a string for display): when ``auto`` is set the readout
+    time is extracted downstream from the JSON sidecar, so this returns ``None``.
+    Otherwise the raw string is parsed, falling back to ``default`` on a parse
+    failure. No range checking is applied — that matches the GUI's behavior.
+
+    Parameters
+    ----------
+    auto : bool
+        Whether auto-extraction from the JSON sidecar is enabled.
+    raw : str
+        The raw readout-time string entered in the GUI.
+    default : float
+        Fallback value used when ``raw`` cannot be parsed as a float.
+
+    Returns
+    -------
+    float or None
+        ``None`` when ``auto`` is set; otherwise the parsed value or ``default``.
+    """
+    if auto:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def validate_directory(path: str, create: bool = False) -> tuple[bool, str]:
     """
     Validate output directory.
