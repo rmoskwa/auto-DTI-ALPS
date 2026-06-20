@@ -7,6 +7,7 @@ import os
 import numpy as np
 
 from .constants import READOUT_TIME_RANGE
+from .discovery import SubjectFiles
 
 
 def validate_file_exists(path: str, file_type: str) -> tuple[bool, str]:
@@ -272,3 +273,42 @@ def validate_directory(path: str, create: bool = False) -> tuple[bool, str]:
         return False, "Directory is not writable"
 
     return True, ""
+
+
+def validate_runnable(
+    subjects: list[SubjectFiles], output_dir: str
+) -> tuple[bool, str | None, list[str] | None]:
+    """
+    Decide whether a batch can be launched, first-failure-wins.
+
+    Reproduces the pre-flight checks in their original order: no subjects, then
+    any subject with missing files, then a missing output directory. Returns a
+    structured verdict; the caller owns all dialog phrasing (including the
+    "first 5 + (and N more)" truncation of the invalid-subject ids).
+
+    Parameters
+    ----------
+    subjects : list[SubjectFiles]
+        The subjects queued for processing.
+    output_dir : str
+        The configured output directory.
+
+    Returns
+    -------
+    tuple of (bool, str | None, list[str] | None)
+        ``(ok, kind, payload)``. When ``ok`` is True, ``kind`` and ``payload``
+        are ``None``. Otherwise ``kind`` is one of ``"no_subjects"``,
+        ``"invalid_subjects"`` (with ``payload`` the list of invalid subject
+        ids), or ``"no_output_dir"``.
+    """
+    if not subjects:
+        return (False, "no_subjects", None)
+
+    invalid_ids = [s.subject_id for s in subjects if not s.is_valid]
+    if invalid_ids:
+        return (False, "invalid_subjects", invalid_ids)
+
+    if not output_dir:
+        return (False, "no_output_dir", None)
+
+    return (True, None, None)

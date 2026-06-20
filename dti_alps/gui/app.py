@@ -21,7 +21,11 @@ from ..processing.pipeline import (
     OutputConfig,
     PipelineState,
 )
-from ..processing.validators import resolve_readout_time, validate_synb0_output_dir
+from ..processing.validators import (
+    resolve_readout_time,
+    validate_runnable,
+    validate_synb0_output_dir,
+)
 from . import config
 from .user_config import UserConfig, get_user_config
 
@@ -2100,28 +2104,23 @@ class DTIALPSApplication(tk.Tk):
 
     def _run_pipeline(self):
         """Start batch pipeline execution."""
-        # Validate we have subjects
-        if not self.subject_files_list:
-            messagebox.showerror("Validation Error", "No subject folders added.")
-            return
-
-        # Check for invalid subjects
-        invalid_subjects = [s for s in self.subject_files_list if not s.is_valid]
-        if invalid_subjects:
-            names = ", ".join(s.subject_id for s in invalid_subjects[:5])
-            if len(invalid_subjects) > 5:
-                names += f" (and {len(invalid_subjects) - 5} more)"
-            messagebox.showerror(
-                "Validation Error",
-                f"Some subjects have missing files:\n{names}\n\n"
-                "Please remove invalid subjects or add missing files.",
-            )
-            return
-
-        # Validate output directory
+        # Pre-flight validation (first-failure-wins); adapter owns dialog phrasing
         output_dir = self.output_dir_var.get()
-        if not output_dir:
-            messagebox.showerror("Validation Error", "Please specify an output directory.")
+        ok, kind, invalid_ids = validate_runnable(self.subject_files_list, output_dir)
+        if not ok:
+            if kind == "no_subjects":
+                messagebox.showerror("Validation Error", "No subject folders added.")
+            elif kind == "invalid_subjects":
+                names = ", ".join(invalid_ids[:5])
+                if len(invalid_ids) > 5:
+                    names += f" (and {len(invalid_ids) - 5} more)"
+                messagebox.showerror(
+                    "Validation Error",
+                    f"Some subjects have missing files:\n{names}\n\n"
+                    "Please remove invalid subjects or add missing files.",
+                )
+            elif kind == "no_output_dir":
+                messagebox.showerror("Validation Error", "Please specify an output directory.")
             return
 
         # Collect batch state

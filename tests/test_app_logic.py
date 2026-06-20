@@ -15,6 +15,7 @@ from dti_alps.processing.discovery import (
 )
 from dti_alps.processing.validators import (
     resolve_readout_time,
+    validate_runnable,
     validate_synb0_output_dir,
 )
 
@@ -177,3 +178,55 @@ class TestNewUniqueRuns:
         unique = new_unique_runs([], discovered)
 
         assert [r.dwi_path for r in unique] == ["/c.nii.gz", "/a.nii.gz", "/b.nii.gz"]
+
+
+class TestValidateRunnable:
+    """Tests for validate_runnable()."""
+
+    @staticmethod
+    def _valid(subject_id: str) -> SubjectFiles:
+        return SubjectFiles(
+            folder_path="/f",
+            subject_id=subject_id,
+            dwi_path=f"/{subject_id}.nii.gz",
+            bvec_path=f"/{subject_id}.bvec",
+            bval_path=f"/{subject_id}.bval",
+        )
+
+    @staticmethod
+    def _invalid(subject_id: str) -> SubjectFiles:
+        # Missing bvec/bval → is_valid is False
+        return SubjectFiles(
+            folder_path="/f", subject_id=subject_id, dwi_path=f"/{subject_id}.nii.gz"
+        )
+
+    def test_runnable(self):
+        """Valid subjects + output dir → ok, no kind/payload."""
+        assert validate_runnable([self._valid("s1")], "/out") == (True, None, None)
+
+    def test_no_subjects(self):
+        """Empty subject list → no_subjects."""
+        assert validate_runnable([], "/out") == (False, "no_subjects", None)
+
+    def test_invalid_subjects_returns_ids(self):
+        """Any invalid subject → invalid_subjects with the invalid ids."""
+        subjects = [self._valid("good"), self._invalid("bad1"), self._invalid("bad2")]
+
+        assert validate_runnable(subjects, "/out") == (
+            False,
+            "invalid_subjects",
+            ["bad1", "bad2"],
+        )
+
+    def test_no_output_dir(self):
+        """Valid subjects but empty output dir → no_output_dir."""
+        assert validate_runnable([self._valid("s1")], "") == (False, "no_output_dir", None)
+
+    def test_first_failure_wins_no_subjects_before_output(self):
+        """Empty subjects beats a missing output dir (no_subjects reported first)."""
+        assert validate_runnable([], "") == (False, "no_subjects", None)
+
+    def test_first_failure_wins_invalid_before_output(self):
+        """Invalid subjects beat a missing output dir (invalid_subjects first)."""
+        ok, kind, payload = validate_runnable([self._invalid("bad")], "")
+        assert (ok, kind, payload) == (False, "invalid_subjects", ["bad"])
