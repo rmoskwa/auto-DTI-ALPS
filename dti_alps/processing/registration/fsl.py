@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 import nibabel as nib
 import numpy as np
 
+from .. import results_layout
 from ..b0_extraction import (
     apply_mask_to_image,
     create_brain_mask_from_dwi,
@@ -473,10 +474,7 @@ class FSLRegistration(RegistrationBackend):
                     shape_name = shape_type  # squarev9, squarev4
 
                 # Add _refined suffix if refinement is enabled
-                if do_refinement:
-                    dir_name = f"rois_{shape_name}_refined"
-                else:
-                    dir_name = f"rois_{shape_name}"
+                dir_name = results_layout.roi_dir_name(shape_name, refined=do_refinement)
 
                 roi_dir = Path(state.output_dir) / dir_name
                 roi_dir.mkdir(parents=True, exist_ok=True)
@@ -743,7 +741,7 @@ class FSLRegistration(RegistrationBackend):
             n_voxels = int(np.sum(proj_mask))
             log(f"    Created {proj_name} with {n_voxels} voxels")
 
-            proj_path = roi_dir / f"{prefix}_{proj_name}.nii.gz"
+            proj_path = roi_dir / results_layout.roi_mask_name(prefix, proj_name)
             proj_img = nib.Nifti1Image(proj_mask.astype(np.float32), ref_img.affine, ref_img.header)
             nib.save(proj_img, str(proj_path))
             roi_native_paths[proj_name] = str(proj_path)
@@ -760,7 +758,7 @@ class FSLRegistration(RegistrationBackend):
             n_voxels = int(np.sum(assoc_mask))
             log(f"    Created {assoc_name} with {n_voxels} voxels")
 
-            assoc_path = roi_dir / f"{prefix}_{assoc_name}.nii.gz"
+            assoc_path = roi_dir / results_layout.roi_mask_name(prefix, assoc_name)
             assoc_img = nib.Nifti1Image(
                 assoc_mask.astype(np.float32), ref_img.affine, ref_img.header
             )

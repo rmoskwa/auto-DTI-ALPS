@@ -20,6 +20,7 @@ from pathlib import Path
 import nibabel as nib
 import numpy as np
 
+from . import results_layout
 from .alps_calculation import (
     calculate_alps_lab,
     calculate_alps_pas,
@@ -272,8 +273,7 @@ def reanalyze_subject(
         # Create output directory for new ROIs
         # Include _refined suffix if refinement is enabled
         roi_suffix = f"{roi_shape.name}_refined" if enable_refinement else roi_shape.name
-        roi_dir_name = f"rois_{roi_suffix}"
-        roi_dir = subject_dir / roi_dir_name
+        roi_dir = subject_dir / results_layout.roi_dir_name(roi_suffix)
         roi_dir.mkdir(parents=True, exist_ok=True)
 
         log(f"  Creating {roi_suffix} ROIs...")
@@ -403,7 +403,7 @@ def reanalyze_subject(
             else:
                 proj_mask = create_square_v9_mask(ref_shape, proj_centroid)
 
-            proj_path = roi_dir / f"{subject_id}_{proj_name}.nii.gz"
+            proj_path = roi_dir / results_layout.roi_mask_name(subject_id, proj_name)
             proj_img = nib.Nifti1Image(proj_mask.astype(np.float32), fa_img.affine, fa_img.header)
             nib.save(proj_img, str(proj_path))
             roi_mask_paths[proj_name] = str(proj_path)
@@ -418,7 +418,7 @@ def reanalyze_subject(
             else:
                 assoc_mask = create_square_v9_mask(ref_shape, assoc_centroid)
 
-            assoc_path = roi_dir / f"{subject_id}_{assoc_name}.nii.gz"
+            assoc_path = roi_dir / results_layout.roi_mask_name(subject_id, assoc_name)
             assoc_img = nib.Nifti1Image(assoc_mask.astype(np.float32), fa_img.affine, fa_img.header)
             nib.save(assoc_img, str(assoc_path))
             roi_mask_paths[assoc_name] = str(assoc_path)
@@ -557,7 +557,7 @@ def run_reanalysis(
     # Write CSV results
     # Include _refined suffix if refinement is enabled
     roi_suffix = f"{roi_shape.name}_refined" if enable_refinement else roi_shape.name
-    csv_filename = f"alps_results_{roi_suffix}.csv"
+    csv_filename = results_layout.alps_csv_name(roi_suffix)
     csv_path = os.path.join(output_dir, csv_filename)
 
     log(f"\nWriting results to {csv_path}...")

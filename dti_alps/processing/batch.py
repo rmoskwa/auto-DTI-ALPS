@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from . import results_layout
 from .constants import DEFAULT_READOUT_TIME
 from .state import BatchState, PipelineState, SubjectResult
 
@@ -389,7 +390,7 @@ class BatchRunner:
 
             # Write a CSV for each shape
             for shape_name in sorted(all_shapes):
-                csv_filename = f"alps_results_{shape_name}.csv"
+                csv_filename = results_layout.alps_csv_name(shape_name)
                 csv_path = os.path.join(self.batch_state.config.output_dir, csv_filename)
                 self._write_shape_csv(csv_path, shape_name, alps_method)
                 self._notify("log", f"Results saved to {csv_path}")
@@ -399,7 +400,10 @@ class BatchRunner:
 
     def _write_single_csv(self, alps_method: str) -> None:
         """Write single CSV file (backward compatibility mode)."""
-        csv_path = os.path.join(self.batch_state.config.output_dir, "alps_results.csv")
+        csv_path = os.path.join(
+            self.batch_state.config.output_dir,
+            results_layout.alps_csv_name(results_layout.DEFAULT_ROI_TOKEN),
+        )
 
         with open(csv_path, "w", newline="") as f:
             writer = csv.writer(f)

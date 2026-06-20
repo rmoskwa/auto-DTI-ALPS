@@ -9,7 +9,7 @@ import os
 from collections.abc import Callable
 from typing import Any
 
-from . import commands, registration
+from . import commands, registration, results_layout
 from .alps_calculation import run_alps_calculation
 
 # Re-export classes for backward compatibility
@@ -508,10 +508,9 @@ class PipelineRunner:
             if self.state.all_roi_results:
                 # Process each shape
                 for shape_dir_name, roi_info in self.state.all_roi_results.items():
-                    # Extract shape name from directory name (e.g., "rois_sphere3_refined" -> "sphere3_refined")
-                    shape_name = (
-                        shape_dir_name[5:] if shape_dir_name.startswith("rois_") else shape_dir_name
-                    )
+                    # Recover the shape token (e.g. "rois_sphere3_refined" -> "sphere3_refined").
+                    # The fallback is unreachable: the backend only writes rois_* dir names.
+                    shape_name = results_layout.parse_roi_dir(shape_dir_name) or shape_dir_name
 
                     self._log(f"Calculating ALPS for {shape_name}...")
 
@@ -547,7 +546,8 @@ class PipelineRunner:
 
                         roi_dir = os.path.dirname(first_path)
                         dir_name = os.path.basename(roi_dir)
-                        shape_name = dir_name[5:] if dir_name.startswith("rois_") else "default"
+                        # Fallback unreachable: the backend only writes rois_* dir names.
+                        shape_name = results_layout.parse_roi_dir(dir_name) or "default"
                     else:
                         shape_name = "default"
                     alps_results_by_shape[shape_name] = results

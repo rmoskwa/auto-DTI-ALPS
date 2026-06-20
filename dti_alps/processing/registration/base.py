@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from ..results_layout import ROI_NAMES
+
 if TYPE_CHECKING:
     from ..state import PipelineState
 
@@ -183,12 +185,9 @@ def get_roi_template_paths() -> dict[str, Path] | None:
     module_dir = Path(__file__).parent.parent.parent.parent
     templates_dir = module_dir / "templates"
 
-    roi_templates = {
-        "left_proj": templates_dir / "JHU-labels-left_proj.nii.gz",
-        "left_assoc": templates_dir / "JHU-labels-left_assoc.nii.gz",
-        "right_proj": templates_dir / "JHU-labels-right_proj.nii.gz",
-        "right_assoc": templates_dir / "JHU-labels-right_assoc.nii.gz",
-    }
+    # Keyed by the canonical ROI-mask names; the on-disk template files follow
+    # the JHU-labels-{name}.nii.gz convention.
+    roi_templates = {name: templates_dir / f"JHU-labels-{name}.nii.gz" for name in ROI_NAMES}
 
     # Check all templates exist
     for path in roi_templates.values():
