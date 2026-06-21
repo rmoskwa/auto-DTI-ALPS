@@ -181,9 +181,6 @@ class DTIALPSApplication(tk.Tk):
         # File menu
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="Load Settings...", command=self._load_settings)
-        file_menu.add_command(label="Save Settings...", command=self._save_settings)
-        file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.quit)
 
         # Help menu
@@ -1903,33 +1900,6 @@ class DTIALPSApplication(tk.Tk):
             foreground="gray",
         ).pack(side=tk.LEFT, padx=5)
 
-    def _create_file_row(self, parent, label_text, var_name, filetypes, row):
-        """Create a file browser row."""
-        ttk.Label(parent, text=label_text).grid(row=row, column=0, sticky=tk.W, pady=2)
-
-        var = tk.StringVar()
-        setattr(self, f"{var_name}_var", var)
-
-        entry = ttk.Entry(parent, textvariable=var, width=50)
-        entry.grid(row=row, column=1, sticky=tk.EW, padx=5, pady=2)
-
-        btn = ttk.Button(
-            parent, text="Browse...", command=lambda: self._browse_file(var_name, filetypes)
-        )
-        btn.grid(row=row, column=2, pady=2)
-
-        parent.columnconfigure(1, weight=1)
-
-    def _browse_file(self, var_name, filetypes):
-        """Open file browser and update variable."""
-        user_config = get_user_config()
-        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_FILE)
-        path = filedialog.askopenfilename(filetypes=filetypes, initialdir=initial_dir)
-        if path:
-            var = getattr(self, f"{var_name}_var")
-            var.set(path)
-            user_config.set_from_path(UserConfig.KEY_CLI_FILE, path)
-
     def _browse_output_dir(self):
         """Open directory browser for output."""
         user_config = get_user_config()
@@ -2412,14 +2382,6 @@ class DTIALPSApplication(tk.Tk):
 
         viewer = ResultsViewer(self, output_folder)
         viewer.focus_set()
-
-    def _load_settings(self):
-        """Load settings from file."""
-        messagebox.showinfo("Info", "Settings load not yet implemented")
-
-    def _save_settings(self):
-        """Save settings to file."""
-        messagebox.showinfo("Info", "Settings save not yet implemented")
 
     def _show_about(self):
         """Show about dialog."""
