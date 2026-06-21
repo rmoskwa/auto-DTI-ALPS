@@ -17,10 +17,10 @@ Split of responsibilities (Decision 2):
   and passes it into ``render_slice`` as explicit parameters, so the render
   stays a pure function of its inputs.
 
-The on-disk contract (ROI-dir / CSV naming + the ALPS column schema) lives in
-``processing/results_layout``; this module consumes it and adds the GUI-side
-display-name mapping. The FA/V1/ROI-mask globs stay here -- their only consumer
-is this loader (Decision 10).
+The on-disk contract (ROI-dir / CSV naming, the ALPS column schema, the canonical
+``ROI_NAMES`` and the ROI-mask glob) lives in ``processing/results_layout``; this
+module consumes it and adds the GUI-side display-name mapping. The FA/V1 globs
+stay here -- their only consumer is this loader.
 """
 
 from dataclasses import dataclass
@@ -30,11 +30,7 @@ import nibabel as nib
 import numpy as np
 
 from ..processing import results_layout
-from ..processing.results_layout import METHOD_LAB, AlpsTable, read_alps_csv
-
-# The four canonical ROI masks. Single consumer (this loader), so the glob stays
-# model-side rather than in results_layout (Decision 10).
-ROI_NAMES = ("left_proj", "right_proj", "left_assoc", "right_assoc")
+from ..processing.results_layout import METHOD_LAB, ROI_NAMES, AlpsTable, read_alps_csv
 
 # The three orthogonal views the viewer renders.
 VIEWS = ("axial", "coronal", "sagittal")
@@ -334,7 +330,7 @@ class ViewerModel:
                 roi_paths: dict[str, Path] = {}
                 if roi_dir.exists():
                     for roi_name in ROI_NAMES:
-                        matches = list(roi_dir.glob(f"*_{roi_name}.nii.gz"))
+                        matches = list(roi_dir.glob(results_layout.roi_mask_glob(roi_name)))
                         if matches:
                             roi_paths[roi_name] = matches[0]
                 if roi_paths:

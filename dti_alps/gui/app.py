@@ -8,6 +8,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from ..processing import results_layout
 from ..processing.discovery import (
     SubjectFiles,
     discover_with_subdir_fallback,
@@ -2370,8 +2371,10 @@ class DTIALPSApplication(tk.Tk):
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill=tk.X, pady=10)
 
-        # CSV path info (the alps_results.csv literal stays adapter-side; Candidate 2 owns it)
-        csv_path = Path(view.output_dir) / "alps_results.csv"
+        # CSV path info — the default results filename via the on-disk contract.
+        csv_path = Path(view.output_dir) / results_layout.alps_csv_name(
+            results_layout.DEFAULT_ROI_TOKEN
+        )
         ttk.Label(btn_frame, text=f"Results saved to: {csv_path}").pack(side=tk.LEFT, padx=5)
 
         ttk.Button(

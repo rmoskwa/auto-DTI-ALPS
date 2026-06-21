@@ -21,6 +21,8 @@ from pathlib import Path
 import nibabel as nib
 import numpy as np
 
+from . import results_layout
+
 
 @dataclass
 class ROIMetrics:
@@ -257,8 +259,8 @@ def discover_roi_shapes(output_dir: Path) -> list[str]:
         # Look for rois_* directories
         for roi_dir in item.glob("rois_*"):
             if roi_dir.is_dir():
-                # Extract shape name (everything after 'rois_')
-                shape = roi_dir.name[5:]  # Remove 'rois_' prefix
+                # Recover the shape token; the glob guarantees the rois_ prefix.
+                shape = results_layout.parse_roi_dir(roi_dir.name)
                 shapes.add(shape)
 
     return sorted(shapes)
