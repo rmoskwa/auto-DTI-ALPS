@@ -27,6 +27,7 @@ dependencies = [
 gui = [
     "matplotlib",
     "Pillow",
+    "PySide6",
 ]
 dev = [
     "pytest",
