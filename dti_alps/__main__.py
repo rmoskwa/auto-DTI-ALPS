@@ -195,6 +195,11 @@ def main():
 
     # Check if viewer mode
     if len(sys.argv) >= 2 and sys.argv[1] == "--viewer":
+        # Validate Qt up front so a missing PySide6 fails with a clear,
+        # actionable message instead of a raw import traceback (Decision 7).
+        from .gui import _check_viewer_dependencies
+
+        _check_viewer_dependencies()
         from .gui.viewer import launch_viewer
 
         # Check if output folder path was provided
