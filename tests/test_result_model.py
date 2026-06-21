@@ -1,5 +1,5 @@
 """
-Tests for the result-dispatch model and the batch-results presenter (PRD 0004/0006).
+Tests for the result-dispatch model and the batch-results presenter.
 
 Two layers, both value-in/value-out — no Tkinter object is named and the window
 is never instantiated:
@@ -290,7 +290,7 @@ def test_error_survives_and_legacy_trio_is_gone():
     model = ResultModel(["only"])
 
     assert model.handle(("error", "boom")) == [AppendLog("Error: boom")]
-    # The legacy single-subject branches were deleted with their view (PRD 0006).
+    # The legacy single-subject branches were deleted with their view.
     assert model.handle(("complete", {"ALPS_left": 1.23})) == []
     assert model.handle(("failed", None)) == []
     assert model.handle(("cancelled", None)) == []

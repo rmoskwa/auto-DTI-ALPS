@@ -8,7 +8,7 @@ This module is the **Tkinter adapter**: it reads widgets, calls
 and ``results_layout`` (the on-disk contract), and applies the returned plain
 data and finished NumPy pictures to widgets. It owns all phrasing, dialog type,
 zoom, and canvas placement; the session logic, the ALPS/CSV parsing, and the
-DEC rendering math live in the model and the engine leaf (PRD 0005).
+DEC rendering math live in the model and the engine leaf.
 """
 
 import tkinter as tk

@@ -1,5 +1,5 @@
 """
-Byte-level characterization of the batch ALPS-results CSV (PRD 0007).
+Byte-level characterization of the batch ALPS-results CSV.
 
 The safety net for ``BatchRunner``'s two CSV-writing paths -- the single-file
 ``_write_single_csv`` (backward-compat) and the per-shape ``_write_shape_csv``.

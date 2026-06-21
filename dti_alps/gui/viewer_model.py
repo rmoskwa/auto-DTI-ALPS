@@ -1,5 +1,5 @@
 """
-tk-free presentation model for the Results Viewer (PRD 0005).
+tk-free presentation model for the Results Viewer.
 
 ``ViewerModel`` is the viewer's session object: it loads a results folder and
 answers queries with plain data and finished NumPy pictures, holding no

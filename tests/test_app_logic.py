@@ -1,5 +1,5 @@
 """
-Unit tests for the tk-free decisions extracted from gui/app.py (PRD 0004).
+Unit tests for the tk-free decisions extracted from gui/app.py.
 
 These exercise the pure functions the GUI delegates to — no Tkinter object is
 named and the window is never instantiated. Each test asserts the structured

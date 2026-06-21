@@ -6,7 +6,7 @@ in an import cycle. The values here are domain facts the processing pipeline
 consumes -- the MRtrix3 tensor-component indices, the FA threshold that filters
 CSF voxels, the preprocessing defaults, and the readout-time validation range.
 
-They were lifted out of ``gui/config.py`` (PRD 0003) so the engine no longer
+They were lifted out of ``gui/config.py`` so the engine no longer
 reaches up into the GUI package; ``gui/config.py`` re-exports these names, so
 GUI code keeps referring to them as ``config.X`` unchanged. This module is the
 single source of truth -- change a value here, not in the GUI.

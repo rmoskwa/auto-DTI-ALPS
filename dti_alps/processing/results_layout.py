@@ -21,11 +21,11 @@ the viewer/reports read:
   filename pattern as a producer/consumer pair (:func:`roi_mask_name` /
   :func:`roi_mask_glob`).
 
-Only the viewer's consumers are repointed onto this module for now (PRD 0005,
-Decision 4); repointing the processing-side writers/parsers (``batch``,
+Only the viewer's consumers are repointed onto this module for now;
+repointing the processing-side writers/parsers (``batch``,
 ``reanalysis``, ``report``, ``pipeline``, ``registration/fsl``) and the
-canonical ROI-name set is a recorded follow-up, mirroring how PRD 0003 created
-``processing/constants.py`` and repointed only the consumers it needed.
+canonical ROI-name set is a recorded follow-up, mirroring how
+``processing/constants.py`` was created, repointing only the consumers it needed.
 
 A **token** is the machine name of an ROI configuration as it appears on disk:
 ``rois`` (the default 3.0 mm sphere), ``squarev9``, ``squarev4``, ``sphere2p5``,

@@ -1,7 +1,7 @@
 """
 Architectural guard: the analysis engine must not import the GUI package.
 
-PRD 0003 lifted the domain constants the engine consumes out of
+The domain constants the engine consumes were lifted out of
 ``dti_alps.gui.config`` into ``dti_alps.processing.constants`` so the dependency
 arrow points one way only: ``gui -> processing``, never the reverse. This test
 pins that invariant at the package import boundary.
@@ -56,5 +56,5 @@ def test_importing_engine_does_not_import_gui():
     for module in ENGINE_MODULES:
         assert not _gui_resident_after_importing(module), (
             f"Importing {module} left dti_alps.gui resident in sys.modules; "
-            "the engine must not depend on the GUI package (PRD 0003)."
+            "the engine must not depend on the GUI package."
         )

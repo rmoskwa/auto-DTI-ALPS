@@ -1,5 +1,5 @@
 """
-Byte-level characterization of the reanalysis ALPS-results CSV (PRD 0007).
+Byte-level characterization of the reanalysis ALPS-results CSV.
 
 The safety net for ``reanalysis._write_reanalysis_csv``: it pins the *exact*
 bytes the writer emits today (CRLF line terminators, ``.6f`` cells, blank cells

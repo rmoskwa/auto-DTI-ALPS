@@ -16,8 +16,8 @@ ALPS formula reads:
 
 The functions are pure (arrays in -> masks/tuples out); the IO shells that load
 FA/V1/L2/L3 and save masks live in the registration backend and reanalysis.
-Lifted out of registration/base.py by PRD 0009, the sibling of the pure ALPS
-module (alps_calculation.py, PRD 0002) and constants.py (PRD 0003).
+Lifted out of registration/base.py, the sibling of the pure ALPS
+module (alps_calculation.py) and constants.py.
 """
 
 import numpy as np

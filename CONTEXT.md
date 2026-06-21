@@ -1,14 +1,14 @@
 # CONTEXT — ubiquitous language for autoDTI-ALPS
 
 The shared vocabulary for this codebase. Names here are load-bearing: use them in
-code, commits, PRDs, and reviews. Architecture terms (module, interface, seam,
+code, commits, and reviews. Architecture terms (module, interface, seam,
 adapter, depth, leverage, locality) come from the `/codebase-design` skill and are
 not redefined here.
 
 ## The engine / GUI split
 
 - **Engine** — the `dti_alps/processing/` package: the distributable analysis core.
-  It is tk-free and, since PRD 0003, does not import `dti_alps.gui`. The dependency
+  It is tk-free and does not import `dti_alps.gui`. The dependency
   arrow points one way only: **`gui → processing`, never the reverse** (pinned by a
   subprocess import-guard test).
 - **GUI** — the `dti_alps/gui/` package. May hold tk-free **presentation models**
@@ -100,7 +100,7 @@ ViewerModel work).
 
 The geometry / quality / search cluster that decides *which voxels* the ALPS
 formula reads. A dependency-free, numpy-only leaf, `processing/roi_placement.py`
-(lifted out of the registration backend by PRD 0009; the sibling of the pure
+(lifted out of the registration backend; the sibling of the pure
 ALPS module and `constants.py`). The IO shells that load FA/V1/L2/L3 and save the
 masks stay in `registration/fsl.py` and `reanalysis.py`; the science is pure
 (arrays in → masks/tuples out).

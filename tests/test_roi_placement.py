@@ -11,7 +11,7 @@ each test an independent oracle -- it proves the rule is right rather than
 freezing whatever the code currently emits.
 
 Model: ``tests/test_alps_calculation.py`` -- pure, class-grouped, no external
-tools, hand-computed oracles. (PRD 0009.)
+tools, hand-computed oracles.
 """
 
 import math

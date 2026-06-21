@@ -77,23 +77,23 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["dti_alps"]
 
-# PRD 0001 (the ToolRunner seam): every external toolchain command must flow
+# The ToolRunner seam: every external toolchain command must flow
 # through ToolRunner. Importing subprocess anywhere else silently bypasses the
 # seam, so it is banned outside the carve-outs in per-file-ignores below.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
-"subprocess".msg = "Route external commands through processing.tool_runner.ToolRunner instead of importing subprocess. See PRD 0001."
+"subprocess".msg = "Route external commands through processing.tool_runner.ToolRunner instead of importing subprocess."
 
 [tool.ruff.lint.per-file-ignores]
 # The seam itself -- the one place subprocess is allowed.
 "dti_alps/processing/tool_runner.py" = ["TID251"]
 # GUI desktop-open (open/xdg-open/explorer): fire-and-forget, cross-platform,
-# no toolchain dependency -- deliberately outside the seam (PRD Decision 6).
+# no toolchain dependency -- deliberately outside the seam.
 "dti_alps/gui/app.py" = ["TID251"]
-# Real-binary integration smoke tests (kept per the PRD): they shell out to
+# Real-binary integration smoke tests: they shell out to
 # actual MRtrix3/FSL on a machine that has them.
 "tests/test_pipeline.py" = ["TID251"]
 "tests/test_registration.py" = ["TID251"]
-# Engine import-guard (PRD 0003): spawns a fresh Python interpreter to get a
+# Engine import-guard: spawns a fresh Python interpreter to get a
 # clean sys.modules, not a toolchain command -- legitimately outside the seam.
 "tests/test_engine_independence.py" = ["TID251"]
 

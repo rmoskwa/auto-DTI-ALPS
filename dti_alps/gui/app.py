@@ -51,7 +51,7 @@ class DTIALPSApplication(tk.Tk):
 
     # Initial (width, anchor) for each batch-results column, keyed by the stable
     # column key from build_batch_results_table. Widths are initial sizes on
-    # resizable columns (PRD 0006 Decision 7); the key-based map intentionally
+    # resizable columns; the key-based map intentionally
     # collapses the former per-method subject/status widths to a single value.
     _BATCH_COLUMN_LAYOUT = {
         "subject": (120, tk.W),

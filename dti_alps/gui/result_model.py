@@ -1,5 +1,5 @@
 """
-tk-free presentation model for the live results dispatch (PRD 0004).
+tk-free presentation model for the live results dispatch.
 
 ``ResultModel`` maps a worker queue message to an ordered list of *view-intents*
 — plain frozen dataclasses describing what should change in the GUI. The

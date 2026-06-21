@@ -199,7 +199,7 @@ class TestPasGoldenValue:
 
 
 class TestDegenerateCases:
-    """Pinned (not fixed) behavior for degenerate inputs -- see PRD Decision 7."""
+    """Pinned (not fixed) behavior for degenerate inputs."""
 
     def test_empty_roi_after_fa_filter_yields_nan(self):
         masks = _single_voxel_masks()
