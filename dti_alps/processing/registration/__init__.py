@@ -21,9 +21,6 @@ Example usage:
     result = backend.register(state, log_callback=print)
 """
 
-from collections.abc import Callable
-from typing import TYPE_CHECKING
-
 from ..tool_runner import ToolRunner
 from .base import (
     RegistrationBackend,
@@ -42,9 +39,6 @@ from .fsl import (
     get_jhu_template_path,
 )
 
-if TYPE_CHECKING:
-    from ..state import PipelineState
-
 __all__ = [
     # Abstract interface
     "RegistrationBackend",
@@ -59,7 +53,6 @@ __all__ = [
     "get_fsldir",
     "get_fsl_bin_dir",
     "get_jhu_template_path",
-    "register_fa_to_template",
     # Common utilities
     "get_roi_template_paths",
     "create_sphere_mask",
@@ -117,56 +110,3 @@ def register_backend(name: str, backend_class: type[RegistrationBackend]) -> Non
         Class implementing RegistrationBackend
     """
     _BACKENDS[name] = backend_class
-
-
-# =============================================================================
-# Backward compatibility: register_fa_to_template function
-# =============================================================================
-
-
-def register_fa_to_template(
-    state: "PipelineState",
-    log_callback: Callable[[str], None] | None = None,
-    runner: ToolRunner | None = None,
-) -> bool:
-    """
-    Register subject FA to JHU template and transform ROI masks to native space.
-
-    This function provides backward compatibility with the original API.
-    It runs both registration and ROI placement in sequence.
-
-    Parameters
-    ----------
-    state : PipelineState
-        Pipeline state with fa_path set
-    log_callback : callable, optional
-        Function to call with log messages
-    runner : ToolRunner | None
-        Seam for external command execution, forwarded to the backend.
-        Defaults to a real subprocess-backed runner.
-
-    Returns
-    -------
-    bool
-        True if registration and ROI placement succeeded
-    """
-    # Get backend name from state, defaulting to FSL
-    backend_name = getattr(state, "registration_backend", "fsl")
-
-    # Get backend instance
-    backend = get_backend(backend_name, runner=runner)
-
-    # Run registration
-    reg_result = backend.register(state, log_callback)
-    if not reg_result.success:
-        return False
-
-    # Run ROI placement
-    roi_result = backend.place_rois(state, log_callback)
-
-    # Update state with results (for backward compatibility)
-    if roi_result.success:
-        state.roi_mask_paths = roi_result.roi_mask_paths
-        state.roi_centers = roi_result.roi_centers
-
-    return roi_result.success
