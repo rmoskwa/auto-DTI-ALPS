@@ -33,7 +33,6 @@ from .base import (
     create_sphere_mask,
     find_mask_centroid,
     get_roi_template_paths,
-    refine_roi_placement,
 )
 from .fsl import (
     FSLRegistration,
@@ -66,7 +65,6 @@ __all__ = [
     "create_sphere_mask",
     "find_mask_centroid",
     "calculate_roi_quality",
-    "refine_roi_placement",
 ]
 
 
