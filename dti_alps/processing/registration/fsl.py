@@ -551,7 +551,7 @@ class FSLRegistration(RegistrationBackend):
         needs_v1_data = do_refinement or shape_type == "squarev4"
         if needs_v1_data:
             if do_refinement:
-                log("  ROI refinement enabled (±3 X, ±2 Y, ±1 Z voxels)")
+                log("  ROI refinement enabled (±3 X, ±1 Y, ±2 Z voxels)")
                 log("  Association ROIs constrained to ±1 Y, ±1 Z voxels from projection ROI")
             if shape_type == "squarev4":
                 log("  Square 2x2: V1-optimized configuration selection enabled")
