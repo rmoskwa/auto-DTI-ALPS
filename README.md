@@ -53,47 +53,11 @@ Installation: https://www.mrtrix.org/download/
 | `invwarp` | Registration | Generate inverse warp field for ROI transformation |
 | `applywarp` | ROI Placement | Transform ROI templates from standard to native space |
 | `fslmaths` | Masking | Apply brain mask to FA image |
-| `bet` / `bet2` | Brain Extraction | Skull stripping (used in synB0-DISCO pipeline) |
 | `eddy` | Preprocessing | Eddy current and motion correction |
 | `topup` | Preprocessing | Susceptibility-induced distortion field estimation |
 | `applytopup` | Preprocessing | Apply topup distortion correction |
-| `epi_reg` | Registration | EPI-to-T1 registration (synB0-DISCO pipeline) |
-| `fslmerge` | Image Manipulation | Merge image volumes (synB0-DISCO pipeline) |
 
 Installation: https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/FslInstallation
-
-#### FreeSurfer (optional — synB0-DISCO only)
-
-[FreeSurfer](https://surfer.nmr.mgh.harvard.edu/) is only required when using the synB0-DISCO fieldmap-less distortion correction pipeline.
-
-| Command | Purpose |
-|---------|---------|
-| `mri_convert` | NIfTI/MGZ format conversion |
-| `mri_nu_correct.mni` | N3 bias field correction |
-| `mri_normalize` | Intensity normalization |
-
-Installation: https://surfer.nmr.mgh.harvard.edu/fswiki/DownloadAndInstall
-
-#### ANTs (optional — synB0-DISCO only)
-
-[ANTs](http://stnava.github.io/ANTs/) is only required when using the synB0-DISCO fieldmap-less distortion correction pipeline.
-
-| Command | Purpose |
-|---------|---------|
-| `antsRegistrationSyNQuick.sh` | T1-to-MNI template registration |
-| `antsApplyTransforms` | Apply forward and inverse spatial transformations |
-
-Installation: https://github.com/ANTsX/ANTs
-
-#### Convert3D (optional — synB0-DISCO only)
-
-[Convert3D](http://www.itksnap.org/pmwiki/pmwiki.php?n=Convert3D.Documentation) is only required when using the synB0-DISCO fieldmap-less distortion correction pipeline.
-
-| Command | Purpose |
-|---------|---------|
-| `c3d_affine_tool` | Convert FSL affine matrices to ITK/ANTs format |
-
-Installation: http://www.itksnap.org/pmwiki/pmwiki.php?n=Downloads.C3D
 
 ## Installation
 
