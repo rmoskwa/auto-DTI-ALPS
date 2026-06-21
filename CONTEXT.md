@@ -95,3 +95,33 @@ ViewerModel work).
 - **Projection / association ROI** — the Superior-Inferior and Anterior-Posterior
   fibre regions sampled left and right; the four canonical masks are
   `left_proj`, `right_proj`, `left_assoc`, `right_assoc`.
+
+## ROI placement (pure science)
+
+The geometry / quality / search cluster that decides *which voxels* the ALPS
+formula reads. A dependency-free, numpy-only leaf, `processing/roi_placement.py`
+(lifted out of the registration backend by PRD 0009; the sibling of the pure
+ALPS module and `constants.py`). The IO shells that load FA/V1/L2/L3 and save the
+masks stay in `registration/fsl.py` and `reanalysis.py`; the science is pure
+(arrays in → masks/tuples out).
+
+- **ROI mask creators** — `create_sphere_mask` (mm-distance, **inclusive**
+  boundary `dist² ≤ r²`, so anisotropic voxels are honoured), `create_square_v9_mask`
+  (a 3×3 in-plane block at one Z slice), and `create_square_v4_mask` (a 2×2 block).
+- **V1-optimized corner selection** — squarev4 puts the centroid at one corner of
+  the 2×2 and picks the best of four configurations by maximizing mean `|V1_z|`
+  (projection) or `|V1_y|` (association). **Tie-break:** strict `>` in list order,
+  so the **lower-index** configuration wins; falls back to configuration 0 when V1
+  is absent or every configuration is partly out of bounds.
+- **ROI quality score** — `calculate_roi_quality` returns
+  `(purity, direction_strength, mean_fa, combined)` with `combined = purity ·
+  direction · FA`, then a **crossing-fiber penalty** `sqrt(1.8/ratio)` applied
+  *only* when mean λ2/λ3 (over λ3>0 voxels) exceeds **1.8** (Georgiopoulos et al.
+  2024); no L2/L3, or no above-threshold ratio → no penalty.
+- **Joint pair-refinement** — `refine_roi_pair_placement` searches a
+  **±3 X / ±1 Y / ±2 Z** window around both template centroids and returns the
+  (proj, assoc) pair maximizing the **geometric mean** of their scores, subject to
+  the **Y/Z-drift pairing constraint** (`|Δy| ≤ 1`, `|Δz| ≤ 1`) that keeps both
+  ROIs on the same X-direction pathway. A degenerate neighbourhood (all out of
+  bounds, or every candidate scoring ≤ 0) keeps the original centroids and returns
+  score `−1`.
