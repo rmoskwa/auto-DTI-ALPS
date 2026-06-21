@@ -108,7 +108,7 @@ class TestResolveReadoutTime:
 
     def test_no_range_rejection(self):
         """Out-of-range values are passed through unchanged (no validation)."""
-        # validate_readout_time would reject these; resolve_readout_time must not.
+        # A range-checking validator would reject these; resolve_readout_time must not.
         assert resolve_readout_time(False, "999", 0.05) == 999.0
         assert resolve_readout_time(False, "-1", 0.05) == -1.0
         assert resolve_readout_time(False, "0", 0.05) == 0.0

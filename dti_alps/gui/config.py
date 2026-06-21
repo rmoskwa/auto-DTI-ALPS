@@ -39,9 +39,6 @@ RPE_SCHEMES = {
     "header": "PE info from image headers",
 }
 
-# Registration-based ROI placement parameters
-DEFAULT_ROI_SPHERE_RADIUS = 2.0  # Sphere radius in mm for ROI placement
-
 # ALPS calculation methods
 ALPS_METHODS = ["ALPS-LAB", "ALPS-PAS", "Both"]
 DEFAULT_ALPS_METHOD = "Both"
@@ -55,10 +52,6 @@ ROI_SPHERE_RADIUS_RANGE = (1.0, 4.0)  # Range for ROI sphere radius (mm)
 
 # File type filters for file dialogs
 NIFTI_FILETYPES = [("NIfTI files", "*.nii *.nii.gz"), ("All files", "*.*")]
-
-BVEC_FILETYPES = [("bvec files", "*.bvec *.bvecs"), ("Text files", "*.txt"), ("All files", "*.*")]
-
-BVAL_FILETYPES = [("bval files", "*.bval *.bvals"), ("Text files", "*.txt"), ("All files", "*.*")]
 
 JSON_FILETYPES = [("JSON files", "*.json"), ("All files", "*.*")]
 
@@ -88,41 +81,6 @@ SYNB0_PIPELINE_STAGES = [
     ("registration", "Registration"),
     ("roi", "ROI Placement"),
     ("results", "Results"),
-]
-
-# Output file options - what files the pipeline can save
-# Format: (output_key, display_name, description, default_enabled)
-OUTPUT_FILE_OPTIONS = [
-    # Preprocessing outputs
-    ("denoised_dwi", "Denoised DWI", "DWI after thermal noise removal (dwidenoise)", True),
-    ("degibbs_dwi", "Degibbs DWI", "DWI after Gibbs ringing removal (mrdegibbs)", True),
-    ("preprocessed_dwi", "Preprocessed DWI", "Final preprocessed DWI (dwifslpreproc)", True),
-    (
-        "preprocessed_bvecs",
-        "Preprocessed bvecs/bvals",
-        "Corrected gradient directions and b-values",
-        True,
-    ),
-    # DTI outputs
-    ("tensor", "Diffusion Tensor", "Fitted diffusion tensor image", True),
-    ("fa_map", "FA Map", "Fractional anisotropy map", True),
-    (
-        "eigenvector_maps",
-        "Eigenvector/eigenvalue maps",
-        "V1, V2, V3, L1, L2, L3 maps",
-        True,
-    ),
-    # Registration outputs
-    ("b0_image", "Averaged B0 Image", "Mean b0 image extracted from DWI", True),
-    ("brain_mask", "Brain Mask", "Brain mask from dwi2mask", True),
-    ("fa_brain", "Skull-stripped FA", "FA image after brain mask application", True),
-    ("affine_matrix", "Affine Matrix", "FLIRT linear transformation matrix", True),
-    ("warp_coefficients", "Warp Coefficients", "FNIRT non-linear warp coefficients", True),
-    ("inverse_warp", "Inverse Warp", "Inverse warp for ROI transformation", True),
-    # ROI outputs
-    ("roi_masks", "ROI Masks", "Spherical ROI masks in native space", True),
-    # Log file
-    ("log_file", "Processing Log", "Detailed log of pipeline execution", True),
 ]
 
 # CLI option definitions for dwidenoise
@@ -263,17 +221,4 @@ COLORS = {
     "error": "#DC3545",
     "warning": "#FFC107",
     "processing": "#5C4D9A",  # Purple for processing state
-}
-
-# Tooltips for UI elements
-TOOLTIPS = {
-    "dwi": "4D diffusion-weighted image (NIfTI format)",
-    "bvecs": "Gradient directions file (FSL format, 3xN or Nx3)",
-    "bvals": "b-values file (FSL format)",
-    "pe_dir": "Phase encoding direction of the DWI acquisition",
-    "readout_time": "Total readout time in seconds (from acquisition parameters)",
-    "rpe_scheme": "Reverse phase encoding acquisition scheme",
-    "reverse_pe": "b=0 volume(s) with opposite phase encoding for distortion correction",
-    "json_sidecar": "JSON file with acquisition metadata (BIDS format)",
-    "roi_sphere_radius": "Spherical ROI radius in millimeters for template-based placement",
 }
