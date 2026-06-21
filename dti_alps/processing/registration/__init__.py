@@ -26,9 +26,6 @@ from .base import (
     RegistrationBackend,
     RegistrationResult,
     ROIPlacementResult,
-    calculate_roi_quality,
-    create_sphere_mask,
-    find_mask_centroid,
     get_roi_template_paths,
 )
 from .fsl import (
@@ -55,9 +52,6 @@ __all__ = [
     "get_jhu_template_path",
     # Common utilities
     "get_roi_template_paths",
-    "create_sphere_mask",
-    "find_mask_centroid",
-    "calculate_roi_quality",
 ]
 
 
