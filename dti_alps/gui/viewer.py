@@ -3,15 +3,15 @@ Results Viewer for DTI-ALPS processing output (PySide6 adapter).
 
 Displays FA-modulated RGB direction-encoded color (DEC) images with ROI overlays.
 
-This module is the **Qt adapter** (PRD 0010): it reads widgets, calls
+This module is the **Qt adapter**: it reads widgets, calls
 :class:`~dti_alps.gui.viewer_model.ViewerModel` (a tk-free presentation model)
 and ``results_layout`` (the on-disk contract), and applies the returned plain
 data and finished NumPy pictures to widgets. It owns all phrasing, dialog type,
 zoom, and image placement; the session logic, the ALPS/CSV parsing, and the DEC
-rendering math live in the model and the engine leaf (PRD 0005), reused here
+rendering math live in the model and the engine leaf, reused here
 byte-for-byte from the Tkinter viewer.
 
-The one deliberate behavior change from the Tk viewer (Decision 3): the image
+The one deliberate behavior change from the Tk viewer: the image
 pane is a ``QGraphicsView`` that shows real scrollbars when a slice is zoomed
 past the viewport, instead of silently clipping and centering it. Everything
 else mirrors the Tk viewer's phrasing, layout, and control semantics. The mouse
