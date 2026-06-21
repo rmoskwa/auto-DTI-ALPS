@@ -2373,15 +2373,25 @@ class DTIALPSApplication(tk.Tk):
                     subprocess.run(["explorer", output_dir])
 
     def _open_results_viewer(self, output_folder: str | None = None):
-        """Open the results viewer window."""
-        from .viewer import ResultsViewer
+        """Open the results viewer in its own process.
+
+        The viewer is now a Qt window (PRD 0010, Decision 6); a Qt QMainWindow
+        cannot be an in-process child of this Tk app, so it is spawned as a
+        separate process the same way output folders are opened above. From the
+        user's side, "View Results" still opens the viewer on the current
+        output folder.
+        """
+        import subprocess
+        import sys
 
         # Use current output dir if not specified and available
         if output_folder is None and self.batch_state:
             output_folder = self.batch_state.config.output_dir
 
-        viewer = ResultsViewer(self, output_folder)
-        viewer.focus_set()
+        cmd = [sys.executable, "-m", "dti_alps", "--viewer"]
+        if output_folder:
+            cmd.append(output_folder)
+        subprocess.Popen(cmd)
 
     def _show_about(self):
         """Show about dialog."""

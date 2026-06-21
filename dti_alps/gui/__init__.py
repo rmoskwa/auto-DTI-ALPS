@@ -26,10 +26,18 @@ def _check_dependencies():
         print("Please install: pip install nibabel numpy scipy matplotlib")
         sys.exit(1)
 
-    # Check for PIL (required by viewer)
-    if importlib.util.find_spec("PIL") is None:
-        print("Error: Pillow is required but not installed.")
-        print("Please install: pip install Pillow")
+
+def _check_viewer_dependencies():
+    """Check for Qt, required only by the Results Viewer (PRD 0010, Decision 7).
+
+    Kept off the Tk app's ``main()`` path so the still-Tk app is never made to
+    require PySide6 during the transition.
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("PySide6") is None:
+        print("Error: PySide6 is required by the Results Viewer but not installed.")
+        print('Please install: pip install "dti-alps[gui]"  (or: pip install PySide6)')
         sys.exit(1)
 
 
@@ -47,7 +55,8 @@ def main():
 def viewer(output_folder: str | None = None):
     """Launch the DTI-ALPS Results Viewer."""
     _check_dependencies()
+    _check_viewer_dependencies()
 
-    from .viewer import launch_viewer
+    from .viewer_qt import launch_viewer
 
     launch_viewer(output_folder)
