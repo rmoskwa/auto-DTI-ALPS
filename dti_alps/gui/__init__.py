@@ -23,7 +23,7 @@ def _check_dependencies():
 
     if missing_packages:
         print(f"Error: Required packages not found: {', '.join(missing_packages)}")
-        print("Please install: pip install nibabel numpy scipy matplotlib")
+        print("Please install: pip install nibabel numpy scipy")
         sys.exit(1)
 
 
@@ -57,6 +57,6 @@ def viewer(output_folder: str | None = None):
     _check_dependencies()
     _check_viewer_dependencies()
 
-    from .viewer_qt import launch_viewer
+    from .viewer import launch_viewer
 
     launch_viewer(output_folder)

@@ -200,7 +200,7 @@ def main():
         from .gui import _check_viewer_dependencies
 
         _check_viewer_dependencies()
-        from .gui.viewer_qt import launch_viewer
+        from .gui.viewer import launch_viewer
 
         # Check if output folder path was provided
         output_folder = sys.argv[2] if len(sys.argv) > 2 else None
