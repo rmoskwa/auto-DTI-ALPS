@@ -28,13 +28,13 @@ from .alps_calculation import (
     load_roi_masks,
 )
 from .constants import FA_THRESHOLD
-from .registration.base import (
+from .registration.base import get_roi_template_paths
+from .roi_placement import (
     calculate_roi_quality,
     create_sphere_mask,
     create_square_v4_mask,
     create_square_v9_mask,
     find_mask_centroid,
-    get_roi_template_paths,
     refine_roi_pair_placement,
 )
 from .tool_runner import SubprocessToolRunner, ToolRunner

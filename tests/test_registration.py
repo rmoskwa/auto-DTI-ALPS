@@ -31,6 +31,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from dti_alps.processing.roi_placement import create_sphere_mask, find_mask_centroid
+
 
 def get_fsldir() -> str | None:
     """Get FSLDIR environment variable, attempting to source if not set."""
@@ -149,33 +151,6 @@ def run_command(cmd: list[str], description: str) -> bool:
     except Exception as e:
         print(f"\nERROR: {e}")
         return False
-
-
-def create_sphere_mask(shape, center_voxel, radius_mm, voxel_size):
-    """Create a spherical binary mask centered at given voxel coordinates."""
-    import numpy as np
-
-    x, y, z = np.ogrid[: shape[0], : shape[1], : shape[2]]
-    dist_sq = (
-        ((x - center_voxel[0]) * voxel_size[0]) ** 2
-        + ((y - center_voxel[1]) * voxel_size[1]) ** 2
-        + ((z - center_voxel[2]) * voxel_size[2]) ** 2
-    )
-    return dist_sq <= radius_mm**2
-
-
-def find_mask_centroid(mask_data):
-    """Find the centroid of non-zero voxels, rounded to nearest integer."""
-    import numpy as np
-
-    coords = np.where(mask_data > 0)
-    if len(coords[0]) == 0:
-        return None
-    return (
-        int(round(coords[0].mean())),
-        int(round(coords[1].mean())),
-        int(round(coords[2].mean())),
-    )
 
 
 def register_fa_to_template(
