@@ -85,6 +85,36 @@ ViewerModel work).
     overlay, and the per-view orientation, returning a finished oriented uint8 RGB
     picture. `ViewerModel.render_slice` is a thin wrapper feeding it the current
     loaded arrays; zoom and toolkit conversion stay in the adapter.
+- **Form model** (input side, `gui/form_model.py`) — the tk-free **input model**:
+  *not* a stateful `*Model` class but a module of pure builders over a **FormState**
+  snapshot. The input-side mirror of [[ResultModel]]: ResultModel maps *worker message
+  → view-intents*; the form model maps *form snapshot → domain objects*. The adapter
+  reads its widgets into a `FormState` and calls the builders; toolkit lifecycle (a
+  widget not built yet) is guarded in the adapter's snapshot step, never in the model.
+  - **FormState** — a single flat frozen dataclass: the *raw* widget values at one
+    instant (booleans, strings such as `readout_raw`, the `fa_threshold` float, the
+    `refine_roi` string passed through verbatim), plus three keyed collections —
+    `roi_shapes`/`output_flags` (`dict[str, bool]`) and `cli_options`
+    (`dict[str, dict[str, OptionState]]`). Holds raw values, never resolved config;
+    all interpretation lives in the builders.
+  - **OptionState** — a frozen `(enabled: bool, value: str, type: str)` for one CLI
+    option. `build_batch_state` reproduces the collection rules: skip when disabled;
+    `flag` → `True`; `int` coerced (empty or unparseable skipped); every other `type`
+    passed through as its string.
+  - **build_batch_state(form_state, subjects) -> BatchState** — the pure builder that
+    replaces the `_collect_*` methods. Applies the ROI "default to sphere 3 mm when
+    nothing selected" fallback, the `OutputConfig` per-key default-true, and the
+    empty-string → `None` rule for the synB0 and staging dirs. Reuses
+    `resolve_readout_time`.
+  - **compute_readiness(form_state, subjects) -> Readiness** — the pure Run-button
+    decision. `Readiness` carries `can_run` plus the per-condition flags
+    (`has_subjects`, `all_subjects_valid`, `has_output_dir`, `readout_valid`,
+    `synb0_dir_valid`). It computes each condition independently (so a future adapter
+    can say *why* a run is blocked); it agrees with the first-failure-wins pre-flight
+    [[validate_runnable]] by construction, not by calling it. Readout validity comes
+    from its own `is_readout_valid(auto, raw)` predicate — deliberately **not**
+    `resolve_readout_time` (which coerces bad manual input to a default and so would
+    mis-report validity for both the auto and the unparseable-manual cases).
 
 ## Science terms (brief)
 
