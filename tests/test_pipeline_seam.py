@@ -16,6 +16,7 @@ reanalysis entries still own their own execution until those conversions land.
 """
 
 from dti_alps.processing import registration
+from dti_alps.processing.messages import Log
 from dti_alps.processing.pipeline import PipelineRunner, PipelineState
 from tests.fakes import FakeToolRunner
 
@@ -38,9 +39,9 @@ def _runner(state, fake):
     """PipelineRunner wired to a fake, collecting log lines into ``.logs``."""
     logs: list[str] = []
 
-    def progress(msg_type, data):
-        if msg_type == "log":
-            logs.append(data)
+    def progress(msg):
+        if isinstance(msg, Log):
+            logs.append(msg.text)
 
     runner = PipelineRunner(state, progress_callback=progress, runner=fake)
     runner.logs = logs  # type: ignore[attr-defined]

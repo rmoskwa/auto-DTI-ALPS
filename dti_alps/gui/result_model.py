@@ -10,6 +10,19 @@ be unit-tested as a value map rather than a sequence of imperative widget pokes.
 
 from dataclasses import dataclass
 
+from ..processing.messages import (
+    BatchCancelled,
+    BatchComplete,
+    BatchPartial,
+    BatchStart,
+    BatchSuccess,
+    Error,
+    Log,
+    Stage,
+    SubjectComplete,
+    SubjectStart,
+    WorkerMessage,
+)
 from ..processing.state import BatchState
 
 
@@ -180,77 +193,71 @@ class ResultModel:
         """Number of subjects in the run."""
         return len(self.subject_ids)
 
-    def handle(self, msg) -> list[Intent]:
+    def handle(self, msg: WorkerMessage) -> list[Intent]:
         """
-        Map one worker message ``(msg_type, data)`` to its view-intents.
+        Map one :class:`WorkerMessage` to its view-intents.
 
-        Covers the batch lifecycle (``batch_*``) plus the shared ``log``,
-        ``stage``, and ``error`` messages, reproducing the exact log phrasing.
-        Unknown message types yield no intents.
+        Covers the batch lifecycle plus the shared ``Log``, ``Stage``, and
+        ``Error`` messages, reproducing the exact log phrasing. The union is
+        closed, so ``case _`` is unreachable in the field — a fallthrough means a
+        new message type was added without a handler, which the exhaustiveness
+        test catches. Raising (rather than dropping) makes that a loud failure.
         """
-        msg_type = msg[0]
-        data = msg[1] if len(msg) > 1 else None
+        match msg:
+            case Log(text):
+                return [AppendLog(text)]
 
-        if msg_type == "log":
-            return [AppendLog(data)]
+            case Stage(stage, status):
+                return [UpdateStageStatus(stage, status)]
 
-        if msg_type == "stage":
-            stage, status = data
-            return [UpdateStageStatus(stage, status)]
+            case BatchStart(total):
+                return [AppendLog(f"Processing 0/{total} subjects")]
 
-        if msg_type == "batch_start":
-            total = data
-            return [AppendLog(f"Processing 0/{total} subjects")]
+            case SubjectStart(index, subject_id):
+                return [
+                    AppendLog(f"Processing {index + 1}/{self.total}: {subject_id}"),
+                    SetRowStatus(index, "Processing", "processing"),
+                    ResetStageButtons(),
+                ]
 
-        if msg_type == "subject_start":
-            index, subject_id = data
-            return [
-                AppendLog(f"Processing {index + 1}/{self.total}: {subject_id}"),
-                SetRowStatus(index, "Processing", "processing"),
-                ResetStageButtons(),
-            ]
+            case SubjectComplete(index, result):
+                completed = index + 1
+                intents: list[Intent] = [AppendLog(f"Completed {completed}/{self.total} subjects")]
+                if result.status == "completed":
+                    intents.append(SetRowStatus(index, "Completed", "completed"))
+                else:
+                    intents.append(SetRowStatus(index, "Failed", "failed"))
+                return intents
 
-        if msg_type == "subject_complete":
-            index, result = data
-            completed = index + 1
-            intents: list[Intent] = [AppendLog(f"Completed {completed}/{self.total} subjects")]
-            if result.status == "completed":
-                intents.append(SetRowStatus(index, "Completed", "completed"))
-            else:
-                intents.append(SetRowStatus(index, "Failed", "failed"))
-            return intents
+            case BatchComplete(batch_state):
+                return [
+                    AppendLog(
+                        f"Batch complete: {batch_state.success_count}/"
+                        f"{batch_state.total_subjects} succeeded"
+                    ),
+                    ShowBatchResults(build_batch_results_table(batch_state)),
+                ]
 
-        if msg_type == "batch_complete":
-            batch_state = data
-            return [
-                AppendLog(
-                    f"Batch complete: {batch_state.success_count}/"
-                    f"{batch_state.total_subjects} succeeded"
-                ),
-                ShowBatchResults(build_batch_results_table(batch_state)),
-            ]
+            case BatchSuccess(batch_state):
+                return [
+                    AppendLog("All subjects processed successfully!"),
+                    ShowBatchResults(build_batch_results_table(batch_state)),
+                ]
 
-        if msg_type == "batch_success":
-            batch_state = data
-            return [
-                AppendLog("All subjects processed successfully!"),
-                ShowBatchResults(build_batch_results_table(batch_state)),
-            ]
+            case BatchPartial(batch_state):
+                return [
+                    AppendLog(
+                        f"Batch completed with errors: {batch_state.success_count}/"
+                        f"{batch_state.total_subjects} succeeded"
+                    ),
+                    ShowBatchResults(build_batch_results_table(batch_state)),
+                ]
 
-        if msg_type == "batch_partial":
-            batch_state = data
-            return [
-                AppendLog(
-                    f"Batch completed with errors: {batch_state.success_count}/"
-                    f"{batch_state.total_subjects} succeeded"
-                ),
-                ShowBatchResults(build_batch_results_table(batch_state)),
-            ]
+            case BatchCancelled():
+                return [AppendLog("Batch processing cancelled.")]
 
-        if msg_type == "batch_cancelled":
-            return [AppendLog("Batch processing cancelled.")]
+            case Error(message):
+                return [AppendLog(f"Error: {message}")]
 
-        if msg_type == "error":
-            return [AppendLog(f"Error: {data}")]
-
-        return []
+            case _:
+                raise ValueError(f"unhandled worker message: {msg!r}")

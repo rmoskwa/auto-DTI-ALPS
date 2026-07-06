@@ -6,7 +6,7 @@ This package provides modular components for the DTI-ALPS processing pipeline:
 - state: Data classes for pipeline state management (PipelineState, BatchConfig, etc.)
 - pipeline: Pipeline orchestration (PipelineRunner)
 - batch: Batch processing (BatchRunner)
-- workers: Background threading workers (PipelineWorker, BatchWorker)
+- workers: Background threading workers (BatchWorker)
 - alps_calculation: ALPS index calculation functions
 - commands: MRtrix3 command builders
 - registration: FSL-based registration
@@ -44,7 +44,7 @@ from .staging import StagingManager
 from .state import BatchConfig, BatchState, PipelineState, SubjectResult
 
 # Background workers
-from .workers import BatchWorker, PipelineWorker
+from .workers import BatchWorker
 
 __all__ = [
     # State classes
@@ -57,7 +57,6 @@ __all__ = [
     # Batch processing
     "BatchRunner",
     # Workers
-    "PipelineWorker",
     "BatchWorker",
     # ALPS calculation
     "calculate_alps_lab",

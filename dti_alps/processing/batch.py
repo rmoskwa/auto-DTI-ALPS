@@ -8,10 +8,18 @@ tracking results, and writing output files.
 import os
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from . import results_layout
 from .constants import DEFAULT_READOUT_TIME
+from .messages import (
+    BatchComplete,
+    BatchStart,
+    Log,
+    SubjectComplete,
+    SubjectStart,
+    WorkerMessage,
+)
 from .state import BatchState, PipelineState, SubjectResult
 
 if TYPE_CHECKING:
@@ -29,7 +37,7 @@ class BatchRunner:
     def __init__(
         self,
         batch_state: BatchState,
-        progress_callback: Callable[[str, Any], None] | None = None,
+        progress_callback: Callable[[WorkerMessage], None] | None = None,
     ):
         """
         Initialize the batch runner.
@@ -39,15 +47,15 @@ class BatchRunner:
         batch_state : BatchState
             Batch configuration and subject list
         progress_callback : callable, optional
-            Callback function for progress updates
+            Callback receiving a single ``WorkerMessage`` per progress event
         """
         self.batch_state = batch_state
-        self.progress_callback = progress_callback or (lambda t, d: None)
+        self.progress_callback = progress_callback or (lambda m: None)
         self.cancelled = False
 
-    def _notify(self, msg_type: str, data: Any) -> None:
-        """Send notification via callback."""
-        self.progress_callback(msg_type, data)
+    def _notify(self, message: WorkerMessage) -> None:
+        """Send a worker message via callback."""
+        self.progress_callback(message)
 
     def _create_subject_pipeline_state(self, subject_files: "SubjectFiles") -> PipelineState:
         """
@@ -84,9 +92,10 @@ class BatchRunner:
         if readout_time is None:
             readout_time = DEFAULT_READOUT_TIME  # fallback default
             self._notify(
-                "log",
-                f"  Warning: Could not extract readout time for {subject_files.subject_id}, "
-                f"using default {readout_time}s",
+                Log(
+                    f"  Warning: Could not extract readout time for {subject_files.subject_id}, "
+                    f"using default {readout_time}s"
+                )
             )
 
         # Determine PE direction: from config, or auto-extract from JSON
@@ -96,7 +105,7 @@ class BatchRunner:
             if extracted_pe:
                 pe_direction = extracted_pe
                 self._notify(
-                    "log", f"  Auto-detected PE direction: {pe_direction} (from JSON sidecar)"
+                    Log(f"  Auto-detected PE direction: {pe_direction} (from JSON sidecar)")
                 )
 
         # Create per-subject output directory
@@ -165,8 +174,8 @@ class BatchRunner:
         from .pipeline import PipelineRunner
 
         total = self.batch_state.total_subjects
-        self._notify("batch_start", total)
-        self._notify("log", f"Starting batch processing for {total} subjects")
+        self._notify(BatchStart(total))
+        self._notify(Log(f"Starting batch processing for {total} subjects"))
 
         for i, subject_files in enumerate(self.batch_state.subjects):
             if self.cancelled:
@@ -177,12 +186,12 @@ class BatchRunner:
             result = self._process_single_subject(subject_files, i, PipelineRunner)
             self.batch_state.results.append(result)
 
-            self._notify("subject_complete", (i, result))
+            self._notify(SubjectComplete(i, result))
 
         # Write CSV output
         self._write_csv_results()
 
-        self._notify("batch_complete", self.batch_state)
+        self._notify(BatchComplete(self.batch_state))
         return self.batch_state.success_count == self.batch_state.total_subjects
 
     def _process_single_subject(
@@ -216,11 +225,12 @@ class BatchRunner:
             status="running",
         )
 
-        self._notify("subject_start", (index, subject_files.subject_id))
+        self._notify(SubjectStart(index, subject_files.subject_id))
         self._notify(
-            "log",
-            f"Processing subject {index + 1}/{self.batch_state.total_subjects}: "
-            f"{subject_files.subject_id}",
+            Log(
+                f"Processing subject {index + 1}/{self.batch_state.total_subjects}: "
+                f"{subject_files.subject_id}"
+            )
         )
 
         try:
@@ -228,8 +238,8 @@ class BatchRunner:
             state = self._create_subject_pipeline_state(subject_files)
 
             # Create progress callback that forwards to batch callback
-            def subject_progress(msg_type: str, data: Any):
-                self._notify(msg_type, data)
+            def subject_progress(message: WorkerMessage):
+                self._notify(message)
                 # Check cancellation
                 if self.cancelled:
                     pass  # Will be caught by runner
@@ -293,66 +303,76 @@ class BatchRunner:
 
                         if method == "ALPS-LAB" and lab_bi is not None:
                             self._notify(
-                                "log",
-                                f"  [{shape_name}] ALPS-LAB: L={lab_left:.4f}, "
-                                f"R={lab_right:.4f}, Bi={lab_bi:.4f}",
+                                Log(
+                                    f"  [{shape_name}] ALPS-LAB: L={lab_left:.4f}, "
+                                    f"R={lab_right:.4f}, Bi={lab_bi:.4f}"
+                                )
                             )
                         elif method == "ALPS-PAS" and pas_bi is not None:
                             self._notify(
-                                "log",
-                                f"  [{shape_name}] ALPS-PAS: L={pas_left:.4f}, "
-                                f"R={pas_right:.4f}, Bi={pas_bi:.4f}",
+                                Log(
+                                    f"  [{shape_name}] ALPS-PAS: L={pas_left:.4f}, "
+                                    f"R={pas_right:.4f}, Bi={pas_bi:.4f}"
+                                )
                             )
                         elif method == "Both":
                             if lab_bi is not None:
                                 self._notify(
-                                    "log",
-                                    f"  [{shape_name}] ALPS-LAB: L={lab_left:.4f}, "
-                                    f"R={lab_right:.4f}, Bi={lab_bi:.4f}",
+                                    Log(
+                                        f"  [{shape_name}] ALPS-LAB: L={lab_left:.4f}, "
+                                        f"R={lab_right:.4f}, Bi={lab_bi:.4f}"
+                                    )
                                 )
                             if pas_bi is not None:
                                 self._notify(
-                                    "log",
-                                    f"  [{shape_name}] ALPS-PAS: L={pas_left:.4f}, "
-                                    f"R={pas_right:.4f}, Bi={pas_bi:.4f}",
+                                    Log(
+                                        f"  [{shape_name}] ALPS-PAS: L={pas_left:.4f}, "
+                                        f"R={pas_right:.4f}, Bi={pas_bi:.4f}"
+                                    )
                                 )
                 else:
                     # Fallback: log the primary results (backward compatibility)
                     method = result.alps_method
                     if method == "ALPS-LAB" and result.alps_lab_bilateral is not None:
                         self._notify(
-                            "log",
-                            f"  ALPS-LAB: L={result.alps_lab_left:.4f}, "
-                            f"R={result.alps_lab_right:.4f}, Bi={result.alps_lab_bilateral:.4f}",
+                            Log(
+                                f"  ALPS-LAB: L={result.alps_lab_left:.4f}, "
+                                f"R={result.alps_lab_right:.4f}, Bi={result.alps_lab_bilateral:.4f}"
+                            )
                         )
                     elif method == "ALPS-PAS" and result.alps_pas_bilateral is not None:
                         self._notify(
-                            "log",
-                            f"  ALPS-PAS: L={result.alps_pas_left:.4f}, "
-                            f"R={result.alps_pas_right:.4f}, Bi={result.alps_pas_bilateral:.4f}",
+                            Log(
+                                f"  ALPS-PAS: L={result.alps_pas_left:.4f}, "
+                                f"R={result.alps_pas_right:.4f}, Bi={result.alps_pas_bilateral:.4f}"
+                            )
                         )
                     elif method == "Both":
                         if result.alps_lab_bilateral is not None:
                             self._notify(
-                                "log",
-                                f"  ALPS-LAB: L={result.alps_lab_left:.4f}, "
-                                f"R={result.alps_lab_right:.4f}, Bi={result.alps_lab_bilateral:.4f}",
+                                Log(
+                                    f"  ALPS-LAB: L={result.alps_lab_left:.4f}, "
+                                    f"R={result.alps_lab_right:.4f}, "
+                                    f"Bi={result.alps_lab_bilateral:.4f}"
+                                )
                             )
                         if result.alps_pas_bilateral is not None:
                             self._notify(
-                                "log",
-                                f"  ALPS-PAS: L={result.alps_pas_left:.4f}, "
-                                f"R={result.alps_pas_right:.4f}, Bi={result.alps_pas_bilateral:.4f}",
+                                Log(
+                                    f"  ALPS-PAS: L={result.alps_pas_left:.4f}, "
+                                    f"R={result.alps_pas_right:.4f}, "
+                                    f"Bi={result.alps_pas_bilateral:.4f}"
+                                )
                             )
             else:
                 result.status = "failed"
                 result.error_message = "Pipeline execution failed"
-                self._notify("log", "  FAILED: Pipeline execution failed")
+                self._notify(Log("  FAILED: Pipeline execution failed"))
 
         except Exception as e:
             result.status = "failed"
             result.error_message = str(e)
-            self._notify("log", f"  FAILED: {e}")
+            self._notify(Log(f"  FAILED: {e}"))
 
         result.processing_time = time.time() - start_time
         return result
@@ -392,10 +412,10 @@ class BatchRunner:
                 csv_filename = results_layout.alps_csv_name(shape_name)
                 csv_path = os.path.join(self.batch_state.config.output_dir, csv_filename)
                 self._write_shape_csv(csv_path, shape_name, alps_method)
-                self._notify("log", f"Results saved to {csv_path}")
+                self._notify(Log(f"Results saved to {csv_path}"))
 
         except OSError as e:
-            self._notify("log", f"ERROR: Failed to write CSV: {e}")
+            self._notify(Log(f"ERROR: Failed to write CSV: {e}"))
 
     def _write_single_csv(self, alps_method: str) -> None:
         """Write single CSV file (backward compatibility mode) via the contract."""
@@ -421,7 +441,7 @@ class BatchRunner:
         )
         results_layout.write_alps_csv(csv_path, table)
 
-        self._notify("log", f"Results saved to {csv_path}")
+        self._notify(Log(f"Results saved to {csv_path}"))
 
     def _write_shape_csv(self, csv_path: str, shape_name: str, alps_method: str) -> None:
         """Write CSV file for a specific ROI shape via the contract."""

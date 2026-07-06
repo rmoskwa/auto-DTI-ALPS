@@ -14,6 +14,8 @@ is never instantiated:
 
 from dataclasses import dataclass
 
+import pytest
+
 from dti_alps.gui.result_model import (
     AppendLog,
     ResetStageButtons,
@@ -25,6 +27,19 @@ from dti_alps.gui.result_model import (
     build_batch_results_table,
 )
 from dti_alps.processing.discovery import SubjectFiles
+from dti_alps.processing.messages import (
+    BatchCancelled,
+    BatchComplete,
+    BatchPartial,
+    BatchStart,
+    BatchSuccess,
+    Error,
+    Log,
+    Stage,
+    SubjectComplete,
+    SubjectStart,
+    WorkerMessage,
+)
 from dti_alps.processing.state import BatchConfig, BatchState, SubjectResult
 
 
@@ -227,16 +242,16 @@ def test_batch_lifecycle_golden():
     )
 
     messages = [
-        ("batch_start", 2),
-        ("subject_start", (0, "sub-a")),
-        ("stage", ("denoise", "running")),
-        ("stage", ("denoise", "complete")),
-        ("log", "  Auto-detected PE direction: AP"),
-        ("subject_complete", (0, FakeResult("completed"))),
-        ("subject_start", (1, "sub-b")),
-        ("subject_complete", (1, FakeResult("failed"))),
-        ("batch_complete", bs_complete),
-        ("batch_success", bs_success),
+        BatchStart(2),
+        SubjectStart(0, "sub-a"),
+        Stage("denoise", "running"),
+        Stage("denoise", "complete"),
+        Log("  Auto-detected PE direction: AP"),
+        SubjectComplete(0, FakeResult("completed")),
+        SubjectStart(1, "sub-b"),
+        SubjectComplete(1, FakeResult("failed")),
+        BatchComplete(bs_complete),
+        BatchSuccess(bs_success),
     ]
 
     assert _replay(model, messages) == [
@@ -274,8 +289,8 @@ def test_batch_partial_and_cancelled_golden():
     )
 
     messages = [
-        ("batch_partial", bs_partial),
-        ("batch_cancelled", None),
+        BatchPartial(bs_partial),
+        BatchCancelled(),
     ]
 
     assert _replay(model, messages) == [
@@ -285,34 +300,57 @@ def test_batch_partial_and_cancelled_golden():
     ]
 
 
-def test_error_survives_and_legacy_trio_is_gone():
-    """``error`` is batch-reachable and stays; the removed single-subject trio yields nothing."""
+def test_error_message_maps_to_append_log():
+    """``Error`` is batch-reachable and maps to a single log line."""
     model = ResultModel(["only"])
-
-    assert model.handle(("error", "boom")) == [AppendLog("Error: boom")]
-    # The legacy single-subject branches were deleted with their view.
-    assert model.handle(("complete", {"ALPS_left": 1.23})) == []
-    assert model.handle(("failed", None)) == []
-    assert model.handle(("cancelled", None)) == []
+    assert model.handle(Error("boom")) == [AppendLog("Error: boom")]
 
 
 def test_log_and_stage_passthrough():
     """A bare log message and a stage message map 1:1."""
     model = ResultModel([])
-    assert model.handle(("log", "hello")) == [AppendLog("hello")]
-    assert model.handle(("stage", ("roi", "running"))) == [UpdateStageStatus("roi", "running")]
+    assert model.handle(Log("hello")) == [AppendLog("hello")]
+    assert model.handle(Stage("roi", "running")) == [UpdateStageStatus("roi", "running")]
 
 
-def test_unknown_message_yields_no_intents():
-    """An unrecognized message type produces no intents (and does not raise)."""
+def test_unknown_message_raises():
+    """A value outside the closed WorkerMessage union is a loud error, not a silent drop."""
     model = ResultModel(["x"])
-    assert model.handle(("totally_unknown", 42)) == []
+    with pytest.raises(ValueError, match="unhandled worker message"):
+        model.handle(("totally_unknown", 42))
+
+
+def test_handle_accepts_every_worker_message_member():
+    """
+    Exhaustiveness guard behind the fail-fast ``case _``: constructing one of
+    every WorkerMessage member and dispatching it must not raise. A new member
+    added without a ``case`` fails here rather than at runtime in the poll loop.
+    """
+    model = ResultModel(["sub-a"])
+    batch_state = _batch("Both", [])
+    every_message = [
+        Log("x"),
+        Stage("denoise", "running"),
+        BatchStart(1),
+        SubjectStart(0, "sub-a"),
+        SubjectComplete(0, FakeResult("completed")),
+        BatchComplete(batch_state),
+        BatchSuccess(batch_state),
+        BatchPartial(batch_state),
+        BatchCancelled(),
+        Error("boom"),
+    ]
+    # The list must cover the whole union — a new member added without a line
+    # here (and thus without a ``case``) trips this assertion.
+    assert {type(m) for m in every_message} == set(WorkerMessage.__args__)
+    for message in every_message:
+        model.handle(message)  # must not raise
 
 
 def test_total_tracks_subject_count():
     """The 'i/N' strings use the subject count the model was constructed with."""
     model = ResultModel(["s1", "s2", "s3"])
-    assert model.handle(("subject_start", (0, "s1"))) == [
+    assert model.handle(SubjectStart(0, "s1")) == [
         AppendLog("Processing 1/3: s1"),
         SetRowStatus(0, "Processing", "processing"),
         ResetStageButtons(),
