@@ -94,7 +94,7 @@ ViewerModel work).
   - **FormState** — a single flat frozen dataclass: the *raw* widget values at one
     instant (booleans, strings such as `readout_raw`, the `fa_threshold` float, the
     `refine_roi` string passed through verbatim), plus three keyed collections —
-    `roi_shapes`/`output_flags` (`dict[str, bool]`) and `cli_options`
+    `roi_shape_flags`/`output_flags` (`dict[str, bool]`) and `cli_options`
     (`dict[str, dict[str, OptionState]]`). Holds raw values, never resolved config;
     all interpretation lives in the builders.
   - **OptionState** — a frozen `(enabled: bool, value: str, type: str)` for one CLI
@@ -105,7 +105,9 @@ ViewerModel work).
     replaces the `_collect_*` methods. Applies the ROI "default to sphere 3 mm when
     nothing selected" fallback, the `OutputConfig` per-key default-true, and the
     empty-string → `None` rule for the synB0 and staging dirs. Reuses
-    `resolve_readout_time`.
+    `resolve_readout_time`. The `OutputConfig` assembly is also exposed as the public
+    `collect_output_config(output_flags)`, since the adapter needs it on its own when
+    deciding whether to delete the log file, not only inside a full batch build.
   - **compute_readiness(form_state, subjects) -> Readiness** — the pure Run-button
     decision. `Readiness` carries `can_run` plus the per-condition flags
     (`has_subjects`, `all_subjects_valid`, `has_output_dir`, `readout_valid`,
