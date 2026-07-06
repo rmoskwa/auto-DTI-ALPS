@@ -16,7 +16,7 @@ from .alps_calculation import run_alps_calculation
 from .batch import BatchRunner
 from .state import BatchConfig, BatchState, OutputConfig, PipelineState, SubjectResult
 from .tool_runner import SubprocessToolRunner, ToolRunner
-from .workers import BatchWorker, PipelineWorker
+from .workers import BatchWorker
 
 __all__ = [
     "PipelineState",
@@ -25,7 +25,6 @@ __all__ = [
     "SubjectResult",
     "BatchState",
     "PipelineRunner",
-    "PipelineWorker",
     "BatchRunner",
     "BatchWorker",
 ]
