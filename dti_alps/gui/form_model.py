@@ -155,13 +155,15 @@ def _collect_roi_shapes(flags: dict[str, bool]) -> list[dict]:
     return shapes
 
 
-def _collect_output_config(flags: dict[str, bool]) -> OutputConfig:
+def collect_output_config(flags: dict[str, bool]) -> OutputConfig:
     """
     Build ``OutputConfig`` from the retention flags, per-key default-true.
 
     Only the keys the GUI exposes are read; ``b0_image`` and ``brain_mask`` are
     never surfaced, so they keep their ``OutputConfig`` defaults — matching
-    ``_collect_output_config`` exactly.
+    ``_collect_output_config`` exactly. Public because the adapter also needs the
+    output config on its own (deciding whether to delete the log file), not only
+    as part of a full ``build_batch_state``.
     """
     return OutputConfig(
         denoised_dwi=flags.get("denoised_dwi", True),
@@ -219,7 +221,7 @@ def build_batch_state(form_state: FormState, subjects: list[SubjectFiles]) -> Ba
         alps_method=form_state.alps_method,
         refine_roi_placement=form_state.refine_roi_placement,
         output_dir=form_state.output_dir,
-        output_config=_collect_output_config(form_state.output_flags),
+        output_config=collect_output_config(form_state.output_flags),
         staging_enabled=form_state.staging_enabled,
         staging_dir=form_state.staging_dir_raw or None,
     )
