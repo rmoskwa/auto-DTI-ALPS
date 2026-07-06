@@ -15,18 +15,23 @@ from ..processing.discovery import (
     new_unique_runs,
 )
 from ..processing.pipeline import (
-    BatchConfig,
     BatchRunner,
     BatchState,
     BatchWorker,
     OutputConfig,
 )
 from ..processing.validators import (
-    resolve_readout_time,
     validate_runnable,
     validate_synb0_output_dir,
 )
 from . import config
+from .form_model import (
+    FormState,
+    OptionState,
+    build_batch_state,
+    collect_output_config,
+    compute_readiness,
+)
 from .result_model import (
     AppendLog,
     BatchResultsView,
@@ -209,33 +214,73 @@ class DTIALPSApplication(tk.Tk):
 
     def _update_run_button_state(self):
         """Update Run Pipeline button state based on current inputs."""
-        # Check readout time validity when manual mode is selected
-        readout_valid = True
-        if hasattr(self, "readout_auto_var") and not self.readout_auto_var.get():
-            try:
-                float(self.readout_var.get())
-            except ValueError:
-                readout_valid = False
+        readiness = compute_readiness(self._form_state(), self.subject_files_list)
+        self.run_btn.config(state=tk.NORMAL if readiness.can_run else tk.DISABLED)
 
-        # Check all conditions for pipeline to run
-        has_subjects = len(self.subject_files_list) > 0
-        all_valid = all(s.is_valid for s in self.subject_files_list) if has_subjects else False
-        has_output_dir = bool(hasattr(self, "output_dir_var") and self.output_dir_var.get())
+    def _form_state(self) -> FormState:
+        """
+        Snapshot the Tk form widgets into a tk-free ``FormState``.
 
-        # If synB0-DISCO mode, require synB0 output directory
-        synb0_valid = True
-        if self.use_synb0.get():
-            has_synb0_dir = bool(
-                hasattr(self, "synb0_output_dir_var") and self.synb0_output_dir_var.get()
-            )
-            synb0_valid = has_synb0_dir
+        Every widget is read through a lifecycle-safe fallback: this runs from
+        the ``_update_run_button_state`` trace, which can fire during
+        construction before some widgets exist (these fallbacks replace the old
+        ``hasattr`` guards). The model always receives a fully-populated
+        snapshot, so ``form_model`` stays lifecycle-agnostic; the future Qt
+        adapter will own the analogous "widget not built yet" fallbacks.
+        """
 
-        can_run = has_subjects and all_valid and has_output_dir and readout_valid and synb0_valid
+        def _get(name, default):
+            var = getattr(self, name, None)
+            return var.get() if var is not None else default
 
-        if can_run:
-            self.run_btn.config(state=tk.NORMAL)
-        else:
-            self.run_btn.config(state=tk.DISABLED)
+        # The FA spinbox is free-text, so its DoubleVar.get() raises TclError on
+        # non-numeric content. Readiness now snapshots every field (the old
+        # button check never read FA), so guard it: an unparseable value falls
+        # back to the default rather than crashing the trace.
+        fa_var = getattr(self, "fa_threshold_var", None)
+        try:
+            fa_threshold = fa_var.get() if fa_var is not None else config.FA_THRESHOLD
+        except tk.TclError:
+            fa_threshold = config.FA_THRESHOLD
+
+        roi_shape_flags = {
+            key: var.get() for key, var in getattr(self, "roi_shape_vars", {}).items()
+        }
+        output_flags = {
+            key: var.get() for key, var in getattr(self, "output_option_vars", {}).items()
+        }
+        cli_options = {
+            stage: {
+                name: OptionState(
+                    enabled=info["enabled_var"].get(),
+                    value=info["value_var"].get(),
+                    type=info["type"],
+                )
+                for name, info in stage_vars.items()
+            }
+            for stage, stage_vars in getattr(self, "cli_option_vars", {}).items()
+        }
+
+        return FormState(
+            run_denoising=_get("run_denoising_var", True),
+            run_degibbs=_get("run_degibbs_var", True),
+            pe_direction=_get("pe_dir_var", config.DEFAULT_PE_DIRECTION),
+            auto_pe_direction=_get("pe_auto_var", True),
+            readout_auto=_get("readout_auto_var", True),
+            readout_raw=_get("readout_var", str(config.DEFAULT_READOUT_TIME)),
+            rpe_scheme=_get("rpe_var", config.DEFAULT_RPE_SCHEME),
+            use_synb0=_get("use_synb0", False),
+            synb0_output_dir_raw=_get("synb0_output_dir_var", ""),
+            fa_threshold=fa_threshold,
+            alps_method=_get("alps_method_var", config.DEFAULT_ALPS_METHOD),
+            refine_roi_placement=_get("refine_roi_var", config.DEFAULT_ROI_REFINEMENT),
+            output_dir=_get("output_dir_var", ""),
+            staging_enabled=_get("staging_enabled_var", False),
+            staging_dir_raw=_get("staging_dir_var", ""),
+            roi_shape_flags=roi_shape_flags,
+            output_flags=output_flags,
+            cli_options=cli_options,
+        )
 
     def _on_synb0_toggle(self):
         """Handle synB0-DISCO checkbox toggle - rebuild stage buttons."""
@@ -1837,36 +1882,8 @@ class DTIALPSApplication(tk.Tk):
             var.set(False)
 
     def _collect_output_config(self) -> OutputConfig:
-        """Collect output configuration from UI checkboxes."""
-        return OutputConfig(
-            denoised_dwi=self.output_option_vars.get(
-                "denoised_dwi", tk.BooleanVar(value=True)
-            ).get(),
-            degibbs_dwi=self.output_option_vars.get("degibbs_dwi", tk.BooleanVar(value=True)).get(),
-            preprocessed_dwi=self.output_option_vars.get(
-                "preprocessed_dwi", tk.BooleanVar(value=True)
-            ).get(),
-            preprocessed_bvecs=self.output_option_vars.get(
-                "preprocessed_bvecs", tk.BooleanVar(value=True)
-            ).get(),
-            tensor=self.output_option_vars.get("tensor", tk.BooleanVar(value=True)).get(),
-            fa_map=self.output_option_vars.get("fa_map", tk.BooleanVar(value=True)).get(),
-            eigenvector_maps=self.output_option_vars.get(
-                "eigenvector_maps", tk.BooleanVar(value=True)
-            ).get(),
-            fa_brain=self.output_option_vars.get("fa_brain", tk.BooleanVar(value=True)).get(),
-            affine_matrix=self.output_option_vars.get(
-                "affine_matrix", tk.BooleanVar(value=True)
-            ).get(),
-            warp_coefficients=self.output_option_vars.get(
-                "warp_coefficients", tk.BooleanVar(value=True)
-            ).get(),
-            inverse_warp=self.output_option_vars.get(
-                "inverse_warp", tk.BooleanVar(value=True)
-            ).get(),
-            roi_masks=self.output_option_vars.get("roi_masks", tk.BooleanVar(value=True)).get(),
-            log_file=self.output_option_vars.get("log_file", tk.BooleanVar(value=True)).get(),
-        )
+        """Collect output configuration from UI checkboxes (via the form model)."""
+        return collect_output_config(self._form_state().output_flags)
 
     def _create_results_frame(self):
         """Create results display frame (Stage 9)."""
@@ -1958,147 +1975,9 @@ class DTIALPSApplication(tk.Tk):
             stage_name = stages[stage_idx][1]
             self.content_frame.config(text=f"Stage {stage_idx + 1}: {stage_name}")
 
-    def _collect_roi_shapes(self) -> list[dict[str, any]]:
-        """
-        Collect selected ROI shapes from checkboxes into a list of shape dicts.
-
-        Returns
-        -------
-        list of dict
-            List of ROI shape configurations, e.g.,
-            [{'type': 'sphere', 'radius': 3.0}, {'type': 'squarev9'}]
-        """
-        shapes = []
-
-        # Map checkbox keys to shape configurations
-        shape_configs = {
-            "sphere2": {"type": "sphere", "radius": 2.0},
-            "sphere2p5": {"type": "sphere", "radius": 2.5},
-            "sphere3": {"type": "sphere", "radius": 3.0},
-            "squarev4": {"type": "squarev4"},
-            "squarev9": {"type": "squarev9"},
-        }
-
-        for key, var in self.roi_shape_vars.items():
-            if var.get():
-                shapes.append(shape_configs[key])
-
-        # If nothing selected, default to sphere 3mm
-        if not shapes:
-            shapes.append({"type": "sphere", "radius": 3.0})
-
-        return shapes
-
-    def _collect_cli_options(self, stage_prefix: str) -> dict[str, any]:
-        """
-        Collect enabled CLI options from a stage into a dictionary.
-
-        Parameters
-        ----------
-        stage_prefix : str
-            Stage prefix (e.g., "dwifslpreproc", "dwi2tensor", "tensor2metric")
-
-        Returns
-        -------
-        dict
-            Dictionary of option_name -> value for enabled options
-        """
-        options = {}
-        if not hasattr(self, "cli_option_vars"):
-            return options
-
-        stage_vars = self.cli_option_vars.get(stage_prefix, {})
-        for option_name, var_info in stage_vars.items():
-            if not var_info["enabled_var"].get():
-                continue  # Option not enabled
-
-            opt_type = var_info["type"]
-            if opt_type == "flag":
-                # Flag option: just True when enabled
-                options[option_name] = True
-            else:
-                # Value option: get the value
-                value = var_info["value_var"].get()
-                if value:  # Only add non-empty values
-                    if opt_type == "int":
-                        try:
-                            options[option_name] = int(value)
-                        except ValueError:
-                            pass  # Skip invalid int
-                    else:
-                        options[option_name] = value
-
-        return options
-
     def _collect_batch_state(self) -> BatchState:
-        """Collect all UI values into batch state."""
-        # Determine readout time (auto → resolved downstream from JSON)
-        readout_time = resolve_readout_time(
-            self.readout_auto_var.get(),
-            self.readout_var.get(),
-            config.DEFAULT_READOUT_TIME,
-        )
-
-        # Collect CLI options from each stage
-        dwidenoise_options = self._collect_cli_options("dwidenoise")
-        mrdegibbs_options = self._collect_cli_options("mrdegibbs")
-        dwifslpreproc_options = self._collect_cli_options("dwifslpreproc")
-        dwi2tensor_options = self._collect_cli_options("dwi2tensor")
-        tensor2metric_options = self._collect_cli_options("tensor2metric")
-        flirt_options = self._collect_cli_options("flirt")
-        fnirt_options = self._collect_cli_options("fnirt")
-
-        # Collect synB0 eddy options (if enabled)
-        synb0_eddy_options = self._collect_cli_options("synb0_eddy")
-
-        # Create batch config
-        batch_config = BatchConfig(
-            # Denoising parameters
-            run_denoising=self.run_denoising_var.get(),
-            dwidenoise_options=dwidenoise_options,
-            # Gibbs ringing removal parameters
-            run_degibbs=self.run_degibbs_var.get(),
-            mrdegibbs_options=mrdegibbs_options,
-            # Preprocessing parameters
-            pe_direction=self.pe_dir_var.get(),
-            auto_pe_direction=self.pe_auto_var.get(),
-            readout_time=readout_time,
-            rpe_scheme=self.rpe_var.get(),
-            # CLI options dicts from new GUI
-            dwifslpreproc_options=dwifslpreproc_options,
-            dwi2tensor_options=dwi2tensor_options,
-            tensor2metric_options=tensor2metric_options,
-            # synB0-DISCO parameters (user runs synB0 externally)
-            use_synb0=self.use_synb0.get(),
-            synb0_output_dir=(
-                self.synb0_output_dir_var.get()
-                if hasattr(self, "synb0_output_dir_var") and self.synb0_output_dir_var.get()
-                else None
-            ),
-            synb0_eddy_options=synb0_eddy_options,
-            # Registration parameters
-            flirt_options=flirt_options,
-            fnirt_options=fnirt_options,
-            # ROI placement parameters
-            roi_shapes=self._collect_roi_shapes(),
-            fa_threshold=self.fa_threshold_var.get(),
-            alps_method=self.alps_method_var.get(),
-            refine_roi_placement=self.refine_roi_var.get(),
-            # Output
-            output_dir=self.output_dir_var.get(),
-            output_config=self._collect_output_config(),
-            # Staging settings
-            staging_enabled=self.staging_enabled_var.get(),
-            staging_dir=self.staging_dir_var.get() or None,
-        )
-
-        # Create batch state
-        batch_state = BatchState(
-            config=batch_config,
-            subjects=list(self.subject_files_list),  # Copy the list
-        )
-
-        return batch_state
+        """Collect all UI values into batch state (via the form model)."""
+        return build_batch_state(self._form_state(), self.subject_files_list)
 
     def _run_pipeline(self):
         """Start batch pipeline execution."""
