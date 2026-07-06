@@ -80,6 +80,37 @@ def resolve_readout_time(auto: bool, raw: str, default: float) -> float | None:
         return default
 
 
+def is_readout_valid(auto: bool, raw: str) -> bool:
+    """
+    Decide whether the readout-time input is usable for the Run button.
+
+    This is the *readiness* policy, deliberately distinct from
+    :func:`resolve_readout_time` (the *build* policy). Here bad input **blocks**
+    the run; there bad manual input is **coerced** to a default and runs. In auto
+    mode the value is resolved downstream from the JSON sidecar, so any raw string
+    is acceptable.
+
+    Parameters
+    ----------
+    auto : bool
+        Whether auto-extraction from the JSON sidecar is enabled.
+    raw : str
+        The raw readout-time string entered in the GUI.
+
+    Returns
+    -------
+    bool
+        True in auto mode; otherwise whether ``raw`` parses as a float.
+    """
+    if auto:
+        return True
+    try:
+        float(raw)
+    except ValueError:
+        return False
+    return True
+
+
 def validate_runnable(
     subjects: list[SubjectFiles], output_dir: str
 ) -> tuple[bool, str | None, list[str] | None]:
