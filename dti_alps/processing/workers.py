@@ -8,7 +8,9 @@ via queues.
 
 import queue
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+
+from .messages import BatchCancelled, BatchPartial, BatchSuccess, Error, WorkerMessage
 
 if TYPE_CHECKING:
     from .batch import BatchRunner
@@ -48,8 +50,8 @@ class BatchWorker(threading.Thread):
         """Execute batch processing in background."""
         try:
             # Set up progress callback to send to queue
-            def progress_callback(msg_type: str, data: Any):
-                self.result_queue.put((msg_type, data))
+            def progress_callback(message: WorkerMessage):
+                self.result_queue.put(message)
 
                 # Check cancellation after each message
                 if self.cancel_event.is_set():
@@ -61,11 +63,11 @@ class BatchWorker(threading.Thread):
             success = self.batch_runner.run_batch()
 
             if self.cancel_event.is_set():
-                self.result_queue.put(("batch_cancelled", None))
+                self.result_queue.put(BatchCancelled())
             elif success:
-                self.result_queue.put(("batch_success", self.batch_runner.batch_state))
+                self.result_queue.put(BatchSuccess(self.batch_runner.batch_state))
             else:
-                self.result_queue.put(("batch_partial", self.batch_runner.batch_state))
+                self.result_queue.put(BatchPartial(self.batch_runner.batch_state))
 
         except Exception as e:
-            self.result_queue.put(("error", str(e)))
+            self.result_queue.put(Error(str(e)))

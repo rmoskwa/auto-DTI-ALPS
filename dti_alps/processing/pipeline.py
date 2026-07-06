@@ -7,13 +7,13 @@ the execution of individual pipeline stages.
 
 import os
 from collections.abc import Callable
-from typing import Any
 
 from . import commands, registration, results_layout
 from .alps_calculation import run_alps_calculation
 
 # Re-export classes for backward compatibility
 from .batch import BatchRunner
+from .messages import Log, Stage, WorkerMessage
 from .state import BatchConfig, BatchState, OutputConfig, PipelineState, SubjectResult
 from .tool_runner import SubprocessToolRunner, ToolRunner
 from .workers import BatchWorker
@@ -47,7 +47,7 @@ class PipelineRunner:
     def __init__(
         self,
         state: PipelineState,
-        progress_callback: Callable[[str, Any], None] | None = None,
+        progress_callback: Callable[[WorkerMessage], None] | None = None,
         runner: ToolRunner | None = None,
     ):
         """
@@ -58,25 +58,25 @@ class PipelineRunner:
         state : PipelineState
             Pipeline configuration and state
         progress_callback : callable, optional
-            Callback function for progress updates: callback(message_type, data)
-            message_type can be: "stage", "progress", "log", "error"
+            Callback for progress updates, receiving a single ``WorkerMessage``.
+            This runner only emits ``Log`` and ``Stage``.
         runner : ToolRunner, optional
             Seam for external command execution. Defaults to a real
             subprocess-backed runner; tests inject a fake so that every command
             this pipeline issues is captured without any toolchain installed.
         """
         self.state = state
-        self.progress_callback = progress_callback or (lambda t, d: None)
+        self.progress_callback = progress_callback or (lambda m: None)
         self.runner = runner or SubprocessToolRunner()
         self.cancelled = False
 
     def _log(self, message: str) -> None:
         """Send log message via callback."""
-        self.progress_callback("log", message)
+        self.progress_callback(Log(message))
 
     def _update_stage(self, stage: str, status: str) -> None:
         """Update stage status via callback."""
-        self.progress_callback("stage", (stage, status))
+        self.progress_callback(Stage(stage, status))
 
     def _run_command(self, cmd: list[str], stage_name: str) -> bool:
         """
