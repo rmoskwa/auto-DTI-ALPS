@@ -53,6 +53,25 @@ ViewerModel work).
   `roi_mask_glob` (viewer), so the written name and the glob that finds it
   cannot drift.
 
+## The worker message stream
+
+The typed protocol a background worker sends to the GUI. Produced in `processing/`
+(so it stays Qt-free) and consumed by [[ResultModel]]; the two share one import.
+Owned by `processing/messages.py`.
+
+- **Worker message** — one progress event on the worker→GUI queue, a frozen
+  dataclass. The closed set is the **WorkerMessage** union; the live members are the
+  batch lifecycle (`BatchStart`, `SubjectStart`, `SubjectComplete`, `BatchComplete`,
+  `BatchSuccess`, `BatchPartial`, `BatchCancelled`) plus the shared `Log`, `Stage`,
+  and `Error`. Replaces the former stringly-typed `(msg_type, data)` tuples.
+- **Closed union** — `ResultModel.handle` dispatches over the whole union and
+  **raises** on an unmembered message (no silent drop). A new member is a compile-time-
+  visible, test-caught gap, not a log line that vanishes at runtime.
+- **Single producer path** — only the batch route is live: `BatchWorker` runs a
+  `BatchRunner` whose inner `PipelineRunner` emits `Log`/`Stage`, and the worker frames
+  the batch-level messages. (The single-subject `PipelineWorker` and its
+  `complete`/`cancelled`/`failed` messages were cut — the GUI runs every job as a batch.)
+
 ## Presentation models (tk-free, GUI-side)
 
 - **ResultModel** (`gui/result_model.py`) — translates a worker-queue message into an
