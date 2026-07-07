@@ -26,22 +26,31 @@ import threading
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QButtonGroup,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QStackedWidget,
     QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from ..processing.discovery import (
     SubjectFiles,
+    discover_with_subdir_fallback,
+    new_unique_runs,
 )
 from ..processing.pipeline import (
     BatchState,
@@ -61,6 +70,7 @@ from .result_model import (
     ShowBatchResults,
     UpdateStageStatus,
 )
+from .user_config import UserConfig, get_user_config
 
 # One-line QSS for the prominent green Run button — the whole app's only styling
 # (PRD 0013, Decision 6). Disabled state greys out via the ``:disabled`` rule.
@@ -451,7 +461,277 @@ class DTIALPSApplication(QMainWindow):
         self._register_page(page_id, page)
 
     def _create_data_page(self):
-        self._placeholder("data", "Data Input — coming in region (b).")
+        """Create the batch data-input page (subjects + common params + output)."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        # --- Subject folders ---------------------------------------------- #
+        folders_group = QGroupBox("Subject Folders")
+        folders_layout = QVBoxLayout(folders_group)
+
+        instructions = QLabel(
+            "Add folders containing DWI data. Each folder should have a .nii.gz "
+            "image with matching .bvec and .bval files."
+        )
+        instructions.setWordWrap(True)
+        folders_layout.addWidget(instructions)
+
+        self.subjects_tree = QTreeWidget()
+        self.subjects_tree.setColumnCount(3)
+        self.subjects_tree.setHeaderLabels(["Subject ID", "Folder Path", "Files Found"])
+        self.subjects_tree.setRootIsDecorated(False)
+        self.subjects_tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.subjects_tree.setColumnWidth(0, 150)
+        self.subjects_tree.setColumnWidth(1, 400)
+        folders_layout.addWidget(self.subjects_tree, stretch=1)
+
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton("Add Folder...")
+        add_btn.clicked.connect(self._add_subject_folder)
+        remove_btn = QPushButton("Remove Selected")
+        remove_btn.clicked.connect(self._remove_selected_subjects)
+        clear_btn = QPushButton("Clear All")
+        clear_btn.clicked.connect(self._clear_all_subjects)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(remove_btn)
+        btn_row.addWidget(clear_btn)
+        btn_row.addStretch()
+        folders_layout.addLayout(btn_row)
+
+        layout.addWidget(folders_group, stretch=1)
+
+        # --- Common parameters -------------------------------------------- #
+        params_group = QGroupBox("Common Parameters")
+        params = QGridLayout(params_group)
+
+        # PE direction
+        params.addWidget(QLabel("PE Direction:"), 0, 0, Qt.AlignLeft)
+        self.pe_auto_check = QCheckBox("Auto from JSON")
+        self.pe_auto_check.setChecked(True)
+        self.pe_auto_check.toggled.connect(self._on_pe_auto_change)
+        params.addWidget(self.pe_auto_check, 0, 1, Qt.AlignLeft)
+        self.pe_combo = QComboBox()
+        self.pe_combo.addItems(config.PE_DIRECTIONS)
+        self.pe_combo.setCurrentText(config.DEFAULT_PE_DIRECTION)
+        self.pe_combo.setEnabled(False)  # auto mode
+        params.addWidget(self.pe_combo, 0, 2, Qt.AlignLeft)
+
+        # Readout time
+        params.addWidget(QLabel("Readout Time:"), 1, 0, Qt.AlignLeft)
+        self.readout_auto_check = QCheckBox("Auto from JSON/NIfTI")
+        self.readout_auto_check.setChecked(True)
+        self.readout_auto_check.toggled.connect(self._on_readout_auto_change)
+        params.addWidget(self.readout_auto_check, 1, 1, Qt.AlignLeft)
+        self.readout_edit = QLineEdit(str(config.DEFAULT_READOUT_TIME))
+        self.readout_edit.setEnabled(False)  # auto mode
+        self.readout_edit.textChanged.connect(self._update_run_button_state)
+        params.addWidget(self.readout_edit, 1, 2, Qt.AlignLeft)
+        params.addWidget(QLabel("(seconds)"), 1, 3, Qt.AlignLeft)
+
+        # RPE scheme
+        params.addWidget(QLabel("RPE Scheme:"), 2, 0, Qt.AlignLeft)
+        self.rpe_combo = QComboBox()
+        self.rpe_combo.addItems(list(config.RPE_SCHEMES.keys()))
+        self.rpe_combo.setCurrentText(config.DEFAULT_RPE_SCHEME)
+        self.rpe_combo.currentTextChanged.connect(self._on_rpe_combo_change)
+        params.addWidget(self.rpe_combo, 2, 1, Qt.AlignLeft)
+        self.rpe_desc_label = QLabel(config.RPE_SCHEMES.get(config.DEFAULT_RPE_SCHEME, ""))
+        params.addWidget(self.rpe_desc_label, 2, 2, 1, 3, Qt.AlignLeft)
+
+        # synB0-DISCO
+        self.synb0_check = QCheckBox("Use synB0-DISCO")
+        self.synb0_check.toggled.connect(self._on_synb0_toggle)
+        params.addWidget(self.synb0_check, 3, 0, 1, 2, Qt.AlignLeft)
+        synb0_desc = QLabel("Use pre-computed synB0-DISCO outputs instead of dwifslpreproc")
+        synb0_desc.setStyleSheet("color: gray;")
+        params.addWidget(synb0_desc, 3, 2, 1, 3, Qt.AlignLeft)
+
+        layout.addWidget(params_group)
+
+        # --- Output ------------------------------------------------------- #
+        out_group = QGroupBox("Output")
+        out = QGridLayout(out_group)
+
+        out.addWidget(QLabel("Output Directory:"), 0, 0, Qt.AlignLeft)
+        self.output_dir_edit = QLineEdit()
+        self.output_dir_edit.textChanged.connect(self._update_run_button_state)
+        out.addWidget(self.output_dir_edit, 0, 1)
+        out_browse = QPushButton("Browse...")
+        out_browse.clicked.connect(self._browse_output_dir)
+        out.addWidget(out_browse, 0, 2)
+
+        self.staging_enabled_check = QCheckBox("Stage files to local storage")
+        self.staging_enabled_check.toggled.connect(self._on_staging_toggle)
+        out.addWidget(self.staging_enabled_check, 1, 0, 1, 2, Qt.AlignLeft)
+        staging_desc = QLabel(
+            "Copy inputs to fast local disk before processing (recommended for WSL2/VM)"
+        )
+        staging_desc.setStyleSheet("color: gray;")
+        out.addWidget(staging_desc, 2, 0, 1, 3, Qt.AlignLeft)
+
+        out.addWidget(QLabel("Staging Directory:"), 3, 0, Qt.AlignLeft)
+        self.staging_dir_edit = QLineEdit()
+        self.staging_dir_edit.setEnabled(False)
+        out.addWidget(self.staging_dir_edit, 3, 1)
+        self.staging_dir_browse_btn = QPushButton("Browse...")
+        self.staging_dir_browse_btn.setEnabled(False)
+        self.staging_dir_browse_btn.clicked.connect(self._browse_staging_dir)
+        out.addWidget(self.staging_dir_browse_btn, 3, 2)
+
+        staging_note = QLabel("Leave empty to use system temp directory")
+        staging_note.setStyleSheet("color: gray;")
+        out.addWidget(staging_note, 4, 1, Qt.AlignLeft)
+        out.setColumnStretch(1, 1)
+
+        layout.addWidget(out_group)
+
+        self._register_page("data", page)
+
+    # --- Data-input handlers --------------------------------------------- #
+    def _on_pe_auto_change(self):
+        """Enable the PE combo only in manual mode."""
+        self.pe_combo.setEnabled(not self.pe_auto_check.isChecked())
+
+    def _on_readout_auto_change(self):
+        """Enable the readout entry only in manual mode."""
+        self.readout_edit.setEnabled(not self.readout_auto_check.isChecked())
+        self._update_run_button_state()
+
+    def _on_rpe_combo_change(self):
+        """Update the RPE description label."""
+        scheme = self.rpe_combo.currentText()
+        self.rpe_desc_label.setText(config.RPE_SCHEMES.get(scheme, ""))
+
+    def _on_synb0_toggle(self):
+        """Handle the synB0-DISCO checkbox: rebuild stage buttons, maybe warn."""
+        if self.synb0_check.isChecked() and len(self.subject_files_list) > 1:
+            QMessageBox.information(
+                self,
+                "synB0-DISCO Mode",
+                "Note: The same synB0-DISCO output directory will be used\n"
+                "for all subjects in the batch.\n\n"
+                "Ensure the synB0 outputs are appropriate for all subjects.",
+            )
+        self._rebuild_stage_buttons()
+        self._update_run_button_state()
+
+    def _add_subject_folder(self):
+        """Add a folder and discover all DWI runs within it."""
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_SUBJECT_FOLDER)
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder with DWI Data", initial_dir)
+        if folder:
+            user_config.set_from_path(UserConfig.KEY_SUBJECT_FOLDER, folder)
+            self._discover_and_add_folder(folder)
+
+    def _discover_and_add_folder(self, folder_path: str) -> int:
+        """
+        Discover all DWI runs in a folder and add each as a subject entry.
+
+        If no DWI files are found directly in the selected folder, checks
+        immediate subdirectories (subdir fallback). Returns the number of runs
+        added. Mirrors the Tk adapter, including the synB0 batch warning on
+        first crossing 1 -> multiple subjects.
+        """
+        try:
+            discovered_runs = discover_with_subdir_fallback(folder_path)
+
+            if not discovered_runs:
+                QMessageBox.information(
+                    self,
+                    "No Data Found",
+                    f"No DWI files with matching bvec/bval files found in:\n{folder_path}\n\n"
+                    "Also checked immediate subdirectories.",
+                )
+                return 0
+
+            count_before = len(self.subject_files_list)
+            new_runs = new_unique_runs(self.subject_files_list, discovered_runs)
+
+            for subject_files in new_runs:
+                files_found = subject_files.get_files_summary()
+                QTreeWidgetItem(
+                    self.subjects_tree,
+                    [subject_files.subject_id, subject_files.folder_path, files_found],
+                )
+                self.subject_files_list.append(subject_files)
+
+            added = len(new_runs)
+            if added > 0:
+                now_multiple = len(self.subject_files_list) > 1
+                self._log(f"Added {added} DWI run(s) from {folder_path}")
+                self._update_run_button_state()
+
+                if self.synb0_check.isChecked() and count_before <= 1 and now_multiple:
+                    QMessageBox.information(
+                        self,
+                        "synB0-DISCO Mode",
+                        "Note: The same synB0-DISCO output directory will be used\n"
+                        "for all subjects in the batch.\n\n"
+                        "Ensure the synB0 outputs are appropriate for all subjects.",
+                    )
+
+            return added
+
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Discovery Error",
+                f"Could not process folder:\n{folder_path}\n\nError: {e}",
+            )
+            return 0
+
+    def _remove_selected_subjects(self):
+        """Remove selected subjects from the list and the tree."""
+        selected = self.subjects_tree.selectedItems()
+        if not selected:
+            return
+
+        indices = sorted(
+            (self.subjects_tree.indexOfTopLevelItem(item) for item in selected),
+            reverse=True,
+        )
+        for idx in indices:
+            if 0 <= idx < len(self.subject_files_list):
+                del self.subject_files_list[idx]
+            self.subjects_tree.takeTopLevelItem(idx)
+
+        self._update_run_button_state()
+
+    def _clear_all_subjects(self):
+        """Clear all subjects from the list (with confirmation)."""
+        if not self.subject_files_list:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Confirm",
+            "Clear all subjects from the list?",
+        )
+        if reply == QMessageBox.Yes:
+            self.subject_files_list.clear()
+            self.subjects_tree.clear()
+            self._update_run_button_state()
+
+    def _browse_output_dir(self):
+        """Open a directory browser for the output directory."""
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_OUTPUT_DIR)
+        path = QFileDialog.getExistingDirectory(self, "Select Output Directory", initial_dir)
+        if path:
+            self.output_dir_edit.setText(path)
+            user_config.set_from_path(UserConfig.KEY_OUTPUT_DIR, path)
+
+    def _on_staging_toggle(self):
+        """Enable the staging directory controls only when staging is on."""
+        enabled = self.staging_enabled_check.isChecked()
+        self.staging_dir_edit.setEnabled(enabled)
+        self.staging_dir_browse_btn.setEnabled(enabled)
+
+    def _browse_staging_dir(self):
+        """Open a directory browser for the staging directory."""
+        path = QFileDialog.getExistingDirectory(self, "Select Staging Directory")
+        if path:
+            self.staging_dir_edit.setText(path)
 
     def _create_dwidenoise_page(self):
         self._placeholder("dwidenoise", "dwidenoise — coming in region (c-i).")
