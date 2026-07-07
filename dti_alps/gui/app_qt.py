@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QGridLayout,
     QGroupBox,
@@ -56,6 +57,7 @@ from ..processing.discovery import (
 from ..processing.pipeline import (
     BatchState,
 )
+from ..processing.validators import validate_synb0_output_dir
 from . import config
 from .form_model import (
     FormState,
@@ -1114,17 +1116,304 @@ class DTIALPSApplication(QMainWindow):
         content.addStretch()
         self._register_page("registration", page)
 
+    # ------------------------------------------------------------------ #
+    # Bespoke stage pages (c-ii)
+    # ------------------------------------------------------------------ #
     def _create_synb0_page(self):
-        self._placeholder("synb0", "synB0-DISCO — coming in region (c-ii).")
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(
+            QLabel(
+                "synB0-DISCO must be run externally before using this pipeline.\n"
+                "Please provide the path to your synB0-DISCO OUTPUTS directory.\n\n"
+                "Required files in the OUTPUTS directory:\n"
+                "  - topup_fieldcoef.nii.gz\n"
+                "  - topup_movpar.txt\n"
+                "  - acqparams.txt (in OUTPUTS or ../INPUTS/)"
+            )
+        )
+
+        output_group = QGroupBox("synB0-DISCO Output Directory")
+        out = QGridLayout(output_group)
+        out.addWidget(QLabel("OUTPUTS Directory:"), 0, 0, Qt.AlignLeft)
+        self.synb0_output_dir_edit = QLineEdit()
+        self.synb0_output_dir_edit.textChanged.connect(self._update_run_button_state)
+        out.addWidget(self.synb0_output_dir_edit, 0, 1)
+        synb0_browse = QPushButton("Browse...")
+        synb0_browse.clicked.connect(self._browse_synb0_output_dir)
+        out.addWidget(synb0_browse, 0, 2)
+        out.setColumnStretch(1, 1)
+        self.synb0_validation_label = QLabel("")
+        self.synb0_validation_label.setStyleSheet("color: gray;")
+        out.addWidget(self.synb0_validation_label, 1, 0, 1, 3, Qt.AlignLeft)
+        layout.addWidget(output_group)
+
+        how_group = QGroupBox("How to Run synB0-DISCO")
+        how_layout = QVBoxLayout(how_group)
+        how_text = QLabel(
+            "Run synB0-DISCO using Docker or Singularity:\n\n"
+            "docker run --rm -v /path/to/INPUTS:/INPUTS -v /path/to/OUTPUTS:/OUTPUTS \\\n"
+            "    -v /path/to/license.txt:/extra/freesurfer/license.txt \\\n"
+            "    leonyichencai/synb0-disco:v3.1\n\n"
+            "Required INPUTS:\n"
+            "  - b0.nii.gz: mean b0 image (3D)\n"
+            "  - T1.nii.gz: T1-weighted image\n"
+            "  - acqparams.txt: acquisition parameters file"
+        )
+        how_text.setStyleSheet("font-family: monospace;")
+        how_layout.addWidget(how_text)
+        layout.addWidget(how_group)
+        layout.addStretch()
+
+        self._register_page("synb0", page)
+
+    def _browse_synb0_output_dir(self):
+        """Browse for the synB0-DISCO OUTPUTS directory and validate it."""
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_SYNB0_OUTPUT_DIR)
+        path = QFileDialog.getExistingDirectory(
+            self, "Select synB0-DISCO OUTPUTS Directory", initial_dir
+        )
+        if path:
+            self.synb0_output_dir_edit.setText(path)
+            user_config.set_from_path(UserConfig.KEY_SYNB0_OUTPUT_DIR, path)
+            self._validate_synb0_output_dir(path)
+
+    def _validate_synb0_output_dir(self, path):
+        """Validate the synB0 OUTPUTS directory contents and show the result."""
+        ok, missing = validate_synb0_output_dir(path)
+        if not ok:
+            self.synb0_validation_label.setText(f"Missing: {', '.join(missing)}")
+            self.synb0_validation_label.setStyleSheet("color: red;")
+        else:
+            self.synb0_validation_label.setText("All required files found")
+            self.synb0_validation_label.setStyleSheet("color: green;")
 
     def _create_roi_page(self):
-        self._placeholder("roi", "ROI Placement — coming in region (c-ii).")
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(
+            QLabel(
+                "Configure parameters for ROI placement.\n"
+                "ROI templates are transformed to native space using the inverse warp\n"
+                "from registration, then spherical ROIs are created at the centroids."
+            )
+        )
+
+        param_group = QGroupBox("ROI Placement Parameters")
+        params = QGridLayout(param_group)
+
+        # ROI shapes
+        params.addWidget(QLabel("ROI Shapes:"), 0, 0, Qt.AlignLeft | Qt.AlignTop)
+        shapes_row = QHBoxLayout()
+        shape_labels = [
+            ("sphere2", "Sphere 2.0mm", False),
+            ("sphere2p5", "Sphere 2.5mm", False),
+            ("sphere3", "Sphere 3.0mm", True),
+            ("squarev4", "Square 2x2", False),
+            ("squarev9", "Square 3x3", False),
+        ]
+        for token, label, default in shape_labels:
+            chk = QCheckBox(label)
+            chk.setChecked(default)
+            self.roi_shape_checks[token] = chk
+            shapes_row.addWidget(chk)
+        shapes_row.addStretch()
+        shapes_container = QWidget()
+        shapes_container.setLayout(shapes_row)
+        params.addWidget(shapes_container, 0, 1, 1, 2)
+
+        # FA threshold — bounded spin box (Decision 10).
+        params.addWidget(QLabel("FA Threshold:"), 1, 0, Qt.AlignLeft)
+        self.fa_threshold_spin = QDoubleSpinBox()
+        self.fa_threshold_spin.setRange(0.0, 1.0)
+        self.fa_threshold_spin.setSingleStep(0.05)
+        self.fa_threshold_spin.setValue(config.FA_THRESHOLD)
+        params.addWidget(self.fa_threshold_spin, 1, 1, Qt.AlignLeft)
+        fa_desc = QLabel("Minimum FA value for ROI voxels (filters out CSF)")
+        fa_desc.setStyleSheet("color: gray;")
+        params.addWidget(fa_desc, 1, 2, Qt.AlignLeft)
+
+        # ALPS method
+        params.addWidget(QLabel("ALPS Method:"), 2, 0, Qt.AlignLeft)
+        self.alps_method_combo = QComboBox()
+        self.alps_method_combo.addItems(config.ALPS_METHODS)
+        self.alps_method_combo.setCurrentText(config.DEFAULT_ALPS_METHOD)
+        params.addWidget(self.alps_method_combo, 2, 1, Qt.AlignLeft)
+        alps_desc = QLabel("ALPS-LAB: tensor diagonal, ALPS-PAS: eigenvector-sorted eigenvalues")
+        alps_desc.setStyleSheet("color: gray;")
+        params.addWidget(alps_desc, 2, 2, Qt.AlignLeft)
+
+        # ROI refinement
+        params.addWidget(QLabel("ROI Refinement:"), 3, 0, Qt.AlignLeft)
+        self.refine_roi_combo = QComboBox()
+        self.refine_roi_combo.addItems(config.ROI_REFINEMENT_OPTIONS)
+        self.refine_roi_combo.setCurrentText(config.DEFAULT_ROI_REFINEMENT)
+        params.addWidget(self.refine_roi_combo, 3, 1, Qt.AlignLeft)
+        refine_desc = QLabel("Refined: ±3 X, ±2 Y, ±2 Z voxels; ±1 Y/Z drift between proj/assoc")
+        refine_desc.setStyleSheet("color: gray;")
+        params.addWidget(refine_desc, 3, 2, Qt.AlignLeft)
+
+        layout.addWidget(param_group)
+
+        info_group = QGroupBox("ROI Placement Process")
+        info_layout = QVBoxLayout(info_group)
+        info_layout.addWidget(
+            QLabel(
+                "The ROI placement process (after registration) involves:\n\n"
+                "1. Transform ROI templates to native space using inverse warp\n"
+                "2. Find centroid of each transformed mask\n"
+                "3. Optionally refine placement using fiber orientation (V1)\n"
+                "4. Create spherical ROIs at final centroid positions\n\n"
+                "ROI masks created:\n"
+                "  - Left/Right Projection (superior corona radiata)\n"
+                "  - Left/Right Association (superior longitudinal fasciculus)"
+            )
+        )
+        layout.addWidget(info_group)
+        layout.addStretch()
+
+        self._register_page("roi", page)
 
     def _create_output_setup_page(self):
-        self._placeholder("output_setup", "Output Setup — coming in region (c-ii).")
+        page, content = self._scroll_page(
+            "Configure which output files to keep after processing.\n"
+            "By default, all intermediate and final outputs are saved.\n"
+            "Uncheck files you don't need to save disk space."
+        )
+
+        sections = [
+            (
+                "Preprocessing Outputs",
+                [
+                    (
+                        "denoised_dwi",
+                        "Denoised DWI",
+                        "DWI after thermal noise removal (dwidenoise)",
+                    ),
+                    ("degibbs_dwi", "Degibbs DWI", "DWI after Gibbs ringing removal (mrdegibbs)"),
+                    (
+                        "preprocessed_dwi",
+                        "Preprocessed DWI",
+                        "Final preprocessed DWI (dwifslpreproc)",
+                    ),
+                    (
+                        "preprocessed_bvecs",
+                        "Preprocessed bvecs/bvals",
+                        "Corrected gradient directions and b-values",
+                    ),
+                ],
+            ),
+            (
+                "DTI Outputs",
+                [
+                    ("tensor", "Diffusion Tensor", "Fitted diffusion tensor image"),
+                    ("fa_map", "FA Map", "Fractional anisotropy map"),
+                    (
+                        "eigenvector_maps",
+                        "Eigenvector/eigenvalue maps",
+                        "V1, V2, V3, L1, L2, L3 maps",
+                    ),
+                ],
+            ),
+            (
+                "Registration Outputs",
+                [
+                    ("b0_image", "Averaged B0 Image", "Mean b0 image extracted from DWI"),
+                    ("brain_mask", "Brain Mask", "Brain mask from dwi2mask"),
+                    ("fa_brain", "Skull-stripped FA", "FA image after brain mask application"),
+                    ("affine_matrix", "Affine Matrix", "FLIRT linear transformation matrix"),
+                    (
+                        "warp_coefficients",
+                        "Warp Coefficients",
+                        "FNIRT non-linear warp coefficients",
+                    ),
+                    ("inverse_warp", "Inverse Warp", "Inverse warp for ROI transformation"),
+                ],
+            ),
+            (
+                "ROI & Results Outputs",
+                [
+                    ("roi_masks", "ROI Masks", "Spherical ROI masks in native space"),
+                    ("log_file", "Processing Log", "Detailed log of pipeline execution"),
+                ],
+            ),
+        ]
+        for title, options in sections:
+            group = QGroupBox(title)
+            group_layout = QVBoxLayout(group)
+            for key, display_name, description in options:
+                row = QHBoxLayout()
+                chk = QCheckBox(display_name)
+                chk.setChecked(True)
+                self.output_option_checks[key] = chk
+                row.addWidget(chk)
+                desc = QLabel(description)
+                desc.setStyleSheet("color: gray;")
+                row.addWidget(desc)
+                row.addStretch()
+                group_layout.addLayout(row)
+            content.addWidget(group)
+
+        btn_row = QHBoxLayout()
+        select_all = QPushButton("Select All")
+        select_all.clicked.connect(lambda: self._set_all_outputs(True))
+        deselect_all = QPushButton("Deselect All")
+        deselect_all.clicked.connect(lambda: self._set_all_outputs(False))
+        btn_row.addWidget(select_all)
+        btn_row.addWidget(deselect_all)
+        btn_row.addStretch()
+        content.addLayout(btn_row)
+
+        note = QLabel("Note: The ALPS results CSV is always saved.")
+        note.setStyleSheet("color: gray;")
+        content.addWidget(note)
+        content.addStretch()
+
+        self._register_page("output_setup", page)
+
+    def _set_all_outputs(self, checked: bool):
+        """Check or uncheck every output-retention checkbox."""
+        for chk in self.output_option_checks.values():
+            chk.setChecked(checked)
 
     def _create_results_page(self):
-        self._placeholder("results", "Results — coming in region (c-ii)/(d).")
+        page = QWidget()
+        self.results_page_layout = QVBoxLayout(page)
+
+        self.results_label = QLabel("Results will be displayed here after processing completes.")
+        self.results_page_layout.addWidget(self.results_label)
+
+        viewer_row = QHBoxLayout()
+        open_viewer = QPushButton("Open Results Viewer...")
+        open_viewer.clicked.connect(lambda: self._open_results_viewer())
+        viewer_row.addWidget(open_viewer)
+        viewer_note = QLabel("(View any previously processed results)")
+        viewer_note.setStyleSheet("color: gray;")
+        viewer_row.addWidget(viewer_note)
+        viewer_row.addStretch()
+        self.results_page_layout.addLayout(viewer_row)
+        self.results_page_layout.addStretch()
+
+        self._register_page("results", page)
+
+    def _open_results_viewer(self, output_folder: str | None = None):
+        """Open the results viewer in its own process.
+
+        The viewer is a Qt QMainWindow (PRD 0010) and cannot be an in-process
+        child of this window, so it is spawned as a separate process — the same
+        as the Tk app did.
+        """
+        import subprocess
+        import sys
+
+        if output_folder is None and self.batch_state:
+            output_folder = self.batch_state.config.output_dir
+
+        cmd = [sys.executable, "-m", "dti_alps", "--viewer"]
+        if output_folder:
+            cmd.append(output_folder)
+        subprocess.Popen(cmd)
 
     # ------------------------------------------------------------------ #
     # Run / cancel (live in region d)
