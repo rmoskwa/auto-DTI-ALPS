@@ -1,12 +1,52 @@
 """
-Main application window for DTI-ALPS Processing Tool.
+Main application window for DTI-ALPS Processing Tool (PySide6 adapter).
+
+The main window is a ``QMainWindow`` adapter over the **unchanged** tk-free
+models (the Tk port, PRD 0013): it reads Qt widgets into a
+:class:`~dti_alps.gui.form_model.FormState` and delegates to ``form_model``
+(``build_batch_state`` / ``compute_readiness``) on the input side, and drains the
+worker's typed :class:`~dti_alps.processing.messages.WorkerMessage` stream through
+:class:`~dti_alps.gui.result_model.ResultModel` on the output side. No
+input/output/science logic lives here.
+
+Threading: a ``QTimer`` drains the same ``queue.Queue`` the workers write to, so
+``processing/`` stays Qt-free (the headless core, CLI reanalysis, and batch paths
+never import PySide6).
+
+Two behavior differences from the former Tk window are deliberate (PRD 0013,
+Scope): the sidebar stage buttons do not recolor during a run (status coloring
+dropped, Decision 6), and there is a working Cancel button (Decision 7).
 """
 
 import queue
 import threading
-import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QButtonGroup,
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QScrollArea,
+    QStackedWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..processing import results_layout
 from ..processing.discovery import (
@@ -18,12 +58,8 @@ from ..processing.pipeline import (
     BatchRunner,
     BatchState,
     BatchWorker,
-    OutputConfig,
 )
-from ..processing.validators import (
-    validate_runnable,
-    validate_synb0_output_dir,
-)
+from ..processing.validators import validate_runnable, validate_synb0_output_dir
 from . import config
 from .form_model import (
     FormState,
@@ -43,84 +79,99 @@ from .result_model import (
 )
 from .user_config import UserConfig, get_user_config
 
+# One-line QSS for the prominent green Run button — the whole app's only styling
+# (PRD 0013, Decision 6). Disabled state greys out via the ``:disabled`` rule.
+_RUN_BUTTON_QSS = """
+QPushButton {
+    background-color: #5cb85c;
+    color: white;
+    font-weight: bold;
+    padding: 8px 20px;
+}
+QPushButton:hover:enabled { background-color: #4a9f4a; }
+QPushButton:disabled { background-color: #cccccc; color: #666666; }
+"""
 
-class DTIALPSApplication(tk.Tk):
+# Console-tree status tag -> foreground colour, mirroring the Tk viewer's
+# ``tag_configure`` map (Decision 8).
+_ROW_TAG_COLORS = {
+    "processing": config.COLORS["processing"],
+    "completed": config.COLORS["success"],
+    "failed": config.COLORS["error"],
+}
+
+
+def _qt_name_filter(filetypes: list | None) -> str:
+    """Translate Tk ``filetypes`` tuples to a Qt name-filter string.
+
+    ``[("NIfTI files", "*.nii *.nii.gz"), ("All files", "*.*")]`` becomes
+    ``"NIfTI files (*.nii *.nii.gz);;All files (*.*)"``.
     """
-    Main application window for DTI-ALPS processing.
+    if not filetypes:
+        return "All files (*.*)"
+    return ";;".join(f"{label} ({patterns})" for label, patterns in filetypes)
+
+
+class DTIALPSApplication(QMainWindow):
+    """
+    Main application window for DTI-ALPS processing (Qt adapter).
 
     Features:
-    - Pipeline stage navigation
+    - Pipeline stage navigation (checkable button column + QStackedWidget)
     - Progress tracking and logging
     - Background processing
     """
 
-    # Initial (width, anchor) for each batch-results column, keyed by the stable
-    # column key from build_batch_results_table. Widths are initial sizes on
-    # resizable columns; the key-based map intentionally
-    # collapses the former per-method subject/status widths to a single value.
+    # Initial (width, alignment) for each batch-results column, keyed by the
+    # stable column key from build_batch_results_table. Mirrors the Tk adapter's
+    # _BATCH_COLUMN_LAYOUT (Decision 8): a key-based map collapsing the former
+    # per-method subject/status widths to a single value.
     _BATCH_COLUMN_LAYOUT = {
-        "subject": (120, tk.W),
-        "lab_left": (80, tk.CENTER),
-        "lab_right": (80, tk.CENTER),
-        "lab_combined": (90, tk.CENTER),
-        "pas_left": (80, tk.CENTER),
-        "pas_right": (80, tk.CENTER),
-        "pas_combined": (90, tk.CENTER),
-        "alps_left": (100, tk.CENTER),
-        "alps_right": (100, tk.CENTER),
-        "alps_combined": (100, tk.CENTER),
-        "status": (80, tk.CENTER),
+        "subject": (120, Qt.AlignLeft),
+        "lab_left": (80, Qt.AlignCenter),
+        "lab_right": (80, Qt.AlignCenter),
+        "lab_combined": (90, Qt.AlignCenter),
+        "pas_left": (80, Qt.AlignCenter),
+        "pas_right": (80, Qt.AlignCenter),
+        "pas_combined": (90, Qt.AlignCenter),
+        "alps_left": (100, Qt.AlignCenter),
+        "alps_right": (100, Qt.AlignCenter),
+        "alps_combined": (100, Qt.AlignCenter),
+        "status": (80, Qt.AlignCenter),
     }
-    _BATCH_COLUMN_DEFAULT = (100, tk.CENTER)
+    _BATCH_COLUMN_DEFAULT = (100, Qt.AlignCenter)
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
 
-        self.title(config.APP_NAME)
-        self.geometry(f"{config.WINDOW_WIDTH}x{config.WINDOW_HEIGHT}")
-        self.minsize(config.WINDOW_MIN_WIDTH, config.WINDOW_MIN_HEIGHT)
+        self.setWindowTitle(config.APP_NAME)
+        self.resize(config.WINDOW_WIDTH, config.WINDOW_HEIGHT)
+        self.setMinimumSize(config.WINDOW_MIN_WIDTH, config.WINDOW_MIN_HEIGHT)
 
         # State
         self.current_stage = 0
         self.worker = None
         self.result_queue = None
         self.result_model = None  # Presentation model translating worker messages to intents
+        self.cancel_event: threading.Event | None = None
         self.log_file = None  # File handle for log output
+        self.log_file_path: str | None = None
 
         # Batch processing state
         self.subject_files_list: list[SubjectFiles] = []
         self.batch_state: BatchState | None = None
 
-        # Stage button visual state tracking
-        # Maps stage name from pipeline to button index(es)
-        # Default (standard mode)
-        self._stage_to_button_indices = {
-            "denoise": [1],  # dwidenoise
-            "degibbs": [2],  # mrdegibbs
-            "preproc": [3],  # dwifslpreproc
-            "dti": [4, 5],  # dwi2tensor, tensor2metric
-            "registration": [6],  # Registration
-            "roi": [7],  # ROI Placement
-            "results": [8],  # Results
-        }
+        # Per-page widgets (all pages resident in the stack); the synB0 toggle
+        # only rebuilds the stage *button* column, never the pages (Decision 6).
+        self.pages: dict[str, QWidget] = {}
+        self.stage_buttons: list[QPushButton] = []
 
-        # synB0-DISCO mode stage mapping (10 stages)
-        self._synb0_stage_to_button_indices = {
-            "denoise": [1],  # dwidenoise
-            "degibbs": [2],  # mrdegibbs
-            "synb0": [3],  # synB0-DISCO output dir
-            "eddy": [4],  # Eddy
-            "dti": [5, 6],  # dwi2tensor, tensor2metric
-            "registration": [7],  # Registration
-            "roi": [8],  # ROI Placement
-            "results": [9],  # Results
-        }
-
-        # synB0-DISCO mode flag
-        self.use_synb0 = tk.BooleanVar(value=False)
-
-        # Configure styles
-        self._setup_styles()
+        # CLI option-row handles, keyed stage -> option name (Decision 9); the Qt
+        # twin of the Tk adapter's ``cli_option_vars``. Populated in region (c-i).
+        self.cli_option_rows: dict[str, dict] = {}
+        # ROI-shape / output-retention checkboxes, populated in region (c-ii).
+        self.roi_shape_checks: dict[str, QWidget] = {}
+        self.output_option_checks: dict[str, QWidget] = {}
 
         # Build UI
         self._create_menu()
@@ -129,971 +180,498 @@ class DTIALPSApplication(tk.Tk):
 
         # Initialize first stage
         self._show_stage(0)
+        self._update_run_button_state()
 
-    def _setup_styles(self):
-        """Configure custom ttk styles."""
-        style = ttk.Style()
+    # ------------------------------------------------------------------ #
+    # Form snapshot
+    # ------------------------------------------------------------------ #
+    def _txt(self, name: str, default: str = "") -> str:
+        w = getattr(self, name, None)
+        return w.text() if w is not None else default
 
-        # Primary action button style (for Run Pipeline)
-        style.configure(
-            "Primary.TButton",
-            font=("TkDefaultFont", 11, "bold"),
-            padding=(20, 10),
-        )
-        # Map colors for different states
-        style.map(
-            "Primary.TButton",
-            background=[("disabled", "#cccccc"), ("active", "#4a9f4a"), ("!disabled", "#5cb85c")],
-            foreground=[("disabled", "#666666"), ("!disabled", "white")],
-        )
+    def _checked(self, name: str, default: bool) -> bool:
+        w = getattr(self, name, None)
+        return w.isChecked() if w is not None else default
 
-        # Stage button styles for visual status indication
-        # Processing stage - purple background
-        style.configure(
-            "Processing.TButton",
-            background=config.COLORS["processing"],
-            foreground="white",
-        )
-        style.map(
-            "Processing.TButton",
-            background=[
-                ("active", "#4A3D7A"),  # Darker purple when pressed/hovered
-                ("!disabled", config.COLORS["processing"]),
-            ],
-            foreground=[("!disabled", "white")],
-        )
-
-        # Completed stage - green background
-        style.configure(
-            "Completed.TButton",
-            background=config.COLORS["success"],
-            foreground="white",
-        )
-        style.map(
-            "Completed.TButton",
-            background=[
-                ("active", "#1E7B34"),  # Darker green when pressed/hovered
-                ("!disabled", config.COLORS["success"]),
-            ],
-            foreground=[("!disabled", "white")],
-        )
-
-    def _create_menu(self):
-        """Create menu bar."""
-        menubar = tk.Menu(self)
-        self.config(menu=menubar)
-
-        # File menu
-        file_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="Exit", command=self.quit)
-
-        # Help menu
-        help_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Help", menu=help_menu)
-        help_menu.add_command(label="About", command=self._show_about)
-
-    def _create_toolbar(self):
-        """Create toolbar with action buttons centered at top."""
-        toolbar = ttk.Frame(self, padding=5)
-        toolbar.pack(fill=tk.X, padx=5, pady=5)
-
-        # Center container for buttons
-        center_frame = ttk.Frame(toolbar)
-        center_frame.pack(expand=True)
-
-        # Action button (centered, prominent styling)
-        self.run_btn = ttk.Button(
-            center_frame,
-            text="Run Pipeline",
-            command=self._run_pipeline,
-            style="Primary.TButton",
-        )
-        self.run_btn.pack(padx=5, pady=5)
-        self.run_btn.config(state=tk.DISABLED)  # Start disabled until conditions are met
-
-    def _update_run_button_state(self):
-        """Update Run Pipeline button state based on current inputs."""
-        readiness = compute_readiness(self._form_state(), self.subject_files_list)
-        self.run_btn.config(state=tk.NORMAL if readiness.can_run else tk.DISABLED)
+    def _combo(self, name: str, default: str) -> str:
+        w = getattr(self, name, None)
+        return w.currentText() if w is not None else default
 
     def _form_state(self) -> FormState:
         """
-        Snapshot the Tk form widgets into a tk-free ``FormState``.
+        Snapshot the Qt form widgets into a tk-free ``FormState``.
 
-        Every widget is read through a lifecycle-safe fallback: this runs from
-        the ``_update_run_button_state`` trace, which can fire during
-        construction before some widgets exist (these fallbacks replace the old
-        ``hasattr`` guards). The model always receives a fully-populated
-        snapshot, so ``form_model`` stays lifecycle-agnostic; the future Qt
-        adapter will own the analogous "widget not built yet" fallbacks.
+        Every widget is read through a "not built yet" fallback so this stays
+        safe when called during construction (before later-region widgets
+        exist) — the Qt analogue of the Tk adapter's lifecycle-safe reads. The
+        model always receives a fully-populated snapshot.
+
+        Unlike the Tk snapshot there is no ``TclError`` guard for FA: FA is a
+        bounded ``QDoubleSpinBox`` (Decision 10), so ``.value()`` is always a
+        valid float. Readout stays free-text and its raw string flows through
+        unchanged, so ``compute_readiness`` still blocks Run on an invalid
+        readout.
         """
+        fa_spin = getattr(self, "fa_threshold_spin", None)
+        fa_threshold = fa_spin.value() if fa_spin is not None else config.FA_THRESHOLD
 
-        def _get(name, default):
-            var = getattr(self, name, None)
-            return var.get() if var is not None else default
-
-        # The FA spinbox is free-text, so its DoubleVar.get() raises TclError on
-        # non-numeric content. Readiness now snapshots every field (the old
-        # button check never read FA), so guard it: an unparseable value falls
-        # back to the default rather than crashing the trace.
-        fa_var = getattr(self, "fa_threshold_var", None)
-        try:
-            fa_threshold = fa_var.get() if fa_var is not None else config.FA_THRESHOLD
-        except tk.TclError:
-            fa_threshold = config.FA_THRESHOLD
-
-        roi_shape_flags = {
-            key: var.get() for key, var in getattr(self, "roi_shape_vars", {}).items()
-        }
-        output_flags = {
-            key: var.get() for key, var in getattr(self, "output_option_vars", {}).items()
-        }
+        roi_shape_flags = {key: chk.isChecked() for key, chk in self.roi_shape_checks.items()}
+        output_flags = {key: chk.isChecked() for key, chk in self.output_option_checks.items()}
         cli_options = {
             stage: {
                 name: OptionState(
-                    enabled=info["enabled_var"].get(),
-                    value=info["value_var"].get(),
-                    type=info["type"],
+                    enabled=handle["is_enabled"](),
+                    value=handle["value"](),
+                    type=handle["type"],
                 )
-                for name, info in stage_vars.items()
+                for name, handle in stage_rows.items()
             }
-            for stage, stage_vars in getattr(self, "cli_option_vars", {}).items()
+            for stage, stage_rows in self.cli_option_rows.items()
         }
 
         return FormState(
-            run_denoising=_get("run_denoising_var", True),
-            run_degibbs=_get("run_degibbs_var", True),
-            pe_direction=_get("pe_dir_var", config.DEFAULT_PE_DIRECTION),
-            auto_pe_direction=_get("pe_auto_var", True),
-            readout_auto=_get("readout_auto_var", True),
-            readout_raw=_get("readout_var", str(config.DEFAULT_READOUT_TIME)),
-            rpe_scheme=_get("rpe_var", config.DEFAULT_RPE_SCHEME),
-            use_synb0=_get("use_synb0", False),
-            synb0_output_dir_raw=_get("synb0_output_dir_var", ""),
+            run_denoising=self._checked("run_denoising_check", True),
+            run_degibbs=self._checked("run_degibbs_check", True),
+            pe_direction=self._combo("pe_combo", config.DEFAULT_PE_DIRECTION),
+            auto_pe_direction=self._checked("pe_auto_check", True),
+            readout_auto=self._checked("readout_auto_check", True),
+            readout_raw=self._txt("readout_edit", str(config.DEFAULT_READOUT_TIME)),
+            rpe_scheme=self._combo("rpe_combo", config.DEFAULT_RPE_SCHEME),
+            use_synb0=self._checked("synb0_check", False),
+            synb0_output_dir_raw=self._txt("synb0_output_dir_edit", ""),
             fa_threshold=fa_threshold,
-            alps_method=_get("alps_method_var", config.DEFAULT_ALPS_METHOD),
-            refine_roi_placement=_get("refine_roi_var", config.DEFAULT_ROI_REFINEMENT),
-            output_dir=_get("output_dir_var", ""),
-            staging_enabled=_get("staging_enabled_var", False),
-            staging_dir_raw=_get("staging_dir_var", ""),
+            alps_method=self._combo("alps_method_combo", config.DEFAULT_ALPS_METHOD),
+            refine_roi_placement=self._combo("refine_roi_combo", config.DEFAULT_ROI_REFINEMENT),
+            output_dir=self._txt("output_dir_edit", ""),
+            staging_enabled=self._checked("staging_enabled_check", False),
+            staging_dir_raw=self._txt("staging_dir_edit", ""),
             roi_shape_flags=roi_shape_flags,
             output_flags=output_flags,
             cli_options=cli_options,
         )
 
-    def _on_synb0_toggle(self):
-        """Handle synB0-DISCO checkbox toggle - rebuild stage buttons."""
-        if self.use_synb0.get():
-            # synB0 mode enabled - warn if multiple subjects exist
-            if len(self.subject_files_list) > 1:
-                messagebox.showinfo(
-                    "synB0-DISCO Mode",
-                    "Note: The same synB0-DISCO output directory will be used\n"
-                    "for all subjects in the batch.\n\n"
-                    "Ensure the synB0 outputs are appropriate for all subjects.",
-                )
-        self._rebuild_stage_buttons()
-        self._update_run_button_state()
+    def _update_run_button_state(self):
+        """Enable/disable the Run button from the current form snapshot."""
+        readiness = compute_readiness(self._form_state(), self.subject_files_list)
+        # While a run is in flight, Run stays disabled regardless of readiness.
+        running = self.worker is not None and self.worker.is_alive()
+        self.run_btn.setEnabled(readiness.can_run and not running)
 
-    def _rebuild_stage_buttons(self):
-        """Rebuild the stage buttons based on current mode (standard vs synB0)."""
-        # Determine which stages to use
-        use_synb0 = self.use_synb0.get()
-        stages = config.SYNB0_PIPELINE_STAGES if use_synb0 else config.PIPELINE_STAGES
+    # ------------------------------------------------------------------ #
+    # Menu / toolbar
+    # ------------------------------------------------------------------ #
+    def _create_menu(self):
+        """Create the menu bar (File / Help)."""
+        menubar = self.menuBar()
 
-        # Update stage to button indices mapping
-        if use_synb0:
-            self._stage_to_button_indices = self._synb0_stage_to_button_indices.copy()
-        else:
-            self._stage_to_button_indices = {
-                "denoise": [1],
-                "degibbs": [2],
-                "preproc": [3],
-                "dti": [4, 5],
-                "registration": [6],
-                "roi": [7],
-                "results": [8],
-            }
+        file_menu = menubar.addMenu("File")
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
 
-        # Remove existing stage buttons
-        for btn in self.stage_buttons:
-            btn.destroy()
-        self.stage_buttons.clear()
+        help_menu = menubar.addMenu("Help")
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self._show_about)
+        help_menu.addAction(about_action)
 
-        # Create new stage buttons in the container frame
-        for i, (_stage_id, stage_name) in enumerate(stages):
-            btn = ttk.Button(
-                self.stage_buttons_frame,
-                text=f"{i + 1}. {stage_name}",
-                command=lambda idx=i: self._show_stage(idx),
-                width=20,
-            )
-            btn.pack(pady=2, padx=5, fill=tk.X)
-            self.stage_buttons.append(btn)
+    def _create_toolbar(self):
+        """Create the centered two-button toolbar (Run + Cancel)."""
+        self.toolbar_widget = QWidget()
+        layout = QHBoxLayout(self.toolbar_widget)
+        layout.addStretch()
 
-        # Show first stage
-        self._show_stage(0)
+        self.run_btn = QPushButton("Run Pipeline")
+        self.run_btn.setStyleSheet(_RUN_BUTTON_QSS)
+        self.run_btn.clicked.connect(self._run_pipeline)
+        self.run_btn.setEnabled(False)
+        layout.addWidget(self.run_btn)
+
+        # Cancel is created here but stays inert until the run path lands (region
+        # d). Disabled except during a run (Decision 7).
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.clicked.connect(self._cancel_pipeline)
+        self.cancel_btn.setEnabled(False)
+        layout.addWidget(self.cancel_btn)
+
+        layout.addStretch()
 
     def _create_main_layout(self):
-        """Create main layout with sidebar and content area."""
-        # Main container
-        main_frame = ttk.Frame(self)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        """Create the sidebar (nav) + content stack."""
+        central = QWidget()
+        self.setCentralWidget(central)
+        outer = QVBoxLayout(central)
+        outer.addWidget(self.toolbar_widget)
 
-        # Left sidebar with Main Console and stage navigation
-        self.sidebar = ttk.Frame(main_frame, width=200)
-        self.sidebar.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
-        self.sidebar.pack_propagate(False)
+        body = QHBoxLayout()
+        outer.addLayout(body)
 
-        # Main Console button at top
-        console_label = ttk.Label(
-            self.sidebar, text="Main Console", font=("TkDefaultFont", 10, "bold")
-        )
-        console_label.pack(pady=(10, 5))
+        # Left sidebar: nav column
+        self.sidebar = QWidget()
+        self.sidebar.setFixedWidth(200)
+        sidebar_layout = QVBoxLayout(self.sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        body.addWidget(self.sidebar)
 
-        self.console_btn = ttk.Button(
-            self.sidebar,
-            text="Console",
-            command=self._show_console,
-            width=20,
-        )
-        self.console_btn.pack(pady=2, padx=5, fill=tk.X)
+        # Exclusive group so exactly one nav button is :checked at a time
+        # (native selection marks the current stage — Decision 6).
+        self.nav_group = QButtonGroup(self)
+        self.nav_group.setExclusive(True)
 
-        # Separator
-        ttk.Separator(self.sidebar, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10, padx=5)
+        # Main Console
+        sidebar_layout.addWidget(_bold(QLabel("Main Console")))
+        self.console_btn = self._nav_button("Console", self._show_console)
+        sidebar_layout.addWidget(self.console_btn)
 
-        # Pipeline Stages section
-        sidebar_label = ttk.Label(
-            self.sidebar, text="Pipeline Stages", font=("TkDefaultFont", 10, "bold")
-        )
-        sidebar_label.pack(pady=(0, 5))
+        sidebar_layout.addWidget(_hline())
 
-        # Container frame for stage buttons (allows rebuilding)
-        self.stage_buttons_frame = ttk.Frame(self.sidebar)
-        self.stage_buttons_frame.pack(fill=tk.X)
+        # Pipeline Stages
+        sidebar_layout.addWidget(_bold(QLabel("Pipeline Stages")))
+        self.stage_buttons_container = QWidget()
+        self.stage_buttons_layout = QVBoxLayout(self.stage_buttons_container)
+        self.stage_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.addWidget(self.stage_buttons_container)
+        self._build_stage_buttons()
 
-        self.stage_buttons = []
-        for i, (_stage_id, stage_name) in enumerate(config.PIPELINE_STAGES):
-            btn = ttk.Button(
-                self.stage_buttons_frame,
-                text=f"{i + 1}. {stage_name}",
-                command=lambda idx=i: self._show_stage(idx),
-                width=20,
-            )
-            btn.pack(pady=2, padx=5, fill=tk.X)
+        sidebar_layout.addWidget(_hline())
+
+        # Output Settings
+        sidebar_layout.addWidget(_bold(QLabel("Output Settings")))
+        self.output_setup_btn = self._nav_button("Output Setup", self._show_output_setup)
+        sidebar_layout.addWidget(self.output_setup_btn)
+
+        sidebar_layout.addStretch()
+
+        # Right content area: a titled group wrapping the resident page stack.
+        self.content_group = QGroupBox("Settings")
+        content_layout = QVBoxLayout(self.content_group)
+        self.content_stack = QStackedWidget()
+        content_layout.addWidget(self.content_stack)
+        body.addWidget(self.content_group, stretch=1)
+
+        # Build all pages (resident). Console first (drain target); the rest are
+        # filled in by later regions.
+        self._create_console_page()
+        self._create_data_page()
+        self._create_dwidenoise_page()
+        self._create_mrdegibbs_page()
+        self._create_dwifslpreproc_page()
+        self._create_synb0_page()
+        self._create_eddy_page()
+        self._create_dwi2tensor_page()
+        self._create_tensor2metric_page()
+        self._create_registration_page()
+        self._create_roi_page()
+        self._create_output_setup_page()
+        self._create_results_page()
+
+    def _nav_button(self, text: str, on_click) -> QPushButton:
+        """Create a checkable nav button wired into the exclusive nav group."""
+        btn = QPushButton(text)
+        btn.setCheckable(True)
+        btn.clicked.connect(on_click)
+        self.nav_group.addButton(btn)
+        return btn
+
+    def _register_page(self, page_id: str, widget: QWidget) -> QWidget:
+        """Add ``widget`` to the resident stack under ``page_id`` and return it."""
+        self.pages[page_id] = widget
+        self.content_stack.addWidget(widget)
+        return widget
+
+    # ------------------------------------------------------------------ #
+    # Stage buttons (rebuilt on synB0 toggle)
+    # ------------------------------------------------------------------ #
+    def _current_stages(self):
+        """The active stage list (standard or synB0), from the checkbox."""
+        use_synb0 = self._checked("synb0_check", False)
+        return config.SYNB0_PIPELINE_STAGES if use_synb0 else config.PIPELINE_STAGES
+
+    def _build_stage_buttons(self):
+        """Create the stage nav buttons for the current mode."""
+        for i, (_stage_id, stage_name) in enumerate(self._current_stages()):
+            btn = QPushButton(f"{i + 1}. {stage_name}")
+            btn.setCheckable(True)
+            btn.clicked.connect(lambda _checked=False, idx=i: self._show_stage(idx))
+            self.nav_group.addButton(btn)
+            self.stage_buttons_layout.addWidget(btn)
             self.stage_buttons.append(btn)
 
-        # Separator before Output Setup
-        ttk.Separator(self.sidebar, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10, padx=5)
+    def _rebuild_stage_buttons(self):
+        """Clear and recreate the stage button column for the current mode."""
+        for btn in self.stage_buttons:
+            self.nav_group.removeButton(btn)
+            self.stage_buttons_layout.removeWidget(btn)
+            btn.deleteLater()
+        self.stage_buttons.clear()
+        self._build_stage_buttons()
+        self._show_stage(0)
 
-        # Output Setup section (separate from pipeline stages)
-        output_setup_label = ttk.Label(
-            self.sidebar, text="Output Settings", font=("TkDefaultFont", 10, "bold")
-        )
-        output_setup_label.pack(pady=(0, 5))
-
-        self.output_setup_btn = ttk.Button(
-            self.sidebar,
-            text="Output Setup",
-            command=self._show_output_setup,
-            width=20,
-        )
-        self.output_setup_btn.pack(pady=2, padx=5, fill=tk.X)
-
-        # Right content area
-        right_frame = ttk.Frame(main_frame)
-        right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        # Content frame (changes with stage/console)
-        self.content_frame = ttk.LabelFrame(right_frame, text="Settings", padding=10)
-        self.content_frame.pack(fill=tk.BOTH, expand=True)
-
-        # Create console frame
-        self._create_console_frame()
-
-        # Create all stage frames (hidden initially)
-        self.stage_frames = {}
-        self._create_data_frame()
-        self._create_dwidenoise_frame()
-        self._create_mrdegibbs_frame()
-        self._create_dwifslpreproc_frame()
-        self._create_synb0_frame()
-        self._create_eddy_frame()
-        self._create_dwi2tensor_frame()
-        self._create_tensor2metric_frame()
-        self._create_registration_frame()
-        self._create_roi_frame()
-        self._create_output_setup_frame()
-        self._create_results_frame()
-
-        # Storage for CLI option variables (checkbox vars and entry vars)
-        # Initialized by _create_cli_option_row calls in frame creation
-
-    def _create_console_frame(self):
-        """Create the Main Console frame with status treeview and log output."""
-        frame = ttk.Frame(self.content_frame)
-        self.console_frame = frame
-
-        # Status section with subject treeview
-        status_frame = ttk.LabelFrame(frame, text="Processing Status", padding=10)
-        status_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
-
-        # Treeview for subject status
-        tree_frame = ttk.Frame(status_frame)
-        tree_frame.pack(fill=tk.BOTH, expand=True)
-
-        columns = ("subject_id", "status")
-        self.console_tree = ttk.Treeview(
-            tree_frame,
-            columns=columns,
-            show="headings",
-            selectmode="browse",
-            height=8,
-        )
-
-        self.console_tree.heading("subject_id", text="Subject ID")
-        self.console_tree.heading("status", text="Status")
-
-        self.console_tree.column("subject_id", width=200)
-        self.console_tree.column("status", width=150)
-
-        # Configure tags for status coloring
-        self.console_tree.tag_configure("processing", foreground=config.COLORS["processing"])
-        self.console_tree.tag_configure("completed", foreground=config.COLORS["success"])
-        self.console_tree.tag_configure("failed", foreground=config.COLORS["error"])
-
-        # Scrollbar for treeview
-        tree_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.console_tree.yview)
-        self.console_tree.configure(yscrollcommand=tree_scroll.set)
-
-        self.console_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Console output section
-        console_output_frame = ttk.LabelFrame(frame, text="Console Output", padding=10)
-        console_output_frame.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
-
-        # Log text area
-        log_frame = ttk.Frame(console_output_frame)
-        log_frame.pack(fill=tk.BOTH, expand=True)
-
-        self.log_text = tk.Text(log_frame, height=12, state=tk.DISABLED, wrap=tk.WORD)
-        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        scrollbar = ttk.Scrollbar(log_frame, command=self.log_text.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.log_text.config(yscrollcommand=scrollbar.set)
+    # ------------------------------------------------------------------ #
+    # Navigation
+    # ------------------------------------------------------------------ #
+    def _show_page(self, page_id: str, title: str, button: QPushButton | None):
+        self.content_stack.setCurrentWidget(self.pages[page_id])
+        self.content_group.setTitle(title)
+        if button is not None:
+            button.setChecked(True)
 
     def _show_console(self):
-        """Show the Main Console view."""
-        # Update button states - deselect all stage buttons and output setup
-        for btn in self.stage_buttons:
-            btn.state(["!pressed"])
-        self.console_btn.state(["pressed"])
-        self.output_setup_btn.state(["!pressed"])
-
-        # Hide all stage frames
-        for stage_frame in self.stage_frames.values():
-            stage_frame.pack_forget()
-
-        # Show console frame
-        self.console_frame.pack(fill=tk.BOTH, expand=True)
-
-        # Update frame title
-        self.content_frame.config(text="Main Console")
+        self._show_page("console", "Main Console", self.console_btn)
 
     def _show_output_setup(self):
-        """Show the Output Setup view."""
-        # Update button states - deselect console and all stage buttons
-        self.console_btn.state(["!pressed"])
-        for btn in self.stage_buttons:
-            btn.state(["!pressed"])
-        self.output_setup_btn.state(["pressed"])
+        self._show_page("output_setup", "Output Setup", self.output_setup_btn)
 
-        # Hide console frame and all stage frames
-        self.console_frame.pack_forget()
-        for frame in self.stage_frames.values():
-            frame.pack_forget()
+    def _show_stage(self, stage_idx: int):
+        """Show the pipeline stage at ``stage_idx`` for the current mode."""
+        self.current_stage = stage_idx
+        stages = self._current_stages()
+        if stage_idx >= len(stages):
+            return
+        stage_id, stage_name = stages[stage_idx]
+        button = self.stage_buttons[stage_idx] if stage_idx < len(self.stage_buttons) else None
+        self._show_page(stage_id, f"Stage {stage_idx + 1}: {stage_name}", button)
 
-        # Show output setup frame
-        frame = self.stage_frames.get("output_setup")
-        if frame:
-            frame.pack(fill=tk.BOTH, expand=True)
+    # ------------------------------------------------------------------ #
+    # Console page (drain target)
+    # ------------------------------------------------------------------ #
+    def _create_console_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
 
-        # Update frame title
-        self.content_frame.config(text="Output Setup")
+        status_group = QGroupBox("Processing Status")
+        status_layout = QVBoxLayout(status_group)
+        self.console_tree = QTreeWidget()
+        self.console_tree.setColumnCount(2)
+        self.console_tree.setHeaderLabels(["Subject ID", "Status"])
+        self.console_tree.setRootIsDecorated(False)
+        self.console_tree.setColumnWidth(0, 200)
+        status_layout.addWidget(self.console_tree)
+        layout.addWidget(status_group, stretch=1)
 
-    def _create_data_frame(self):
-        """Create batch data input frame (Stage 1)."""
-        frame = ttk.Frame(self.content_frame)
-        self.stage_frames["data"] = frame
+        output_group = QGroupBox("Console Output")
+        output_layout = QVBoxLayout(output_group)
+        self.log_text = QPlainTextEdit()
+        self.log_text.setReadOnly(True)
+        output_layout.addWidget(self.log_text)
+        layout.addWidget(output_group, stretch=1)
 
-        # Subject folders section
-        folders_frame = ttk.LabelFrame(frame, text="Subject Folders", padding=10)
-        folders_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        self._register_page("console", page)
 
-        # Instructions
-        ttk.Label(
-            folders_frame,
-            text="Add folders containing DWI data. Each folder should have a .nii.gz image "
-            "with matching .bvec and .bval files.",
-            wraplength=700,
-        ).pack(anchor=tk.W, pady=(0, 10))
+    # ------------------------------------------------------------------ #
+    # Placeholder pages (filled in by later regions)
+    # ------------------------------------------------------------------ #
+    def _placeholder(self, page_id: str, text: str):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(QLabel(text))
+        layout.addStretch()
+        self._register_page(page_id, page)
 
-        # Treeview for subject list
-        tree_frame = ttk.Frame(folders_frame)
-        tree_frame.pack(fill=tk.BOTH, expand=True)
+    def _create_data_page(self):
+        """Create the batch data-input page (subjects + common params + output)."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
 
-        columns = ("subject_id", "folder", "files")
-        self.subjects_tree = ttk.Treeview(
-            tree_frame,
-            columns=columns,
-            show="headings",
-            selectmode="extended",
-            height=8,
+        # --- Subject folders ---------------------------------------------- #
+        folders_group = QGroupBox("Subject Folders")
+        folders_layout = QVBoxLayout(folders_group)
+
+        instructions = QLabel(
+            "Add folders containing DWI data. Each folder should have a .nii.gz "
+            "image with matching .bvec and .bval files."
         )
+        instructions.setWordWrap(True)
+        folders_layout.addWidget(instructions)
 
-        self.subjects_tree.heading("subject_id", text="Subject ID")
-        self.subjects_tree.heading("folder", text="Folder Path")
-        self.subjects_tree.heading("files", text="Files Found")
+        self.subjects_tree = QTreeWidget()
+        self.subjects_tree.setColumnCount(3)
+        self.subjects_tree.setHeaderLabels(["Subject ID", "Folder Path", "Files Found"])
+        self.subjects_tree.setRootIsDecorated(False)
+        self.subjects_tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.subjects_tree.setColumnWidth(0, 150)
+        self.subjects_tree.setColumnWidth(1, 400)
+        folders_layout.addWidget(self.subjects_tree, stretch=1)
 
-        self.subjects_tree.column("subject_id", width=150)
-        self.subjects_tree.column("folder", width=400)
-        self.subjects_tree.column("files", width=170)
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton("Add Folder...")
+        add_btn.clicked.connect(self._add_subject_folder)
+        remove_btn = QPushButton("Remove Selected")
+        remove_btn.clicked.connect(self._remove_selected_subjects)
+        clear_btn = QPushButton("Clear All")
+        clear_btn.clicked.connect(self._clear_all_subjects)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(remove_btn)
+        btn_row.addWidget(clear_btn)
+        btn_row.addStretch()
+        folders_layout.addLayout(btn_row)
 
-        # Scrollbars
-        y_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.subjects_tree.yview)
-        x_scroll = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.subjects_tree.xview)
-        self.subjects_tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+        layout.addWidget(folders_group, stretch=1)
 
-        # Grid layout for tree + scrollbars
-        self.subjects_tree.grid(row=0, column=0, sticky="nsew")
-        y_scroll.grid(row=0, column=1, sticky="ns")
-        x_scroll.grid(row=1, column=0, sticky="ew")
-        tree_frame.columnconfigure(0, weight=1)
-        tree_frame.rowconfigure(0, weight=1)
+        # --- Common parameters -------------------------------------------- #
+        params_group = QGroupBox("Common Parameters")
+        params = QGridLayout(params_group)
 
-        # Buttons frame
-        btn_frame = ttk.Frame(folders_frame)
-        btn_frame.pack(fill=tk.X, pady=10)
+        # PE direction
+        params.addWidget(QLabel("PE Direction:"), 0, 0, Qt.AlignLeft)
+        self.pe_auto_check = QCheckBox("Auto from JSON")
+        self.pe_auto_check.setChecked(True)
+        self.pe_auto_check.toggled.connect(self._on_pe_auto_change)
+        params.addWidget(self.pe_auto_check, 0, 1, Qt.AlignLeft)
+        self.pe_combo = QComboBox()
+        self.pe_combo.addItems(config.PE_DIRECTIONS)
+        self.pe_combo.setCurrentText(config.DEFAULT_PE_DIRECTION)
+        self.pe_combo.setEnabled(False)  # auto mode
+        params.addWidget(self.pe_combo, 0, 2, Qt.AlignLeft)
 
-        ttk.Button(btn_frame, text="Add Folder...", command=self._add_subject_folder).pack(
-            side=tk.LEFT, padx=5
+        # Readout time
+        params.addWidget(QLabel("Readout Time:"), 1, 0, Qt.AlignLeft)
+        self.readout_auto_check = QCheckBox("Auto from JSON/NIfTI")
+        self.readout_auto_check.setChecked(True)
+        self.readout_auto_check.toggled.connect(self._on_readout_auto_change)
+        params.addWidget(self.readout_auto_check, 1, 1, Qt.AlignLeft)
+        self.readout_edit = QLineEdit(str(config.DEFAULT_READOUT_TIME))
+        self.readout_edit.setEnabled(False)  # auto mode
+        self.readout_edit.textChanged.connect(self._update_run_button_state)
+        params.addWidget(self.readout_edit, 1, 2, Qt.AlignLeft)
+        params.addWidget(QLabel("(seconds)"), 1, 3, Qt.AlignLeft)
+
+        # RPE scheme
+        params.addWidget(QLabel("RPE Scheme:"), 2, 0, Qt.AlignLeft)
+        self.rpe_combo = QComboBox()
+        self.rpe_combo.addItems(list(config.RPE_SCHEMES.keys()))
+        self.rpe_combo.setCurrentText(config.DEFAULT_RPE_SCHEME)
+        self.rpe_combo.currentTextChanged.connect(self._on_rpe_combo_change)
+        params.addWidget(self.rpe_combo, 2, 1, Qt.AlignLeft)
+        self.rpe_desc_label = QLabel(config.RPE_SCHEMES.get(config.DEFAULT_RPE_SCHEME, ""))
+        params.addWidget(self.rpe_desc_label, 2, 2, 1, 3, Qt.AlignLeft)
+
+        # synB0-DISCO
+        self.synb0_check = QCheckBox("Use synB0-DISCO")
+        self.synb0_check.toggled.connect(self._on_synb0_toggle)
+        params.addWidget(self.synb0_check, 3, 0, 1, 2, Qt.AlignLeft)
+        synb0_desc = QLabel("Use pre-computed synB0-DISCO outputs instead of dwifslpreproc")
+        synb0_desc.setStyleSheet("color: gray;")
+        params.addWidget(synb0_desc, 3, 2, 1, 3, Qt.AlignLeft)
+
+        layout.addWidget(params_group)
+
+        # --- Output ------------------------------------------------------- #
+        out_group = QGroupBox("Output")
+        out = QGridLayout(out_group)
+
+        out.addWidget(QLabel("Output Directory:"), 0, 0, Qt.AlignLeft)
+        self.output_dir_edit = QLineEdit()
+        self.output_dir_edit.textChanged.connect(self._update_run_button_state)
+        out.addWidget(self.output_dir_edit, 0, 1)
+        out_browse = QPushButton("Browse...")
+        out_browse.clicked.connect(self._browse_output_dir)
+        out.addWidget(out_browse, 0, 2)
+
+        self.staging_enabled_check = QCheckBox("Stage files to local storage")
+        self.staging_enabled_check.toggled.connect(self._on_staging_toggle)
+        out.addWidget(self.staging_enabled_check, 1, 0, 1, 2, Qt.AlignLeft)
+        staging_desc = QLabel(
+            "Copy inputs to fast local disk before processing (recommended for WSL2/VM)"
         )
-        ttk.Button(btn_frame, text="Remove Selected", command=self._remove_selected_subjects).pack(
-            side=tk.LEFT, padx=5
-        )
-        ttk.Button(btn_frame, text="Clear All", command=self._clear_all_subjects).pack(
-            side=tk.LEFT, padx=5
-        )
+        staging_desc.setStyleSheet("color: gray;")
+        out.addWidget(staging_desc, 2, 0, 1, 3, Qt.AlignLeft)
 
-        # Common parameters section
-        params_frame = ttk.LabelFrame(frame, text="Common Parameters", padding=10)
-        params_frame.pack(fill=tk.X, pady=5)
+        out.addWidget(QLabel("Staging Directory:"), 3, 0, Qt.AlignLeft)
+        self.staging_dir_edit = QLineEdit()
+        self.staging_dir_edit.setEnabled(False)
+        out.addWidget(self.staging_dir_edit, 3, 1)
+        self.staging_dir_browse_btn = QPushButton("Browse...")
+        self.staging_dir_browse_btn.setEnabled(False)
+        self.staging_dir_browse_btn.clicked.connect(self._browse_staging_dir)
+        out.addWidget(self.staging_dir_browse_btn, 3, 2)
 
-        # Row 1: PE direction with auto-extract option
-        ttk.Label(params_frame, text="PE Direction:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        staging_note = QLabel("Leave empty to use system temp directory")
+        staging_note.setStyleSheet("color: gray;")
+        out.addWidget(staging_note, 4, 1, Qt.AlignLeft)
+        out.setColumnStretch(1, 1)
 
-        self.pe_auto_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            params_frame,
-            text="Auto from JSON",
-            variable=self.pe_auto_var,
-            command=self._on_pe_auto_change,
-        ).grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        layout.addWidget(out_group)
 
-        self.pe_dir_var = tk.StringVar(value=config.DEFAULT_PE_DIRECTION)
-        self.pe_combo = ttk.Combobox(
-            params_frame,
-            textvariable=self.pe_dir_var,
-            values=config.PE_DIRECTIONS,
-            width=8,
-            state="disabled",  # Start disabled (auto mode)
-        )
-        self.pe_combo.grid(row=0, column=2, sticky=tk.W, padx=5, pady=2)
+        self._register_page("data", page)
 
-        # Row 2: Readout time with auto-extract option
-        ttk.Label(params_frame, text="Readout Time:").grid(row=1, column=0, sticky=tk.W, pady=2)
-
-        self.readout_auto_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            params_frame,
-            text="Auto from JSON/NIfTI",
-            variable=self.readout_auto_var,
-            command=self._on_readout_auto_change,
-        ).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
-
-        self.readout_var = tk.StringVar(value=str(config.DEFAULT_READOUT_TIME))
-        self.readout_var.trace_add("write", lambda *_: self._update_run_button_state())
-        self.readout_entry = ttk.Entry(params_frame, textvariable=self.readout_var, width=10)
-        self.readout_entry.grid(row=1, column=2, sticky=tk.W, padx=5, pady=2)
-        self.readout_entry.config(state=tk.DISABLED)  # Start disabled (auto mode)
-
-        ttk.Label(params_frame, text="(seconds)").grid(row=1, column=3, sticky=tk.W, pady=2)
-
-        # Row 3: RPE scheme
-        ttk.Label(params_frame, text="RPE Scheme:").grid(row=2, column=0, sticky=tk.W, pady=2)
-        self.rpe_var = tk.StringVar(value=config.DEFAULT_RPE_SCHEME)
-        rpe_combo = ttk.Combobox(
-            params_frame,
-            textvariable=self.rpe_var,
-            values=list(config.RPE_SCHEMES.keys()),
-            width=10,
-            state="readonly",
-        )
-        rpe_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
-
-        # RPE description label
-        self.rpe_desc_label = ttk.Label(
-            params_frame, text=config.RPE_SCHEMES.get(config.DEFAULT_RPE_SCHEME, "")
-        )
-        self.rpe_desc_label.grid(row=2, column=2, columnspan=4, sticky=tk.W, padx=5, pady=2)
-        rpe_combo.bind("<<ComboboxSelected>>", self._on_rpe_combo_change)
-
-        # Row 4: synB0-DISCO option (alternative to dwifslpreproc)
-        self.synb0_checkbox = ttk.Checkbutton(
-            params_frame,
-            text="Use synB0-DISCO",
-            variable=self.use_synb0,
-            command=self._on_synb0_toggle,
-        )
-        self.synb0_checkbox.grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(10, 2))
-
-        synb0_desc = ttk.Label(
-            params_frame,
-            text="Use pre-computed synB0-DISCO outputs instead of dwifslpreproc",
-            foreground="gray",
-        )
-        synb0_desc.grid(row=3, column=2, columnspan=4, sticky=tk.W, padx=5, pady=(10, 2))
-
-        # Output settings
-        out_frame = ttk.LabelFrame(frame, text="Output", padding=10)
-        out_frame.pack(fill=tk.X, pady=5)
-
-        ttk.Label(out_frame, text="Output Directory:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.output_dir_var = tk.StringVar()
-        self.output_dir_var.trace_add("write", lambda *_: self._update_run_button_state())
-        ttk.Entry(out_frame, textvariable=self.output_dir_var, width=50).grid(
-            row=0, column=1, sticky=tk.EW, padx=5, pady=2
-        )
-        ttk.Button(out_frame, text="Browse...", command=self._browse_output_dir).grid(
-            row=0, column=2, pady=2
-        )
-
-        # Staging option
-        self.staging_enabled_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            out_frame,
-            text="Stage files to local storage",
-            variable=self.staging_enabled_var,
-            command=self._on_staging_toggle,
-        ).grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
-
-        ttk.Label(
-            out_frame,
-            text="Copy inputs to fast local disk before processing (recommended for WSL2/VM)",
-            foreground="gray",
-        ).grid(row=2, column=0, columnspan=3, sticky=tk.W, padx=(20, 0), pady=(0, 2))
-
-        ttk.Label(out_frame, text="Staging Directory:").grid(row=3, column=0, sticky=tk.W, pady=2)
-        self.staging_dir_var = tk.StringVar()
-        self.staging_dir_entry = ttk.Entry(
-            out_frame, textvariable=self.staging_dir_var, width=50, state=tk.DISABLED
-        )
-        self.staging_dir_entry.grid(row=3, column=1, sticky=tk.EW, padx=5, pady=2)
-        self.staging_dir_browse_btn = ttk.Button(
-            out_frame,
-            text="Browse...",
-            command=self._browse_staging_dir,
-            state=tk.DISABLED,
-        )
-        self.staging_dir_browse_btn.grid(row=3, column=2, pady=2)
-
-        ttk.Label(
-            out_frame,
-            text="Leave empty to use system temp directory",
-            foreground="gray",
-        ).grid(row=4, column=1, sticky=tk.W, padx=5, pady=(0, 2))
-
-        out_frame.columnconfigure(1, weight=1)
-
+    # --- Data-input handlers --------------------------------------------- #
     def _on_pe_auto_change(self):
-        """Handle PE direction auto-extract checkbox change."""
-        if self.pe_auto_var.get():
-            self.pe_combo.config(state="disabled")
-        else:
-            self.pe_combo.config(state="readonly")
+        """Enable the PE combo only in manual mode."""
+        self.pe_combo.setEnabled(not self.pe_auto_check.isChecked())
 
     def _on_readout_auto_change(self):
-        """Handle readout time auto-extract checkbox change."""
-        if self.readout_auto_var.get():
-            self.readout_entry.config(state=tk.DISABLED)
-        else:
-            self.readout_entry.config(state=tk.NORMAL)
+        """Enable the readout entry only in manual mode."""
+        self.readout_edit.setEnabled(not self.readout_auto_check.isChecked())
         self._update_run_button_state()
 
-    def _on_rpe_combo_change(self, event=None):
-        """Handle RPE scheme combobox change."""
-        scheme = self.rpe_var.get()
-        desc = config.RPE_SCHEMES.get(scheme, "")
-        self.rpe_desc_label.config(text=desc)
+    def _on_rpe_combo_change(self):
+        """Update the RPE description label."""
+        scheme = self.rpe_combo.currentText()
+        self.rpe_desc_label.setText(config.RPE_SCHEMES.get(scheme, ""))
 
-    def _create_dwidenoise_frame(self):
-        """Create dwidenoise options frame (Stage 2)."""
-        frame = ttk.Frame(self.content_frame)
-        self.stage_frames["dwidenoise"] = frame
-
-        # Info text
-        info_label = ttk.Label(
-            frame,
-            text="Thermal noise removal using Marchenko-Pastur PCA denoising.",
-            justify=tk.LEFT,
-        )
-        info_label.pack(anchor=tk.W, pady=(0, 10))
-
-        # Enable/disable checkbox
-        enable_frame = ttk.Frame(frame)
-        enable_frame.pack(fill=tk.X, pady=5)
-
-        self.run_denoising_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            enable_frame,
-            text="Enable denoising (recommended)",
-            variable=self.run_denoising_var,
-        ).pack(side=tk.LEFT)
-
-        # Options frame
-        options_frame = ttk.LabelFrame(frame, text="dwidenoise Options", padding=10)
-        options_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-
-        # Column headers
-        ttk.Label(options_frame, text="", width=3).grid(row=0, column=0)
-        ttk.Label(options_frame, text="Option", width=18, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=1, sticky=tk.W
-        )
-        ttk.Label(options_frame, text="Value", width=35, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=2, sticky=tk.W
-        )
-        ttk.Label(options_frame, text="", width=8).grid(row=0, column=3)
-        ttk.Label(options_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=4, sticky=tk.W
-        )
-
-        ttk.Separator(options_frame, orient=tk.HORIZONTAL).grid(
-            row=1, column=0, columnspan=5, sticky=tk.EW, pady=5
-        )
-
-        # Create option rows from config
-        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.DWIDENOISE_OPTIONS):
-            filetypes = None
-            choices = None
-            if opt_type == "file" and "mask" in opt_name:
-                filetypes = config.NIFTI_FILETYPES
-            elif opt_type == "output":
-                filetypes = config.NIFTI_FILETYPES
-            elif opt_type == "choice":
-                if opt_name == "-datatype":
-                    choices = config.DWIDENOISE_DATATYPE_CHOICES
-                elif opt_name == "-estimator":
-                    choices = config.DWIDENOISE_ESTIMATOR_CHOICES
-
-            self._create_cli_option_row(
-                options_frame,
-                opt_name,
-                opt_type,
-                opt_desc,
-                row=i + 2,
-                stage_prefix="dwidenoise",
-                filetypes=filetypes,
-                choices=choices,
+    def _on_synb0_toggle(self):
+        """Handle the synB0-DISCO checkbox: rebuild stage buttons, maybe warn."""
+        if self.synb0_check.isChecked() and len(self.subject_files_list) > 1:
+            QMessageBox.information(
+                self,
+                "synB0-DISCO Mode",
+                "Note: The same synB0-DISCO output directory will be used\n"
+                "for all subjects in the batch.\n\n"
+                "Ensure the synB0 outputs are appropriate for all subjects.",
             )
-
-        options_frame.columnconfigure(2, weight=1)
-
-    def _create_mrdegibbs_frame(self):
-        """Create mrdegibbs options frame (Stage 3)."""
-        frame = ttk.Frame(self.content_frame)
-        self.stage_frames["mrdegibbs"] = frame
-
-        # Info text
-        info_label = ttk.Label(
-            frame,
-            text="Gibbs ringing artifact removal using local subvoxel-shifts.",
-            justify=tk.LEFT,
-        )
-        info_label.pack(anchor=tk.W, pady=(0, 10))
-
-        # Enable/disable checkbox
-        enable_frame = ttk.Frame(frame)
-        enable_frame.pack(fill=tk.X, pady=5)
-
-        self.run_degibbs_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            enable_frame,
-            text="Enable Gibbs ringing removal (recommended)",
-            variable=self.run_degibbs_var,
-        ).pack(side=tk.LEFT)
-
-        # Options frame
-        options_frame = ttk.LabelFrame(frame, text="mrdegibbs Options", padding=10)
-        options_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-
-        # Column headers
-        ttk.Label(options_frame, text="", width=3).grid(row=0, column=0)
-        ttk.Label(options_frame, text="Option", width=18, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=1, sticky=tk.W
-        )
-        ttk.Label(options_frame, text="Value", width=35, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=2, sticky=tk.W
-        )
-        ttk.Label(options_frame, text="", width=8).grid(row=0, column=3)
-        ttk.Label(options_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=4, sticky=tk.W
-        )
-
-        ttk.Separator(options_frame, orient=tk.HORIZONTAL).grid(
-            row=1, column=0, columnspan=5, sticky=tk.EW, pady=5
-        )
-
-        # Create option rows from config
-        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.MRDEGIBBS_OPTIONS):
-            filetypes = None
-            choices = None
-
-            self._create_cli_option_row(
-                options_frame,
-                opt_name,
-                opt_type,
-                opt_desc,
-                row=i + 2,
-                stage_prefix="mrdegibbs",
-                filetypes=filetypes,
-                choices=choices,
-            )
-
-        options_frame.columnconfigure(2, weight=1)
-
-    def _create_cli_option_row(
-        self,
-        parent: ttk.Frame,
-        option_name: str,
-        option_type: str,
-        description: str,
-        row: int,
-        stage_prefix: str,
-        filetypes: list | None = None,
-        choices: list | None = None,
-    ) -> None:
-        """
-        Create a CLI option row with checkbox + entry/combo + browse button.
-
-        Parameters
-        ----------
-        parent : ttk.Frame
-            Parent frame to add widgets to
-        option_name : str
-            CLI option name (e.g., "-eddy_mask")
-        option_type : str
-            Type: "file", "dir", "string", "int", "flag", "output", "prefix", "choice"
-        description : str
-            Description text shown to the right
-        row : int
-            Grid row number
-        stage_prefix : str
-            Prefix for variable storage (e.g., "dwifslpreproc")
-        filetypes : list, optional
-            File type filters for file browser
-        choices : list, optional
-            Choice values for "choice" type options
-        """
-        # Initialize option vars storage if needed
-        if not hasattr(self, "cli_option_vars"):
-            self.cli_option_vars = {}
-        if stage_prefix not in self.cli_option_vars:
-            self.cli_option_vars[stage_prefix] = {}
-
-        # Create checkbox to enable/disable option
-        enabled_var = tk.BooleanVar(value=False)
-        chk = ttk.Checkbutton(parent, variable=enabled_var)
-        chk.grid(row=row, column=0, sticky=tk.W, padx=2, pady=2)
-
-        # Option name label
-        name_label = ttk.Label(parent, text=option_name, width=18, anchor=tk.W)
-        name_label.grid(row=row, column=1, sticky=tk.W, padx=2, pady=2)
-
-        # Value entry/combo (depends on type)
-        value_var = tk.StringVar()
-        entry_widget = None
-        browse_btn = None
-
-        if option_type == "flag":
-            # Flag options have no value entry
-            entry_widget = None
-        elif option_type == "choice" and choices:
-            # Dropdown for choice options
-            entry_widget = ttk.Combobox(
-                parent, textvariable=value_var, values=choices, width=12, state="disabled"
-            )
-            entry_widget.grid(row=row, column=2, sticky=tk.W, padx=2, pady=2)
-        elif option_type in ("file", "dir", "output", "prefix"):
-            # Entry + Browse button for file/dir types
-            entry_widget = ttk.Entry(parent, textvariable=value_var, width=35, state=tk.DISABLED)
-            entry_widget.grid(row=row, column=2, sticky=tk.EW, padx=2, pady=2)
-
-            if option_type in ("file", "prefix"):
-                browse_btn = ttk.Button(
-                    parent,
-                    text="Browse...",
-                    command=lambda v=value_var, ft=filetypes: self._browse_cli_file(v, ft),
-                    state=tk.DISABLED,
-                )
-            elif option_type == "dir":
-                browse_btn = ttk.Button(
-                    parent,
-                    text="Browse...",
-                    command=lambda v=value_var: self._browse_cli_dir(v),
-                    state=tk.DISABLED,
-                )
-            elif option_type == "output":
-                browse_btn = ttk.Button(
-                    parent,
-                    text="Browse...",
-                    command=lambda v=value_var, ft=filetypes: self._browse_cli_save(
-                        v, ft or config.NIFTI_FILETYPES
-                    ),
-                    state=tk.DISABLED,
-                )
-
-            if browse_btn:
-                browse_btn.grid(row=row, column=3, padx=2, pady=2)
-        else:
-            # String/int: just an entry
-            entry_widget = ttk.Entry(parent, textvariable=value_var, width=15, state=tk.DISABLED)
-            entry_widget.grid(row=row, column=2, sticky=tk.W, padx=2, pady=2)
-
-        # Description label
-        desc_label = ttk.Label(parent, text=description, foreground="gray")
-        desc_label.grid(row=row, column=4, sticky=tk.W, padx=5, pady=2)
-
-        # Store variables for later collection
-        self.cli_option_vars[stage_prefix][option_name] = {
-            "enabled_var": enabled_var,
-            "value_var": value_var,
-            "type": option_type,
-            "entry_widget": entry_widget,
-            "browse_btn": browse_btn,
-        }
-
-        # Bind checkbox to enable/disable entry and browse button
-        def toggle_enabled(*args, ew=entry_widget, bb=browse_btn, ot=option_type):
-            if enabled_var.get():
-                if ew:
-                    if ot == "choice":
-                        ew.config(state="readonly")
-                    else:
-                        ew.config(state=tk.NORMAL)
-                if bb:
-                    bb.config(state=tk.NORMAL)
-            else:
-                if ew:
-                    ew.config(state=tk.DISABLED)
-                if bb:
-                    bb.config(state=tk.DISABLED)
-
-        enabled_var.trace_add("write", toggle_enabled)
-
-    def _browse_cli_file(self, var: tk.StringVar, filetypes: list | None):
-        """Browse for a file and set the variable."""
-        ft = filetypes or [("All files", "*.*")]
-        user_config = get_user_config()
-        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_FILE)
-        path = filedialog.askopenfilename(filetypes=ft, initialdir=initial_dir)
-        if path:
-            var.set(path)
-            user_config.set_from_path(UserConfig.KEY_CLI_FILE, path)
-
-    def _browse_cli_dir(self, var: tk.StringVar):
-        """Browse for a directory and set the variable."""
-        user_config = get_user_config()
-        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_DIR)
-        path = filedialog.askdirectory(initialdir=initial_dir)
-        if path:
-            var.set(path)
-            user_config.set_from_path(UserConfig.KEY_CLI_DIR, path)
-
-    def _browse_cli_save(self, var: tk.StringVar, filetypes: list):
-        """Browse for a save file location and set the variable."""
-        user_config = get_user_config()
-        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_SAVE)
-        path = filedialog.asksaveasfilename(filetypes=filetypes, initialdir=initial_dir)
-        if path:
-            var.set(path)
-            user_config.set_from_path(UserConfig.KEY_CLI_SAVE, path)
+        self._rebuild_stage_buttons()
+        self._update_run_button_state()
 
     def _add_subject_folder(self):
         """Add a folder and discover all DWI runs within it."""
         user_config = get_user_config()
         initial_dir = user_config.get_initial_dir(UserConfig.KEY_SUBJECT_FOLDER)
-        folder = filedialog.askdirectory(
-            title="Select Folder with DWI Data", initialdir=initial_dir
-        )
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder with DWI Data", initial_dir)
         if folder:
             user_config.set_from_path(UserConfig.KEY_SUBJECT_FOLDER, folder)
             self._discover_and_add_folder(folder)
 
     def _discover_and_add_folder(self, folder_path: str) -> int:
         """
-        Discover all DWI runs in folder and add each as a separate subject entry.
+        Discover all DWI runs in a folder and add each as a subject entry.
 
         If no DWI files are found directly in the selected folder, checks
-        immediate subdirectories for DWI data. This allows users to select a
-        parent folder containing multiple subject folders.
-
-        Returns the number of runs successfully added.
+        immediate subdirectories (subdir fallback). Returns the number of runs
+        added. Mirrors the Tk adapter, including the synB0 batch warning on
+        first crossing 1 -> multiple subjects.
         """
         try:
             discovered_runs = discover_with_subdir_fallback(folder_path)
 
             if not discovered_runs:
-                messagebox.showinfo(
+                QMessageBox.information(
+                    self,
                     "No Data Found",
                     f"No DWI files with matching bvec/bval files found in:\n{folder_path}\n\n"
                     "Also checked immediate subdirectories.",
                 )
                 return 0
 
-            # Track if we cross from <=1 to >1 subjects (for the synB0 batch warning)
             count_before = len(self.subject_files_list)
             new_runs = new_unique_runs(self.subject_files_list, discovered_runs)
 
             for subject_files in new_runs:
                 files_found = subject_files.get_files_summary()
-
-                # Add to Data Input tree (without status)
-                self.subjects_tree.insert(
-                    "",
-                    tk.END,
-                    values=(
-                        subject_files.subject_id,
-                        subject_files.folder_path,
-                        files_found,
-                    ),
+                QTreeWidgetItem(
+                    self.subjects_tree,
+                    [subject_files.subject_id, subject_files.folder_path, files_found],
                 )
-
-                # Store SubjectFiles object
                 self.subject_files_list.append(subject_files)
 
             added = len(new_runs)
             if added > 0:
                 now_multiple = len(self.subject_files_list) > 1
-
                 self._log(f"Added {added} DWI run(s) from {folder_path}")
                 self._update_run_button_state()
 
-                # Warn about synB0 batch usage when first reaching multiple subjects
-                if self.use_synb0.get() and count_before <= 1 and now_multiple:
-                    messagebox.showinfo(
+                if self.synb0_check.isChecked() and count_before <= 1 and now_multiple:
+                    QMessageBox.information(
+                        self,
                         "synB0-DISCO Mode",
                         "Note: The same synB0-DISCO output directory will be used\n"
                         "for all subjects in the batch.\n\n"
@@ -1103,155 +681,480 @@ class DTIALPSApplication(tk.Tk):
             return added
 
         except Exception as e:
-            messagebox.showwarning(
-                "Discovery Error", f"Could not process folder:\n{folder_path}\n\nError: {e}"
+            QMessageBox.warning(
+                self,
+                "Discovery Error",
+                f"Could not process folder:\n{folder_path}\n\nError: {e}",
             )
             return 0
 
     def _remove_selected_subjects(self):
-        """Remove selected subjects from the list."""
-        selected = self.subjects_tree.selection()
+        """Remove selected subjects from the list and the tree."""
+        selected = self.subjects_tree.selectedItems()
         if not selected:
             return
 
-        # Get indices to remove (reverse order to maintain indices)
-        indices_to_remove = []
-        for item in selected:
-            idx = self.subjects_tree.index(item)
-            indices_to_remove.append(idx)
-
-        # Remove from list (reverse order)
-        for idx in sorted(indices_to_remove, reverse=True):
-            del self.subject_files_list[idx]
-
-        # Remove from tree
-        for item in selected:
-            self.subjects_tree.delete(item)
+        indices = sorted(
+            (self.subjects_tree.indexOfTopLevelItem(item) for item in selected),
+            reverse=True,
+        )
+        for idx in indices:
+            if 0 <= idx < len(self.subject_files_list):
+                del self.subject_files_list[idx]
+            self.subjects_tree.takeTopLevelItem(idx)
 
         self._update_run_button_state()
 
     def _clear_all_subjects(self):
-        """Clear all subjects from the list."""
-        if self.subject_files_list:
-            if messagebox.askyesno("Confirm", "Clear all subjects from the list?"):
-                self.subject_files_list.clear()
-                for item in self.subjects_tree.get_children():
-                    self.subjects_tree.delete(item)
-                self._update_run_button_state()
-
-    def _create_dwifslpreproc_frame(self):
-        """Create dwifslpreproc options frame (Stage 2)."""
-        frame = ttk.Frame(self.content_frame)
-        self.stage_frames["dwifslpreproc"] = frame
-
-        # Info text
-        info_label = ttk.Label(
-            frame,
-            text="Configure optional CLI arguments for dwifslpreproc.\n"
-            "Core parameters (PE direction, readout time, RPE scheme) are set in Data Input.",
-            justify=tk.LEFT,
+        """Clear all subjects from the list (with confirmation)."""
+        if not self.subject_files_list:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Confirm",
+            "Clear all subjects from the list?",
         )
-        info_label.pack(anchor=tk.W, pady=(0, 10))
+        if reply == QMessageBox.Yes:
+            self.subject_files_list.clear()
+            self.subjects_tree.clear()
+            self._update_run_button_state()
 
-        # Scrollable frame for options
-        canvas = tk.Canvas(frame, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=canvas.yview)
-        options_frame = ttk.Frame(canvas)
+    def _browse_output_dir(self):
+        """Open a directory browser for the output directory."""
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_OUTPUT_DIR)
+        path = QFileDialog.getExistingDirectory(self, "Select Output Directory", initial_dir)
+        if path:
+            self.output_dir_edit.setText(path)
+            user_config.set_from_path(UserConfig.KEY_OUTPUT_DIR, path)
 
-        options_frame.bind(
-            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        canvas.create_window((0, 0), window=options_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+    def _on_staging_toggle(self):
+        """Enable the staging directory controls only when staging is on."""
+        enabled = self.staging_enabled_check.isChecked()
+        self.staging_dir_edit.setEnabled(enabled)
+        self.staging_dir_browse_btn.setEnabled(enabled)
 
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    def _browse_staging_dir(self):
+        """Open a directory browser for the staging directory."""
+        path = QFileDialog.getExistingDirectory(self, "Select Staging Directory")
+        if path:
+            self.staging_dir_edit.setText(path)
 
-        # Column headers
-        ttk.Label(options_frame, text="", width=3).grid(row=0, column=0)
-        ttk.Label(options_frame, text="Option", width=18, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=1, sticky=tk.W
-        )
-        ttk.Label(options_frame, text="Value", width=35, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=2, sticky=tk.W
-        )
-        ttk.Label(options_frame, text="", width=8).grid(row=0, column=3)
-        ttk.Label(options_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=4, sticky=tk.W
-        )
+    # ------------------------------------------------------------------ #
+    # Shared CLI-option-row builder (Decision 9)
+    # ------------------------------------------------------------------ #
+    def _cli_header(self, grid: QGridLayout):
+        """Add the aligned 5-column header + separator to a CLI-options grid."""
+        grid.addWidget(_bold(QLabel("Option")), 0, 1, Qt.AlignLeft)
+        grid.addWidget(_bold(QLabel("Value")), 0, 2, Qt.AlignLeft)
+        grid.addWidget(_bold(QLabel("Description")), 0, 4, Qt.AlignLeft)
+        grid.addWidget(_hline(), 1, 0, 1, 5)
 
-        ttk.Separator(options_frame, orient=tk.HORIZONTAL).grid(
-            row=1, column=0, columnspan=5, sticky=tk.EW, pady=5
-        )
+    def add_cli_option_row(
+        self,
+        grid: QGridLayout,
+        row: int,
+        name: str,
+        opt_type: str,
+        description: str,
+        stage_prefix: str,
+        filetypes: list | None = None,
+        choices: list | None = None,
+    ) -> dict:
+        """
+        Populate one CLI-option row in a shared grid and return its handle.
 
-        # Create option rows from config
-        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.DWIFSLPREPROC_OPTIONS):
-            filetypes = None
-            if opt_type == "file":
-                if "mask" in opt_name:
-                    filetypes = config.NIFTI_FILETYPES
-                elif "json" in opt_name:
-                    filetypes = config.JSON_FILETYPES
-                elif "slspec" in opt_name:
-                    filetypes = [("Text files", "*.txt"), ("All files", "*.*")]
+        Five aligned columns (checkbox | name | value | Browse | description) in
+        the caller's single grid, so columns line up across the header and every
+        row (Decision 9). The handle exposes ``is_enabled()``/``value()`` (value
+        always a string; int coercion stays in the model) and is registered under
+        ``cli_option_rows[stage_prefix][name]`` — the Qt twin of
+        ``cli_option_vars``.
+        """
+        self.cli_option_rows.setdefault(stage_prefix, {})
 
-            self._create_cli_option_row(
-                options_frame,
-                opt_name,
-                opt_type,
-                opt_desc,
-                row=i + 2,
-                stage_prefix="dwifslpreproc",
-                filetypes=filetypes,
+        checkbox = QCheckBox()
+        grid.addWidget(checkbox, row, 0, Qt.AlignLeft)
+        grid.addWidget(QLabel(name), row, 1, Qt.AlignLeft)
+
+        value_widget = None
+        browse_btn = None
+
+        if opt_type == "flag":
+            pass  # flags have no value widget
+        elif opt_type == "choice" and choices:
+            value_widget = QComboBox()
+            value_widget.addItems(choices)
+            value_widget.setEnabled(False)
+            grid.addWidget(value_widget, row, 2, Qt.AlignLeft)
+        elif opt_type in ("file", "dir", "output", "prefix"):
+            value_widget = QLineEdit()
+            value_widget.setEnabled(False)
+            grid.addWidget(value_widget, row, 2)
+            browse_btn = QPushButton("Browse...")
+            browse_btn.setEnabled(False)
+            if opt_type in ("file", "prefix"):
+                browse_btn.clicked.connect(
+                    lambda _c=False, v=value_widget, ft=filetypes: self._browse_cli_file(v, ft)
+                )
+            elif opt_type == "dir":
+                browse_btn.clicked.connect(lambda _c=False, v=value_widget: self._browse_cli_dir(v))
+            elif opt_type == "output":
+                browse_btn.clicked.connect(
+                    lambda _c=False, v=value_widget, ft=filetypes: self._browse_cli_save(
+                        v, ft or config.NIFTI_FILETYPES
+                    )
+                )
+            grid.addWidget(browse_btn, row, 3)
+        else:
+            value_widget = QLineEdit()
+            value_widget.setEnabled(False)
+            grid.addWidget(value_widget, row, 2, Qt.AlignLeft)
+
+        desc_label = QLabel(description)
+        desc_label.setStyleSheet("color: gray;")
+        grid.addWidget(desc_label, row, 4, Qt.AlignLeft)
+
+        def on_toggle(checked, vw=value_widget, bb=browse_btn):
+            if vw is not None:
+                vw.setEnabled(checked)
+            if bb is not None:
+                bb.setEnabled(checked)
+
+        checkbox.toggled.connect(on_toggle)
+
+        def value_getter(vw=value_widget):
+            if vw is None:
+                return ""
+            if isinstance(vw, QComboBox):
+                return vw.currentText()
+            return vw.text()
+
+        handle = {
+            "checkbox": checkbox,
+            "value_widget": value_widget,
+            "browse_btn": browse_btn,
+            "type": opt_type,
+            "is_enabled": checkbox.isChecked,
+            "value": value_getter,
+        }
+        self.cli_option_rows[stage_prefix][name] = handle
+        return handle
+
+    def _build_options_group(self, title, options, stage_prefix, resolver=None):
+        """Build a titled group box holding a header + one CLI row per option."""
+        group = QGroupBox(title)
+        grid = QGridLayout(group)
+        self._cli_header(grid)
+        for i, (name, opt_type, desc, _default) in enumerate(options):
+            filetypes, choices = resolver(name, opt_type) if resolver else (None, None)
+            self.add_cli_option_row(
+                grid, i + 2, name, opt_type, desc, stage_prefix, filetypes, choices
             )
+        grid.setColumnStretch(2, 1)
+        return group
 
-        options_frame.columnconfigure(2, weight=1)
-
-    def _create_synb0_frame(self):
-        """Create synB0-DISCO output directory selection frame."""
-        frame = ttk.Frame(self.content_frame)
-        self.stage_frames["synb0"] = frame
-
-        # Info text
-        info_label = ttk.Label(
-            frame,
-            text="synB0-DISCO must be run externally before using this pipeline.\n"
-            "Please provide the path to your synB0-DISCO OUTPUTS directory.\n\n"
-            "Required files in the OUTPUTS directory:\n"
-            "  - topup_fieldcoef.nii.gz\n"
-            "  - topup_movpar.txt\n"
-            "  - acqparams.txt (in OUTPUTS or ../INPUTS/)",
-            justify=tk.LEFT,
+    def _browse_cli_file(self, value_widget, filetypes):
+        """Browse for a file and set the value widget."""
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_FILE)
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select File", initial_dir, _qt_name_filter(filetypes)
         )
-        info_label.pack(anchor=tk.W, pady=(0, 10))
+        if path:
+            value_widget.setText(path)
+            user_config.set_from_path(UserConfig.KEY_CLI_FILE, path)
 
-        # synB0 output directory selection
-        output_frame = ttk.LabelFrame(frame, text="synB0-DISCO Output Directory", padding=10)
-        output_frame.pack(fill=tk.X, pady=5)
+    def _browse_cli_dir(self, value_widget):
+        """Browse for a directory and set the value widget."""
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_DIR)
+        path = QFileDialog.getExistingDirectory(self, "Select Directory", initial_dir)
+        if path:
+            value_widget.setText(path)
+            user_config.set_from_path(UserConfig.KEY_CLI_DIR, path)
 
-        ttk.Label(output_frame, text="OUTPUTS Directory:").grid(
-            row=0, column=0, sticky=tk.W, pady=2
+    def _browse_cli_save(self, value_widget, filetypes):
+        """Browse for a save-file location and set the value widget."""
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_SAVE)
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Select Output File", initial_dir, _qt_name_filter(filetypes)
         )
-        self.synb0_output_dir_var = tk.StringVar()
-        self.synb0_output_dir_var.trace_add("write", lambda *_: self._update_run_button_state())
-        ttk.Entry(output_frame, textvariable=self.synb0_output_dir_var, width=50).grid(
-            row=0, column=1, sticky=tk.EW, padx=5, pady=2
+        if path:
+            value_widget.setText(path)
+            user_config.set_from_path(UserConfig.KEY_CLI_SAVE, path)
+
+    def _scroll_page(self, info_text: str):
+        """A page with an info label above a vertical-scrolling content area."""
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        if info_text:
+            info = QLabel(info_text)
+            info.setWordWrap(True)
+            outer.addWidget(info)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        scroll.setWidget(content)
+        outer.addWidget(scroll, stretch=1)
+        return page, content_layout
+
+    # ------------------------------------------------------------------ #
+    # CLI-row stage pages (c-i)
+    # ------------------------------------------------------------------ #
+    def _create_dwidenoise_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(QLabel("Thermal noise removal using Marchenko-Pastur PCA denoising."))
+
+        self.run_denoising_check = QCheckBox("Enable denoising (recommended)")
+        self.run_denoising_check.setChecked(True)
+        layout.addWidget(self.run_denoising_check)
+
+        def resolver(name, t):
+            if t == "file" and "mask" in name:
+                return config.NIFTI_FILETYPES, None
+            if t == "output":
+                return config.NIFTI_FILETYPES, None
+            if t == "choice" and name == "-datatype":
+                return None, config.DWIDENOISE_DATATYPE_CHOICES
+            if t == "choice" and name == "-estimator":
+                return None, config.DWIDENOISE_ESTIMATOR_CHOICES
+            return None, None
+
+        layout.addWidget(
+            self._build_options_group(
+                "dwidenoise Options", config.DWIDENOISE_OPTIONS, "dwidenoise", resolver
+            ),
+            stretch=1,
         )
-        ttk.Button(output_frame, text="Browse...", command=self._browse_synb0_output_dir).grid(
-            row=0, column=2, pady=2
+        self._register_page("dwidenoise", page)
+
+    def _create_mrdegibbs_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(QLabel("Gibbs ringing artifact removal using local subvoxel-shifts."))
+
+        self.run_degibbs_check = QCheckBox("Enable Gibbs ringing removal (recommended)")
+        self.run_degibbs_check.setChecked(True)
+        layout.addWidget(self.run_degibbs_check)
+
+        layout.addWidget(
+            self._build_options_group("mrdegibbs Options", config.MRDEGIBBS_OPTIONS, "mrdegibbs"),
+            stretch=1,
+        )
+        self._register_page("mrdegibbs", page)
+
+    def _create_dwifslpreproc_page(self):
+        page, content = self._scroll_page(
+            "Configure optional CLI arguments for dwifslpreproc.\n"
+            "Core parameters (PE direction, readout time, RPE scheme) are set in Data Input."
         )
 
-        output_frame.columnconfigure(1, weight=1)
+        def resolver(name, t):
+            if t == "file":
+                if "mask" in name:
+                    return config.NIFTI_FILETYPES, None
+                if "json" in name:
+                    return config.JSON_FILETYPES, None
+                if "slspec" in name:
+                    return [("Text files", "*.txt"), ("All files", "*.*")], None
+            return None, None
 
-        # Validation status
-        self.synb0_validation_label = ttk.Label(output_frame, text="", foreground="gray")
-        self.synb0_validation_label.grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=5)
+        content.addWidget(
+            self._build_options_group(
+                "dwifslpreproc Options",
+                config.DWIFSLPREPROC_OPTIONS,
+                "dwifslpreproc",
+                resolver,
+            )
+        )
+        content.addStretch()
+        self._register_page("dwifslpreproc", page)
 
-        # Info about running synB0-DISCO
-        info_frame = ttk.LabelFrame(frame, text="How to Run synB0-DISCO", padding=10)
-        info_frame.pack(fill=tk.X, pady=5)
+    def _create_eddy_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(
+            QLabel(
+                "Configure FSL eddy for motion and distortion correction.\n"
+                "Eddy will use the topup outputs from your synB0-DISCO run."
+            )
+        )
 
-        info_text = (
+        def resolver(name, t):
+            if name == "slm":
+                return None, config.SYNB0_EDDY_SLM_CHOICES
+            return None, None
+
+        layout.addWidget(
+            self._build_options_group(
+                "Eddy Options", config.SYNB0_EDDY_OPTIONS, "synb0_eddy", resolver
+            ),
+            stretch=1,
+        )
+
+        # Pre-enable repol (recommended), mirroring the Tk default.
+        repol = self.cli_option_rows.get("synb0_eddy", {}).get("repol")
+        if repol:
+            repol["checkbox"].setChecked(True)
+
+        self._register_page("eddy", page)
+
+    def _create_dwi2tensor_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(
+            QLabel(
+                "Configure optional CLI arguments for dwi2tensor (DTI fitting).\n"
+                "The diffusion tensor will be computed from the preprocessed DWI data."
+            )
+        )
+
+        def resolver(name, t):
+            if t == "file" and "mask" in name:
+                return config.NIFTI_FILETYPES, None
+            if t == "output":
+                return config.NIFTI_FILETYPES, None
+            return None, None
+
+        layout.addWidget(
+            self._build_options_group(
+                "dwi2tensor Options", config.DWI2TENSOR_OPTIONS, "dwi2tensor", resolver
+            ),
+            stretch=1,
+        )
+        self._register_page("dwi2tensor", page)
+
+    def _create_tensor2metric_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(
+            QLabel(
+                "Configure optional CLI arguments for tensor2metric (metric extraction).\n"
+                "FA and V1 are always computed (required for ALPS analysis).\n"
+                "Additional metrics can be enabled below."
+            )
+        )
+
+        def resolver(name, t):
+            if t == "file" and "mask" in name:
+                return config.NIFTI_FILETYPES, None
+            if t == "output":
+                return config.NIFTI_FILETYPES, None
+            if t == "choice" and name == "-modulate":
+                return None, config.TENSOR2METRIC_MODULATE_CHOICES
+            return None, None
+
+        layout.addWidget(
+            self._build_options_group(
+                "tensor2metric Options",
+                config.TENSOR2METRIC_OPTIONS,
+                "tensor2metric",
+                resolver,
+            ),
+            stretch=1,
+        )
+        self._register_page("tensor2metric", page)
+
+    def _create_registration_page(self):
+        page, content = self._scroll_page(
+            "Configure parameters for FA-to-template registration.\n"
+            "This step registers the subject FA map to the JHU-ICBM template\n"
+            "using dwi2mask for brain extraction and FSL tools (FLIRT/FNIRT) for registration."
+        )
+
+        # Brain extraction (dwi2mask) info panel — static text, no options.
+        dwi2mask_group = QGroupBox("Brain Extraction (dwi2mask)")
+        dwi2mask_layout = QVBoxLayout(dwi2mask_group)
+        dwi2mask_info = QLabel(
+            "Brain extraction is performed automatically using MRtrix3's dwi2mask.\n"
+            "This method extracts a brain mask directly from the preprocessed DWI data,\n"
+            "which is more reliable for diffusion images than traditional T1-based methods.\n\n"
+            "The brain mask is then applied to the FA map before registration."
+        )
+        dwi2mask_layout.addWidget(dwi2mask_info)
+        details = QGridLayout()
+        details.addWidget(_bold(QLabel("Input:")), 0, 0, Qt.AlignLeft)
+        details.addWidget(QLabel("Preprocessed DWI with bvecs/bvals"), 0, 1, Qt.AlignLeft)
+        details.addWidget(_bold(QLabel("Output:")), 1, 0, Qt.AlignLeft)
+        details.addWidget(QLabel("Binary brain mask applied to FA"), 1, 1, Qt.AlignLeft)
+        details.addWidget(_bold(QLabel("Validation:")), 2, 0, Qt.AlignLeft)
+        details.addWidget(
+            QLabel("Pipeline fails if no b0 volumes found in DWI data"), 2, 1, Qt.AlignLeft
+        )
+        details.setColumnStretch(1, 1)
+        dwi2mask_layout.addLayout(details)
+        content.addWidget(dwi2mask_group)
+
+        def flirt_resolver(name, t):
+            if name == "-dof":
+                return None, config.FLIRT_DOF_CHOICES
+            if name == "-cost":
+                return None, config.FLIRT_COST_CHOICES
+            if name == "-interp":
+                return None, config.FLIRT_INTERP_CHOICES
+            return None, None
+
+        content.addWidget(
+            self._build_options_group(
+                "FLIRT (Linear Registration)", config.FLIRT_OPTIONS, "flirt", flirt_resolver
+            )
+        )
+
+        def fnirt_resolver(name, t):
+            if name == "--intmod":
+                return None, config.FNIRT_INTMOD_CHOICES
+            return None, None
+
+        content.addWidget(
+            self._build_options_group(
+                "FNIRT (Non-linear Registration)",
+                config.FNIRT_OPTIONS,
+                "fnirt",
+                fnirt_resolver,
+            )
+        )
+        content.addStretch()
+        self._register_page("registration", page)
+
+    # ------------------------------------------------------------------ #
+    # Bespoke stage pages (c-ii)
+    # ------------------------------------------------------------------ #
+    def _create_synb0_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(
+            QLabel(
+                "synB0-DISCO must be run externally before using this pipeline.\n"
+                "Please provide the path to your synB0-DISCO OUTPUTS directory.\n\n"
+                "Required files in the OUTPUTS directory:\n"
+                "  - topup_fieldcoef.nii.gz\n"
+                "  - topup_movpar.txt\n"
+                "  - acqparams.txt (in OUTPUTS or ../INPUTS/)"
+            )
+        )
+
+        output_group = QGroupBox("synB0-DISCO Output Directory")
+        out = QGridLayout(output_group)
+        out.addWidget(QLabel("OUTPUTS Directory:"), 0, 0, Qt.AlignLeft)
+        self.synb0_output_dir_edit = QLineEdit()
+        self.synb0_output_dir_edit.textChanged.connect(self._update_run_button_state)
+        out.addWidget(self.synb0_output_dir_edit, 0, 1)
+        synb0_browse = QPushButton("Browse...")
+        synb0_browse.clicked.connect(self._browse_synb0_output_dir)
+        out.addWidget(synb0_browse, 0, 2)
+        out.setColumnStretch(1, 1)
+        self.synb0_validation_label = QLabel("")
+        self.synb0_validation_label.setStyleSheet("color: gray;")
+        out.addWidget(self.synb0_validation_label, 1, 0, 1, 3, Qt.AlignLeft)
+        layout.addWidget(output_group)
+
+        how_group = QGroupBox("How to Run synB0-DISCO")
+        how_layout = QVBoxLayout(how_group)
+        how_text = QLabel(
             "Run synB0-DISCO using Docker or Singularity:\n\n"
             "docker run --rm -v /path/to/INPUTS:/INPUTS -v /path/to/OUTPUTS:/OUTPUTS \\\n"
             "    -v /path/to/license.txt:/extra/freesurfer/license.txt \\\n"
@@ -1261,774 +1164,308 @@ class DTIALPSApplication(tk.Tk):
             "  - T1.nii.gz: T1-weighted image\n"
             "  - acqparams.txt: acquisition parameters file"
         )
-        ttk.Label(info_frame, text=info_text, justify=tk.LEFT, font=("Courier", 9)).pack(
-            anchor=tk.W
-        )
+        how_text.setStyleSheet("font-family: monospace;")
+        how_layout.addWidget(how_text)
+        layout.addWidget(how_group)
+        layout.addStretch()
 
-    def _create_eddy_frame(self):
-        """Create eddy options frame for synB0 mode."""
-        frame = ttk.Frame(self.content_frame)
-        self.stage_frames["eddy"] = frame
-
-        # Info text
-        info_label = ttk.Label(
-            frame,
-            text="Configure FSL eddy for motion and distortion correction.\n"
-            "Eddy will use the topup outputs from your synB0-DISCO run.",
-            justify=tk.LEFT,
-        )
-        info_label.pack(anchor=tk.W, pady=(0, 10))
-
-        # Eddy options section
-        eddy_frame = ttk.LabelFrame(frame, text="Eddy Options", padding=10)
-        eddy_frame.pack(fill=tk.X, pady=5)
-
-        # Column headers
-        headers_frame = ttk.Frame(eddy_frame)
-        headers_frame.pack(fill=tk.X)
-        ttk.Label(headers_frame, text="", width=3).grid(row=0, column=0)
-        ttk.Label(headers_frame, text="Option", width=12, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=1, sticky=tk.W
-        )
-        ttk.Label(headers_frame, text="Value", width=20, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=2, sticky=tk.W
-        )
-        ttk.Label(headers_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=3, sticky=tk.W
-        )
-
-        ttk.Separator(eddy_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
-
-        eddy_opts_frame = ttk.Frame(eddy_frame)
-        eddy_opts_frame.pack(fill=tk.X)
-
-        for i, (opt_name, opt_type, opt_desc, default) in enumerate(config.SYNB0_EDDY_OPTIONS):
-            choices = None
-            if opt_name == "slm":
-                choices = config.SYNB0_EDDY_SLM_CHOICES
-
-            self._create_cli_option_row(
-                eddy_opts_frame,
-                opt_name,
-                opt_type,
-                opt_desc,
-                row=i,
-                stage_prefix="synb0_eddy",
-                choices=choices,
-            )
-
-            # Pre-enable repol option (recommended)
-            if opt_name == "repol" and default:
-                if hasattr(self, "cli_option_vars"):
-                    opt_info = self.cli_option_vars.get("synb0_eddy", {}).get(opt_name)
-                    if opt_info:
-                        opt_info["enabled_var"].set(True)
+        self._register_page("synb0", page)
 
     def _browse_synb0_output_dir(self):
-        """Browse for synB0-DISCO output directory."""
+        """Browse for the synB0-DISCO OUTPUTS directory and validate it."""
         user_config = get_user_config()
         initial_dir = user_config.get_initial_dir(UserConfig.KEY_SYNB0_OUTPUT_DIR)
-        path = filedialog.askdirectory(
-            title="Select synB0-DISCO OUTPUTS Directory", initialdir=initial_dir
+        path = QFileDialog.getExistingDirectory(
+            self, "Select synB0-DISCO OUTPUTS Directory", initial_dir
         )
         if path:
-            self.synb0_output_dir_var.set(path)
+            self.synb0_output_dir_edit.setText(path)
             user_config.set_from_path(UserConfig.KEY_SYNB0_OUTPUT_DIR, path)
             self._validate_synb0_output_dir(path)
 
     def _validate_synb0_output_dir(self, path):
-        """Validate synB0-DISCO output directory contents."""
+        """Validate the synB0 OUTPUTS directory contents and show the result."""
         ok, missing = validate_synb0_output_dir(path)
         if not ok:
-            self.synb0_validation_label.config(
-                text=f"Missing: {', '.join(missing)}", foreground="red"
-            )
+            self.synb0_validation_label.setText(f"Missing: {', '.join(missing)}")
+            self.synb0_validation_label.setStyleSheet("color: red;")
         else:
-            self.synb0_validation_label.config(text="All required files found", foreground="green")
+            self.synb0_validation_label.setText("All required files found")
+            self.synb0_validation_label.setStyleSheet("color: green;")
 
-    def _create_dwi2tensor_frame(self):
-        """Create dwi2tensor options frame (Stage 3)."""
-        frame = ttk.Frame(self.content_frame)
-        self.stage_frames["dwi2tensor"] = frame
-
-        # Info text
-        info_label = ttk.Label(
-            frame,
-            text="Configure optional CLI arguments for dwi2tensor (DTI fitting).\n"
-            "The diffusion tensor will be computed from the preprocessed DWI data.",
-            justify=tk.LEFT,
-        )
-        info_label.pack(anchor=tk.W, pady=(0, 10))
-
-        # Options frame
-        options_frame = ttk.LabelFrame(frame, text="dwi2tensor Options", padding=10)
-        options_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-
-        # Column headers
-        ttk.Label(options_frame, text="", width=3).grid(row=0, column=0)
-        ttk.Label(options_frame, text="Option", width=18, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=1, sticky=tk.W
-        )
-        ttk.Label(options_frame, text="Value", width=35, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=2, sticky=tk.W
-        )
-        ttk.Label(options_frame, text="", width=8).grid(row=0, column=3)
-        ttk.Label(options_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=4, sticky=tk.W
-        )
-
-        ttk.Separator(options_frame, orient=tk.HORIZONTAL).grid(
-            row=1, column=0, columnspan=5, sticky=tk.EW, pady=5
-        )
-
-        # Create option rows from config
-        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.DWI2TENSOR_OPTIONS):
-            filetypes = None
-            if opt_type == "file" and "mask" in opt_name:
-                filetypes = config.NIFTI_FILETYPES
-            elif opt_type == "output":
-                filetypes = config.NIFTI_FILETYPES
-
-            self._create_cli_option_row(
-                options_frame,
-                opt_name,
-                opt_type,
-                opt_desc,
-                row=i + 2,
-                stage_prefix="dwi2tensor",
-                filetypes=filetypes,
+    def _create_roi_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(
+            QLabel(
+                "Configure parameters for ROI placement.\n"
+                "ROI templates are transformed to native space using the inverse warp\n"
+                "from registration, then spherical ROIs are created at the centroids."
             )
-
-        options_frame.columnconfigure(2, weight=1)
-
-    def _create_tensor2metric_frame(self):
-        """Create tensor2metric options frame (Stage 4)."""
-        frame = ttk.Frame(self.content_frame)
-        self.stage_frames["tensor2metric"] = frame
-
-        # Info text
-        info_label = ttk.Label(
-            frame,
-            text="Configure optional CLI arguments for tensor2metric (metric extraction).\n"
-            "FA and V1 are always computed (required for ALPS analysis).\n"
-            "Additional metrics can be enabled below.",
-            justify=tk.LEFT,
-        )
-        info_label.pack(anchor=tk.W, pady=(0, 10))
-
-        # Options frame
-        options_frame = ttk.LabelFrame(frame, text="tensor2metric Options", padding=10)
-        options_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-
-        # Column headers
-        ttk.Label(options_frame, text="", width=3).grid(row=0, column=0)
-        ttk.Label(options_frame, text="Option", width=18, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=1, sticky=tk.W
-        )
-        ttk.Label(options_frame, text="Value", width=35, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=2, sticky=tk.W
-        )
-        ttk.Label(options_frame, text="", width=8).grid(row=0, column=3)
-        ttk.Label(options_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=4, sticky=tk.W
         )
 
-        ttk.Separator(options_frame, orient=tk.HORIZONTAL).grid(
-            row=1, column=0, columnspan=5, sticky=tk.EW, pady=5
-        )
+        param_group = QGroupBox("ROI Placement Parameters")
+        params = QGridLayout(param_group)
 
-        # Create option rows from config
-        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.TENSOR2METRIC_OPTIONS):
-            filetypes = None
-            choices = None
-            if opt_type == "file" and "mask" in opt_name:
-                filetypes = config.NIFTI_FILETYPES
-            elif opt_type == "output":
-                filetypes = config.NIFTI_FILETYPES
-            elif opt_type == "choice" and opt_name == "-modulate":
-                choices = config.TENSOR2METRIC_MODULATE_CHOICES
+        # ROI shapes
+        params.addWidget(QLabel("ROI Shapes:"), 0, 0, Qt.AlignLeft | Qt.AlignTop)
+        shapes_row = QHBoxLayout()
+        shape_labels = [
+            ("sphere2", "Sphere 2.0mm", False),
+            ("sphere2p5", "Sphere 2.5mm", False),
+            ("sphere3", "Sphere 3.0mm", True),
+            ("squarev4", "Square 2x2", False),
+            ("squarev9", "Square 3x3", False),
+        ]
+        for token, label, default in shape_labels:
+            chk = QCheckBox(label)
+            chk.setChecked(default)
+            self.roi_shape_checks[token] = chk
+            shapes_row.addWidget(chk)
+        shapes_row.addStretch()
+        shapes_container = QWidget()
+        shapes_container.setLayout(shapes_row)
+        params.addWidget(shapes_container, 0, 1, 1, 2)
 
-            self._create_cli_option_row(
-                options_frame,
-                opt_name,
-                opt_type,
-                opt_desc,
-                row=i + 2,
-                stage_prefix="tensor2metric",
-                filetypes=filetypes,
-                choices=choices,
+        # FA threshold — bounded spin box (Decision 10).
+        params.addWidget(QLabel("FA Threshold:"), 1, 0, Qt.AlignLeft)
+        self.fa_threshold_spin = QDoubleSpinBox()
+        self.fa_threshold_spin.setRange(0.0, 1.0)
+        self.fa_threshold_spin.setSingleStep(0.05)
+        self.fa_threshold_spin.setValue(config.FA_THRESHOLD)
+        params.addWidget(self.fa_threshold_spin, 1, 1, Qt.AlignLeft)
+        fa_desc = QLabel("Minimum FA value for ROI voxels (filters out CSF)")
+        fa_desc.setStyleSheet("color: gray;")
+        params.addWidget(fa_desc, 1, 2, Qt.AlignLeft)
+
+        # ALPS method
+        params.addWidget(QLabel("ALPS Method:"), 2, 0, Qt.AlignLeft)
+        self.alps_method_combo = QComboBox()
+        self.alps_method_combo.addItems(config.ALPS_METHODS)
+        self.alps_method_combo.setCurrentText(config.DEFAULT_ALPS_METHOD)
+        params.addWidget(self.alps_method_combo, 2, 1, Qt.AlignLeft)
+        alps_desc = QLabel("ALPS-LAB: tensor diagonal, ALPS-PAS: eigenvector-sorted eigenvalues")
+        alps_desc.setStyleSheet("color: gray;")
+        params.addWidget(alps_desc, 2, 2, Qt.AlignLeft)
+
+        # ROI refinement
+        params.addWidget(QLabel("ROI Refinement:"), 3, 0, Qt.AlignLeft)
+        self.refine_roi_combo = QComboBox()
+        self.refine_roi_combo.addItems(config.ROI_REFINEMENT_OPTIONS)
+        self.refine_roi_combo.setCurrentText(config.DEFAULT_ROI_REFINEMENT)
+        params.addWidget(self.refine_roi_combo, 3, 1, Qt.AlignLeft)
+        refine_desc = QLabel("Refined: ±3 X, ±2 Y, ±2 Z voxels; ±1 Y/Z drift between proj/assoc")
+        refine_desc.setStyleSheet("color: gray;")
+        params.addWidget(refine_desc, 3, 2, Qt.AlignLeft)
+
+        layout.addWidget(param_group)
+
+        info_group = QGroupBox("ROI Placement Process")
+        info_layout = QVBoxLayout(info_group)
+        info_layout.addWidget(
+            QLabel(
+                "The ROI placement process (after registration) involves:\n\n"
+                "1. Transform ROI templates to native space using inverse warp\n"
+                "2. Find centroid of each transformed mask\n"
+                "3. Optionally refine placement using fiber orientation (V1)\n"
+                "4. Create spherical ROIs at final centroid positions\n\n"
+                "ROI masks created:\n"
+                "  - Left/Right Projection (superior corona radiata)\n"
+                "  - Left/Right Association (superior longitudinal fasciculus)"
             )
-
-        options_frame.columnconfigure(2, weight=1)
-
-    def _create_registration_frame(self):
-        """Create registration parameters frame (Stage 7)."""
-        frame = ttk.Frame(self.content_frame)
-        self.stage_frames["registration"] = frame
-
-        # Info text
-        info_label = ttk.Label(
-            frame,
-            text="Configure parameters for FA-to-template registration.\n"
-            "This step registers the subject FA map to the JHU-ICBM template\n"
-            "using dwi2mask for brain extraction and FSL tools (FLIRT/FNIRT) for registration.",
-            justify=tk.LEFT,
         )
-        info_label.pack(anchor=tk.W, pady=(0, 10))
+        layout.addWidget(info_group)
+        layout.addStretch()
 
-        # Scrollable frame for options
-        canvas = tk.Canvas(frame, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
+        self._register_page("roi", page)
 
-        scrollable_frame.bind(
-            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # dwi2mask info panel (brain extraction)
-        dwi2mask_frame = ttk.LabelFrame(
-            scrollable_frame, text="Brain Extraction (dwi2mask)", padding=10
-        )
-        dwi2mask_frame.pack(fill=tk.X, pady=5, padx=5)
-
-        # Info text about dwi2mask
-        dwi2mask_info = ttk.Label(
-            dwi2mask_frame,
-            text="Brain extraction is performed automatically using MRtrix3's dwi2mask.\n"
-            "This method extracts a brain mask directly from the preprocessed DWI data,\n"
-            "which is more reliable for diffusion images than traditional T1-based methods.\n\n"
-            "The brain mask is then applied to the FA map before registration.",
-            justify=tk.LEFT,
-        )
-        dwi2mask_info.pack(anchor=tk.W, pady=5)
-
-        # Technical details
-        details_frame = ttk.Frame(dwi2mask_frame)
-        details_frame.pack(fill=tk.X, pady=5)
-
-        ttk.Label(details_frame, text="Input:", font=("TkDefaultFont", 9, "bold"), width=12).grid(
-            row=0, column=0, sticky=tk.W
-        )
-        ttk.Label(details_frame, text="Preprocessed DWI with bvecs/bvals").grid(
-            row=0, column=1, sticky=tk.W
-        )
-
-        ttk.Label(details_frame, text="Output:", font=("TkDefaultFont", 9, "bold"), width=12).grid(
-            row=1, column=0, sticky=tk.W
-        )
-        ttk.Label(details_frame, text="Binary brain mask applied to FA").grid(
-            row=1, column=1, sticky=tk.W
-        )
-
-        ttk.Label(
-            details_frame, text="Validation:", font=("TkDefaultFont", 9, "bold"), width=12
-        ).grid(row=2, column=0, sticky=tk.W)
-        ttk.Label(details_frame, text="Pipeline fails if no b0 volumes found in DWI data").grid(
-            row=2, column=1, sticky=tk.W
-        )
-
-        # FLIRT options
-        flirt_frame = ttk.LabelFrame(
-            scrollable_frame, text="FLIRT (Linear Registration)", padding=10
-        )
-        flirt_frame.pack(fill=tk.X, pady=5, padx=5)
-
-        # Column headers for FLIRT
-        ttk.Label(flirt_frame, text="", width=3).grid(row=0, column=0)
-        ttk.Label(flirt_frame, text="Option", width=12, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=1, sticky=tk.W
-        )
-        ttk.Label(flirt_frame, text="Value", width=20, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=2, sticky=tk.W
-        )
-        ttk.Label(flirt_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=3, sticky=tk.W
-        )
-
-        ttk.Separator(flirt_frame, orient=tk.HORIZONTAL).grid(
-            row=1, column=0, columnspan=4, sticky=tk.EW, pady=5
-        )
-
-        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.FLIRT_OPTIONS):
-            choices = None
-            if opt_name == "-dof":
-                choices = config.FLIRT_DOF_CHOICES
-            elif opt_name == "-cost":
-                choices = config.FLIRT_COST_CHOICES
-            elif opt_name == "-interp":
-                choices = config.FLIRT_INTERP_CHOICES
-
-            self._create_cli_option_row(
-                flirt_frame,
-                opt_name,
-                opt_type,
-                opt_desc,
-                row=i + 2,
-                stage_prefix="flirt",
-                choices=choices,
-            )
-
-        # FNIRT options
-        fnirt_frame = ttk.LabelFrame(
-            scrollable_frame, text="FNIRT (Non-linear Registration)", padding=10
-        )
-        fnirt_frame.pack(fill=tk.X, pady=5, padx=5)
-
-        # Column headers for FNIRT
-        ttk.Label(fnirt_frame, text="", width=3).grid(row=0, column=0)
-        ttk.Label(fnirt_frame, text="Option", width=12, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=1, sticky=tk.W
-        )
-        ttk.Label(fnirt_frame, text="Value", width=20, font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=2, sticky=tk.W
-        )
-        ttk.Label(fnirt_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
-            row=0, column=3, sticky=tk.W
-        )
-
-        ttk.Separator(fnirt_frame, orient=tk.HORIZONTAL).grid(
-            row=1, column=0, columnspan=4, sticky=tk.EW, pady=5
-        )
-
-        for i, (opt_name, opt_type, opt_desc, _default) in enumerate(config.FNIRT_OPTIONS):
-            choices = None
-            if opt_name == "--intmod":
-                choices = config.FNIRT_INTMOD_CHOICES
-
-            self._create_cli_option_row(
-                fnirt_frame,
-                opt_name,
-                opt_type,
-                opt_desc,
-                row=i + 2,
-                stage_prefix="fnirt",
-                choices=choices,
-            )
-
-    def _create_roi_frame(self):
-        """Create ROI placement parameters frame (Stage 8)."""
-        frame = ttk.Frame(self.content_frame)
-        self.stage_frames["roi"] = frame
-
-        info_label = ttk.Label(
-            frame,
-            text="Configure parameters for ROI placement.\n"
-            "ROI templates are transformed to native space using the inverse warp\n"
-            "from registration, then spherical ROIs are created at the centroids.",
-            justify=tk.LEFT,
-        )
-        info_label.pack(anchor=tk.W, pady=10)
-
-        # Parameters
-        param_frame = ttk.LabelFrame(frame, text="ROI Placement Parameters", padding=10)
-        param_frame.pack(fill=tk.X, pady=5)
-
-        # ROI shape selection
-        row = 0
-        ttk.Label(param_frame, text="ROI Shapes:").grid(row=row, column=0, sticky=tk.NW, pady=5)
-
-        # Frame for ROI shape checkboxes
-        roi_shapes_frame = ttk.Frame(param_frame)
-        roi_shapes_frame.grid(row=row, column=1, columnspan=2, sticky=tk.W, padx=5)
-
-        # ROI shape checkbox variables
-        self.roi_shape_vars = {
-            "sphere2": tk.BooleanVar(value=False),
-            "sphere2p5": tk.BooleanVar(value=False),
-            "sphere3": tk.BooleanVar(value=True),  # Default selected
-            "squarev4": tk.BooleanVar(value=False),
-            "squarev9": tk.BooleanVar(value=False),
-        }
-
-        # Create checkboxes for each ROI shape
-        ttk.Checkbutton(
-            roi_shapes_frame, text="Sphere 2.0mm", variable=self.roi_shape_vars["sphere2"]
-        ).pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Checkbutton(
-            roi_shapes_frame, text="Sphere 2.5mm", variable=self.roi_shape_vars["sphere2p5"]
-        ).pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Checkbutton(
-            roi_shapes_frame, text="Sphere 3.0mm", variable=self.roi_shape_vars["sphere3"]
-        ).pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Checkbutton(
-            roi_shapes_frame, text="Square 2x2", variable=self.roi_shape_vars["squarev4"]
-        ).pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Checkbutton(
-            roi_shapes_frame, text="Square 3x3", variable=self.roi_shape_vars["squarev9"]
-        ).pack(side=tk.LEFT)
-
-        # FA threshold for CSF filtering
-        row = 1
-        ttk.Label(param_frame, text="FA Threshold:").grid(row=row, column=0, sticky=tk.W, pady=5)
-        self.fa_threshold_var = tk.DoubleVar(value=config.FA_THRESHOLD)
-        ttk.Spinbox(
-            param_frame,
-            from_=0.0,
-            to=1.0,
-            increment=0.05,
-            textvariable=self.fa_threshold_var,
-            width=5,
-        ).grid(row=row, column=1, sticky=tk.W, padx=5)
-        ttk.Label(
-            param_frame,
-            text="Minimum FA value for ROI voxels (filters out CSF)",
-            foreground="gray",
-        ).grid(row=row, column=2, sticky=tk.W, padx=10)
-
-        # ALPS calculation method
-        row = 2
-        ttk.Label(param_frame, text="ALPS Method:").grid(row=row, column=0, sticky=tk.W, pady=5)
-        self.alps_method_var = tk.StringVar(value=config.DEFAULT_ALPS_METHOD)
-        ttk.Combobox(
-            param_frame,
-            textvariable=self.alps_method_var,
-            values=config.ALPS_METHODS,
-            state="readonly",
-            width=12,
-        ).grid(row=row, column=1, sticky=tk.W, padx=5)
-        ttk.Label(
-            param_frame,
-            text="ALPS-LAB: tensor diagonal, ALPS-PAS: eigenvector-sorted eigenvalues",
-            foreground="gray",
-        ).grid(row=row, column=2, sticky=tk.W, padx=10)
-
-        # ROI refinement option
-        row = 3
-        ttk.Label(param_frame, text="ROI Refinement:").grid(row=row, column=0, sticky=tk.W, pady=5)
-        self.refine_roi_var = tk.StringVar(value=config.DEFAULT_ROI_REFINEMENT)
-        ttk.Combobox(
-            param_frame,
-            textvariable=self.refine_roi_var,
-            values=config.ROI_REFINEMENT_OPTIONS,
-            state="readonly",
-            width=12,
-        ).grid(row=row, column=1, sticky=tk.W, padx=5)
-        ttk.Label(
-            param_frame,
-            text="Refined: ±3 X, ±2 Y, ±2 Z voxels; ±1 Y/Z drift between proj/assoc",
-            foreground="gray",
-        ).grid(row=row, column=2, sticky=tk.W, padx=10)
-
-        # Info about the process
-        info_frame = ttk.LabelFrame(frame, text="ROI Placement Process", padding=10)
-        info_frame.pack(fill=tk.X, pady=10)
-
-        process_text = (
-            "The ROI placement process (after registration) involves:\n\n"
-            "1. Transform ROI templates to native space using inverse warp\n"
-            "2. Find centroid of each transformed mask\n"
-            "3. Optionally refine placement using fiber orientation (V1)\n"
-            "4. Create spherical ROIs at final centroid positions\n\n"
-            "ROI masks created:\n"
-            "  - Left/Right Projection (superior corona radiata)\n"
-            "  - Left/Right Association (superior longitudinal fasciculus)"
-        )
-        ttk.Label(info_frame, text=process_text, justify=tk.LEFT).pack(anchor=tk.W)
-
-    def _create_output_setup_frame(self):
-        """Create output setup frame for configuring which files to save."""
-        frame = ttk.Frame(self.content_frame)
-        self.stage_frames["output_setup"] = frame
-
-        # Info text
-        info_label = ttk.Label(
-            frame,
-            text="Configure which output files to keep after processing.\n"
+    def _create_output_setup_page(self):
+        page, content = self._scroll_page(
+            "Configure which output files to keep after processing.\n"
             "By default, all intermediate and final outputs are saved.\n"
-            "Uncheck files you don't need to save disk space.",
-            justify=tk.LEFT,
-        )
-        info_label.pack(anchor=tk.W, pady=(0, 10))
-
-        # Store output option variables
-        self.output_option_vars: dict[str, tk.BooleanVar] = {}
-
-        # Create scrollable frame for options
-        canvas = tk.Canvas(frame, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
-
-        scrollable_frame.bind(
-            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Preprocessing outputs section
-        preproc_frame = ttk.LabelFrame(scrollable_frame, text="Preprocessing Outputs", padding=10)
-        preproc_frame.pack(fill=tk.X, pady=5, padx=5)
-
-        preproc_outputs = [
-            ("denoised_dwi", "Denoised DWI", "DWI after thermal noise removal (dwidenoise)"),
-            ("degibbs_dwi", "Degibbs DWI", "DWI after Gibbs ringing removal (mrdegibbs)"),
-            (
-                "preprocessed_dwi",
-                "Preprocessed DWI",
-                "Final preprocessed DWI (dwifslpreproc)",
-            ),
-            (
-                "preprocessed_bvecs",
-                "Preprocessed bvecs/bvals",
-                "Corrected gradient directions and b-values",
-            ),
-        ]
-        self._create_output_options(preproc_frame, preproc_outputs)
-
-        # DTI outputs section
-        dti_frame = ttk.LabelFrame(scrollable_frame, text="DTI Outputs", padding=10)
-        dti_frame.pack(fill=tk.X, pady=5, padx=5)
-
-        dti_outputs = [
-            ("tensor", "Diffusion Tensor", "Fitted diffusion tensor image"),
-            ("fa_map", "FA Map", "Fractional anisotropy map"),
-            (
-                "eigenvector_maps",
-                "Eigenvector/eigenvalue maps",
-                "V1, V2, V3, L1, L2, L3 maps",
-            ),
-        ]
-        self._create_output_options(dti_frame, dti_outputs)
-
-        # Registration outputs section
-        reg_frame = ttk.LabelFrame(scrollable_frame, text="Registration Outputs", padding=10)
-        reg_frame.pack(fill=tk.X, pady=5, padx=5)
-
-        reg_outputs = [
-            ("b0_image", "Averaged B0 Image", "Mean b0 image extracted from DWI"),
-            ("brain_mask", "Brain Mask", "Brain mask from dwi2mask"),
-            ("fa_brain", "Skull-stripped FA", "FA image after brain mask application"),
-            ("affine_matrix", "Affine Matrix", "FLIRT linear transformation matrix"),
-            (
-                "warp_coefficients",
-                "Warp Coefficients",
-                "FNIRT non-linear warp coefficients",
-            ),
-            ("inverse_warp", "Inverse Warp", "Inverse warp for ROI transformation"),
-        ]
-        self._create_output_options(reg_frame, reg_outputs)
-
-        # ROI and Results outputs section
-        roi_frame = ttk.LabelFrame(scrollable_frame, text="ROI & Results Outputs", padding=10)
-        roi_frame.pack(fill=tk.X, pady=5, padx=5)
-
-        roi_outputs = [
-            ("roi_masks", "ROI Masks", "Spherical ROI masks in native space"),
-            ("log_file", "Processing Log", "Detailed log of pipeline execution"),
-        ]
-        self._create_output_options(roi_frame, roi_outputs)
-
-        # Quick action buttons
-        btn_frame = ttk.Frame(scrollable_frame)
-        btn_frame.pack(fill=tk.X, pady=10, padx=5)
-
-        ttk.Button(btn_frame, text="Select All", command=self._select_all_outputs).pack(
-            side=tk.LEFT, padx=5
-        )
-        ttk.Button(btn_frame, text="Deselect All", command=self._deselect_all_outputs).pack(
-            side=tk.LEFT, padx=5
+            "Uncheck files you don't need to save disk space."
         )
 
-        # Note about results CSV
-        note_frame = ttk.Frame(scrollable_frame)
-        note_frame.pack(fill=tk.X, pady=5, padx=5)
+        sections = [
+            (
+                "Preprocessing Outputs",
+                [
+                    (
+                        "denoised_dwi",
+                        "Denoised DWI",
+                        "DWI after thermal noise removal (dwidenoise)",
+                    ),
+                    ("degibbs_dwi", "Degibbs DWI", "DWI after Gibbs ringing removal (mrdegibbs)"),
+                    (
+                        "preprocessed_dwi",
+                        "Preprocessed DWI",
+                        "Final preprocessed DWI (dwifslpreproc)",
+                    ),
+                    (
+                        "preprocessed_bvecs",
+                        "Preprocessed bvecs/bvals",
+                        "Corrected gradient directions and b-values",
+                    ),
+                ],
+            ),
+            (
+                "DTI Outputs",
+                [
+                    ("tensor", "Diffusion Tensor", "Fitted diffusion tensor image"),
+                    ("fa_map", "FA Map", "Fractional anisotropy map"),
+                    (
+                        "eigenvector_maps",
+                        "Eigenvector/eigenvalue maps",
+                        "V1, V2, V3, L1, L2, L3 maps",
+                    ),
+                ],
+            ),
+            (
+                "Registration Outputs",
+                [
+                    ("b0_image", "Averaged B0 Image", "Mean b0 image extracted from DWI"),
+                    ("brain_mask", "Brain Mask", "Brain mask from dwi2mask"),
+                    ("fa_brain", "Skull-stripped FA", "FA image after brain mask application"),
+                    ("affine_matrix", "Affine Matrix", "FLIRT linear transformation matrix"),
+                    (
+                        "warp_coefficients",
+                        "Warp Coefficients",
+                        "FNIRT non-linear warp coefficients",
+                    ),
+                    ("inverse_warp", "Inverse Warp", "Inverse warp for ROI transformation"),
+                ],
+            ),
+            (
+                "ROI & Results Outputs",
+                [
+                    ("roi_masks", "ROI Masks", "Spherical ROI masks in native space"),
+                    ("log_file", "Processing Log", "Detailed log of pipeline execution"),
+                ],
+            ),
+        ]
+        for title, options in sections:
+            group = QGroupBox(title)
+            group_layout = QVBoxLayout(group)
+            for key, display_name, description in options:
+                row = QHBoxLayout()
+                chk = QCheckBox(display_name)
+                chk.setChecked(True)
+                self.output_option_checks[key] = chk
+                row.addWidget(chk)
+                desc = QLabel(description)
+                desc.setStyleSheet("color: gray;")
+                row.addWidget(desc)
+                row.addStretch()
+                group_layout.addLayout(row)
+            content.addWidget(group)
 
-        note_text = "Note: The ALPS results CSV is always saved."
-        ttk.Label(note_frame, text=note_text, foreground="gray", justify=tk.LEFT).pack(anchor=tk.W)
+        btn_row = QHBoxLayout()
+        select_all = QPushButton("Select All")
+        select_all.clicked.connect(lambda: self._set_all_outputs(True))
+        deselect_all = QPushButton("Deselect All")
+        deselect_all.clicked.connect(lambda: self._set_all_outputs(False))
+        btn_row.addWidget(select_all)
+        btn_row.addWidget(deselect_all)
+        btn_row.addStretch()
+        content.addLayout(btn_row)
 
-    def _create_output_options(
-        self, parent: ttk.Frame, options: list[tuple[str, str, str]]
-    ) -> None:
+        note = QLabel("Note: The ALPS results CSV is always saved.")
+        note.setStyleSheet("color: gray;")
+        content.addWidget(note)
+        content.addStretch()
+
+        self._register_page("output_setup", page)
+
+    def _set_all_outputs(self, checked: bool):
+        """Check or uncheck every output-retention checkbox."""
+        for chk in self.output_option_checks.values():
+            chk.setChecked(checked)
+
+    def _create_results_page(self):
+        page = QWidget()
+        self.results_page_layout = QVBoxLayout(page)
+
+        self.results_label = QLabel("Results will be displayed here after processing completes.")
+        self.results_page_layout.addWidget(self.results_label)
+
+        viewer_row = QHBoxLayout()
+        open_viewer = QPushButton("Open Results Viewer...")
+        open_viewer.clicked.connect(lambda: self._open_results_viewer())
+        viewer_row.addWidget(open_viewer)
+        viewer_note = QLabel("(View any previously processed results)")
+        viewer_note.setStyleSheet("color: gray;")
+        viewer_row.addWidget(viewer_note)
+        viewer_row.addStretch()
+        self.results_page_layout.addLayout(viewer_row)
+        self.results_page_layout.addStretch()
+
+        self._register_page("results", page)
+
+    def _open_results_viewer(self, output_folder: str | None = None):
+        """Open the results viewer in its own process.
+
+        The viewer is a Qt QMainWindow (PRD 0010) and cannot be an in-process
+        child of this window, so it is spawned as a separate process — the same
+        as the Tk app did.
         """
-        Create checkbox rows for output file options.
+        import subprocess
+        import sys
 
-        Parameters
-        ----------
-        parent : ttk.Frame
-            Parent frame to add widgets to
-        options : list
-            List of (key, display_name, description) tuples
-        """
-        for key, display_name, description in options:
-            row_frame = ttk.Frame(parent)
-            row_frame.pack(fill=tk.X, pady=2)
+        if output_folder is None and self.batch_state:
+            output_folder = self.batch_state.config.output_dir
 
-            # Checkbox with variable
-            var = tk.BooleanVar(value=True)
-            self.output_option_vars[key] = var
+        cmd = [sys.executable, "-m", "dti_alps", "--viewer"]
+        if output_folder:
+            cmd.append(output_folder)
+        subprocess.Popen(cmd)
 
-            chk = ttk.Checkbutton(row_frame, text=display_name, variable=var, width=30)
-            chk.pack(side=tk.LEFT, padx=5)
-
-            # Description label
-            desc_label = ttk.Label(row_frame, text=description, foreground="gray")
-            desc_label.pack(side=tk.LEFT, padx=10)
-
-    def _select_all_outputs(self):
-        """Select all output file options."""
-        for var in self.output_option_vars.values():
-            var.set(True)
-
-    def _deselect_all_outputs(self):
-        """Deselect all output file options."""
-        for var in self.output_option_vars.values():
-            var.set(False)
-
-    def _collect_output_config(self) -> OutputConfig:
-        """Collect output configuration from UI checkboxes (via the form model)."""
-        return collect_output_config(self._form_state().output_flags)
-
-    def _create_results_frame(self):
-        """Create results display frame (Stage 9)."""
-        frame = ttk.Frame(self.content_frame)
-        self.stage_frames["results"] = frame
-
-        # Results will be populated after processing
-        self.results_label = ttk.Label(
-            frame,
-            text="Results will be displayed here after processing completes.",
-            justify=tk.LEFT,
-        )
-        self.results_label.pack(anchor=tk.W, pady=20)
-
-        # Placeholder for results table
-        self.results_tree = None
-
-        # Add Results Viewer button (always available)
-        viewer_frame = ttk.Frame(frame)
-        viewer_frame.pack(fill=tk.X, pady=10)
-
-        ttk.Button(
-            viewer_frame,
-            text="Open Results Viewer...",
-            command=self._open_results_viewer,
-        ).pack(side=tk.LEFT, padx=5)
-
-        ttk.Label(
-            viewer_frame,
-            text="(View any previously processed results)",
-            foreground="gray",
-        ).pack(side=tk.LEFT, padx=5)
-
-    def _browse_output_dir(self):
-        """Open directory browser for output."""
-        user_config = get_user_config()
-        initial_dir = user_config.get_initial_dir(UserConfig.KEY_OUTPUT_DIR)
-        path = filedialog.askdirectory(initialdir=initial_dir)
-        if path:
-            self.output_dir_var.set(path)
-            user_config.set_from_path(UserConfig.KEY_OUTPUT_DIR, path)
-
-    def _on_staging_toggle(self):
-        """Enable/disable staging directory controls based on checkbox."""
-        if self.staging_enabled_var.get():
-            self.staging_dir_entry.config(state=tk.NORMAL)
-            self.staging_dir_browse_btn.config(state=tk.NORMAL)
-        else:
-            self.staging_dir_entry.config(state=tk.DISABLED)
-            self.staging_dir_browse_btn.config(state=tk.DISABLED)
-
-    def _browse_staging_dir(self):
-        """Open directory browser for staging directory."""
-        path = filedialog.askdirectory()
-        if path:
-            self.staging_dir_var.set(path)
-
-    def _show_stage(self, stage_idx):
-        """Show the specified pipeline stage."""
-        self.current_stage = stage_idx
-
-        # Update button states - deselect console and output setup buttons
-        self.console_btn.state(["!pressed"])
-        self.output_setup_btn.state(["!pressed"])
-
-        # Update stage button states
-        for i, btn in enumerate(self.stage_buttons):
-            if i == stage_idx:
-                btn.state(["pressed"])
-            else:
-                btn.state(["!pressed"])
-
-        # Hide console frame and all stage frames
-        self.console_frame.pack_forget()
-        for frame in self.stage_frames.values():
-            frame.pack_forget()
-
-        # Determine which stages to use based on mode
-        stages = config.SYNB0_PIPELINE_STAGES if self.use_synb0.get() else config.PIPELINE_STAGES
-
-        # Show selected frame
-        if stage_idx < len(stages):
-            stage_id = stages[stage_idx][0]
-            frame = self.stage_frames.get(stage_id)
-            if frame:
-                frame.pack(fill=tk.BOTH, expand=True)
-
-            # Update frame title
-            stage_name = stages[stage_idx][1]
-            self.content_frame.config(text=f"Stage {stage_idx + 1}: {stage_name}")
-
-    def _collect_batch_state(self) -> BatchState:
-        """Collect all UI values into batch state (via the form model)."""
-        return build_batch_state(self._form_state(), self.subject_files_list)
-
+    # ------------------------------------------------------------------ #
+    # Run / cancel (live in region d)
+    # ------------------------------------------------------------------ #
     def _run_pipeline(self):
         """Start batch pipeline execution."""
-        # Pre-flight validation (first-failure-wins); adapter owns dialog phrasing
-        output_dir = self.output_dir_var.get()
+        # Pre-flight validation (first-failure-wins); adapter owns dialog phrasing.
+        output_dir = self.output_dir_edit.text()
         ok, kind, invalid_ids = validate_runnable(self.subject_files_list, output_dir)
         if not ok:
             if kind == "no_subjects":
-                messagebox.showerror("Validation Error", "No subject folders added.")
+                QMessageBox.critical(self, "Validation Error", "No subject folders added.")
             elif kind == "invalid_subjects":
                 names = ", ".join(invalid_ids[:5])
                 if len(invalid_ids) > 5:
                     names += f" (and {len(invalid_ids) - 5} more)"
-                messagebox.showerror(
+                QMessageBox.critical(
+                    self,
                     "Validation Error",
                     f"Some subjects have missing files:\n{names}\n\n"
                     "Please remove invalid subjects or add missing files.",
                 )
             elif kind == "no_output_dir":
-                messagebox.showerror("Validation Error", "Please specify an output directory.")
+                QMessageBox.critical(
+                    self, "Validation Error", "Please specify an output directory."
+                )
             return
 
-        # Collect batch state
-        self.batch_state = self._collect_batch_state()
+        self.batch_state = build_batch_state(self._form_state(), self.subject_files_list)
 
-        # Disable UI
-        self.run_btn.config(state=tk.DISABLED)
+        # Disable Run, arm Cancel.
+        self.run_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.cancel_btn.setText("Cancel")
 
-        # Clear log and console tree
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.delete(1.0, tk.END)
-        self.log_text.config(state=tk.DISABLED)
-
-        # Clear and populate console tree with subjects
-        for item in self.console_tree.get_children():
-            self.console_tree.delete(item)
+        # Clear log and console tree, then seed the tree with the subjects.
+        self.log_text.clear()
+        self.console_tree.clear()
         for subject_files in self.subject_files_list:
-            self.console_tree.insert("", tk.END, values=(subject_files.subject_id, "Pending"))
+            QTreeWidgetItem(self.console_tree, [subject_files.subject_id, "Pending"])
 
-        # Reset stage button styles for new batch
-        self._reset_stage_button_styles()
+        # No stage-button reset (status coloring dropped, Decision 6).
 
-        # Switch to console view
         self._show_console()
 
-        # Initialize log file in output directory
         self._init_log_file(output_dir)
-
         self._log("Starting batch processing...")
 
-        # Create batch worker
         self.result_queue = queue.Queue()
         self.cancel_event = threading.Event()
         self.result_model = ResultModel([s.subject_id for s in self.subject_files_list])
@@ -2037,11 +1474,26 @@ class DTIALPSApplication(tk.Tk):
         self.worker = BatchWorker(batch_runner, self.result_queue, self.cancel_event)
         self.worker.start()
 
-        # Start polling for results
-        self.after(100, self._check_results)
+        QTimer.singleShot(100, self._check_results)
 
+    def _cancel_pipeline(self):
+        """Signal cancellation at the next subject boundary (Decision 7).
+
+        Sets ``cancel_event``, disables Cancel, and relabels it to "Cancelling…"
+        until the worker actually stops (the drain loop sees the thread die and
+        the already-emitted ``BatchCancelled`` logs the line). The in-flight
+        subject runs to completion; the batch stops before the next subject.
+        """
+        if self.cancel_event is not None:
+            self.cancel_event.set()
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setText("Cancelling…")
+
+    # ------------------------------------------------------------------ #
+    # Worker-message drain
+    # ------------------------------------------------------------------ #
     def _check_results(self):
-        """Poll result queue for updates."""
+        """Poll the result queue for updates (mirrors the Tk ``after`` loop)."""
         try:
             while True:
                 msg = self.result_queue.get_nowait()
@@ -2049,12 +1501,10 @@ class DTIALPSApplication(tk.Tk):
         except queue.Empty:
             pass
 
-        # Continue polling if worker is alive
         if self.worker and self.worker.is_alive():
-            self.after(100, self._check_results)
+            QTimer.singleShot(100, self._check_results)
         else:
-            self._close_log_file()
-            self.run_btn.config(state=tk.NORMAL)
+            self._on_run_finished()
 
     def _handle_result(self, msg):
         """Handle a worker message by applying the model's view-intents."""
@@ -2062,21 +1512,151 @@ class DTIALPSApplication(tk.Tk):
             self._apply_intent(intent)
 
     def _apply_intent(self, intent):
-        """Apply a single view-intent from ResultModel to the widgets."""
+        """Apply a single view-intent from ResultModel to the widgets.
+
+        Per Decision 6 the adapter keeps only the **log** half of
+        ``UpdateStageStatus`` and treats ``ResetStageButtons`` as a **no-op**
+        (the sidebar no longer recolors during a run).
+        """
         if isinstance(intent, AppendLog):
             self._log(intent.text)
         elif isinstance(intent, UpdateStageStatus):
             self._update_stage_status(intent.stage, intent.status)
         elif isinstance(intent, SetRowStatus):
-            items = self.console_tree.get_children()
-            if intent.index < len(items):
-                self.console_tree.set(items[intent.index], "status", intent.text)
-                self.console_tree.item(items[intent.index], tags=(intent.tag,))
+            self._set_row_status(intent.index, intent.text, intent.tag)
         elif isinstance(intent, ResetStageButtons):
-            self._reset_stage_button_styles()
+            pass  # No-op: status coloring dropped (Decision 6).
         elif isinstance(intent, ShowBatchResults):
             self._show_batch_results(intent.view)
 
+    def _set_row_status(self, index: int, text: str, tag: str):
+        """Set the status cell + colour of the console-tree row at ``index``."""
+        if 0 <= index < self.console_tree.topLevelItemCount():
+            item = self.console_tree.topLevelItem(index)
+            item.setText(1, text)
+            color = _ROW_TAG_COLORS.get(tag)
+            if color is not None:
+                from PySide6.QtGui import QBrush, QColor
+
+                brush = QBrush(QColor(color))
+                item.setForeground(0, brush)
+                item.setForeground(1, brush)
+
+    def _update_stage_status(self, stage: str, status: str):
+        """Log stage transitions (the log half of the intent; no button colour)."""
+        stage_names = {
+            "denoise": "Denoising",
+            "degibbs": "Gibbs Ringing Removal",
+            "preproc": "Preprocessing",
+            "synb0": "synB0-DISCO",
+            "eddy": "Eddy",
+            "dti": "DTI Fitting",
+            "registration": "Registration",
+            "roi": "ROI Placement",
+            "results": "Calculating ALPS",
+        }
+        stage_name = stage_names.get(stage, stage)
+        if status == "running":
+            self._log(f"Running: {stage_name}")
+        elif status == "complete":
+            self._log(f"Completed: {stage_name}")
+
+    def _on_run_finished(self):
+        """Tear down after the worker thread dies (region d wires the rest)."""
+        self._close_log_file()
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setText("Cancel")
+        self._update_run_button_state()
+
+    def _clear_layout(self, layout):
+        """Recursively remove and delete everything in ``layout``."""
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+            else:
+                child = item.layout()
+                if child is not None:
+                    self._clear_layout(child)
+
+    def _show_batch_results(self, view: BatchResultsView):
+        """Render the finished batch-results view (built by build_batch_results_table).
+
+        Cells are already formatted strings; the adapter owns only chrome —
+        column widths/alignments (``_BATCH_COLUMN_LAYOUT``), the footer buttons,
+        and the "Results saved to:" label.
+        """
+        # Switch to the results stage (last stage, index varies by mode).
+        self._show_stage(len(self.stage_buttons) - 1)
+
+        self._clear_layout(self.results_page_layout)
+
+        # Title + summary
+        title_row = QHBoxLayout()
+        title = _bold(QLabel(view.title))
+        font = title.font()
+        font.setPointSize(font.pointSize() + 2)
+        title.setFont(font)
+        title_row.addWidget(title)
+        title_row.addWidget(QLabel(f"  ({view.summary})"))
+        title_row.addStretch()
+        self.results_page_layout.addLayout(title_row)
+
+        # Results table — render the columns the builder chose, generically.
+        results_group = QGroupBox("Subject Results")
+        results_group_layout = QVBoxLayout(results_group)
+        tree = QTreeWidget()
+        tree.setRootIsDecorated(False)
+        tree.setColumnCount(len(view.columns))
+        tree.setHeaderLabels([col.label for col in view.columns])
+        for i, col in enumerate(view.columns):
+            width, _anchor = self._BATCH_COLUMN_LAYOUT.get(col.key, self._BATCH_COLUMN_DEFAULT)
+            tree.setColumnWidth(i, width)
+        for row in view.rows:
+            item = QTreeWidgetItem(tree, [row[col.key] for col in view.columns])
+            for i, col in enumerate(view.columns):
+                _width, anchor = self._BATCH_COLUMN_LAYOUT.get(col.key, self._BATCH_COLUMN_DEFAULT)
+                item.setTextAlignment(i, anchor)
+        results_group_layout.addWidget(tree)
+        self.batch_results_tree = tree  # Store for export
+        self.results_page_layout.addWidget(results_group, stretch=1)
+
+        # Footer: results-on-disk label + folder/viewer buttons.
+        footer = QHBoxLayout()
+        csv_path = Path(view.output_dir) / results_layout.alps_csv_name(
+            results_layout.DEFAULT_ROI_TOKEN
+        )
+        footer.addWidget(QLabel(f"Results saved to: {csv_path}"))
+        footer.addStretch()
+        open_viewer = QPushButton("Open Results Viewer")
+        open_viewer.clicked.connect(
+            lambda _c=False, d=view.output_dir: self._open_results_viewer(d)
+        )
+        open_folder = QPushButton("Open Output Folder")
+        open_folder.clicked.connect(self._open_batch_output_folder)
+        footer.addWidget(open_viewer)
+        footer.addWidget(open_folder)
+        self.results_page_layout.addLayout(footer)
+
+    def _open_batch_output_folder(self):
+        """Open the batch output folder in the OS file manager."""
+        import subprocess
+        import sys
+
+        if self.batch_state and self.batch_state.config.output_dir:
+            output_dir = self.batch_state.config.output_dir
+            if Path(output_dir).exists():
+                if sys.platform == "darwin":
+                    subprocess.run(["open", output_dir])
+                elif sys.platform == "linux":
+                    subprocess.run(["xdg-open", output_dir])
+                else:
+                    subprocess.run(["explorer", output_dir])
+
+    # ------------------------------------------------------------------ #
+    # Logging
+    # ------------------------------------------------------------------ #
     def _init_log_file(self, output_dir: str):
         """Initialize log file in the output directory."""
         import os
@@ -2104,9 +1684,8 @@ class DTIALPSApplication(tk.Tk):
                 pass
             self.log_file = None
 
-        # Check if log file should be deleted based on output_config
-        if hasattr(self, "log_file_path") and self.log_file_path:
-            output_config = self._collect_output_config()
+        if self.log_file_path:
+            output_config = collect_output_config(self._form_state().output_flags)
             if not output_config.log_file and os.path.exists(self.log_file_path):
                 try:
                     os.remove(self.log_file_path)
@@ -2114,170 +1693,79 @@ class DTIALPSApplication(tk.Tk):
                     pass
             self.log_file_path = None
 
-    def _log(self, message):
-        """Append message to log (GUI console and file)."""
+    def _log(self, message: str):
+        """Append a timestamped line to the log console (and the log file)."""
         from datetime import datetime
 
         timestamp = datetime.now().strftime("[%H:%M:%S]")
-        log_line = f"{timestamp} {message}\n"
+        log_line = f"{timestamp} {message}"
 
-        # Write to GUI console
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, log_line)
-        self.log_text.see(tk.END)
-        self.log_text.config(state=tk.DISABLED)
+        self.log_text.appendPlainText(log_line)
+        self.log_text.ensureCursorVisible()
 
-        # Write to log file if open
         if self.log_file:
             try:
-                self.log_file.write(log_line)
+                self.log_file.write(log_line + "\n")
                 self.log_file.flush()
             except OSError:
                 pass
 
-    def _reset_stage_button_styles(self):
-        """Reset all stage buttons to default style."""
-        for btn in self.stage_buttons:
-            btn.configure(style="TButton")
-
-    def _update_stage_status(self, stage, status):
-        """Update stage indicator (logs status changes and updates button colors)."""
-        stage_names = {
-            "denoise": "Denoising",
-            "degibbs": "Gibbs Ringing Removal",
-            "preproc": "Preprocessing",
-            "synb0": "synB0-DISCO",
-            "eddy": "Eddy",
-            "dti": "DTI Fitting",
-            "registration": "Registration",
-            "roi": "ROI Placement",
-            "results": "Calculating ALPS",
-        }
-
-        stage_name = stage_names.get(stage, stage)
-        if status == "running":
-            self._log(f"Running: {stage_name}")
-        elif status == "complete":
-            self._log(f"Completed: {stage_name}")
-
-        # Update stage button colors
-        button_indices = self._stage_to_button_indices.get(stage, [])
-        for btn_idx in button_indices:
-            if 0 <= btn_idx < len(self.stage_buttons):
-                if status == "running":
-                    self.stage_buttons[btn_idx].configure(style="Processing.TButton")
-                elif status == "complete":
-                    self.stage_buttons[btn_idx].configure(style="Completed.TButton")
-
-    def _show_batch_results(self, view: BatchResultsView):
-        """Render the finished batch-results view (built by build_batch_results_table)."""
-        # Switch to results stage (last stage, index varies by mode)
-        results_stage_index = len(self.stage_buttons) - 1
-        self._show_stage(results_stage_index)
-
-        # Update results frame
-        frame = self.stage_frames["results"]
-
-        # Clear previous content
-        for child in frame.winfo_children():
-            child.destroy()
-
-        # Title with summary
-        title_frame = ttk.Frame(frame)
-        title_frame.pack(fill=tk.X, pady=10)
-        ttk.Label(
-            title_frame,
-            text=view.title,
-            font=("TkDefaultFont", 12, "bold"),
-        ).pack(side=tk.LEFT)
-        ttk.Label(title_frame, text=f"  ({view.summary})").pack(side=tk.LEFT)
-
-        # Results table — render the columns the builder chose, generically
-        results_frame = ttk.LabelFrame(frame, text="Subject Results", padding=10)
-        results_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-
-        column_keys = [col.key for col in view.columns]
-        tree = ttk.Treeview(results_frame, columns=column_keys, show="headings", height=12)
-        for col in view.columns:
-            width, anchor = self._BATCH_COLUMN_LAYOUT.get(col.key, self._BATCH_COLUMN_DEFAULT)
-            tree.heading(col.key, text=col.label)
-            tree.column(col.key, width=width, anchor=anchor)
-
-        # Add scrollbar
-        scrollbar = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=tree.yview)
-        tree.configure(yscrollcommand=scrollbar.set)
-
-        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Add data rows — cells are already formatted strings; project by column key
-        for row in view.rows:
-            tree.insert("", tk.END, values=[row[col.key] for col in view.columns])
-
-        self.batch_results_tree = tree  # Store for export
-
-        # Footer: results-on-disk label + folder/viewer buttons
-        btn_frame = ttk.Frame(frame)
-        btn_frame.pack(fill=tk.X, pady=10)
-
-        # CSV path info — the default results filename via the on-disk contract.
-        csv_path = Path(view.output_dir) / results_layout.alps_csv_name(
-            results_layout.DEFAULT_ROI_TOKEN
-        )
-        ttk.Label(btn_frame, text=f"Results saved to: {csv_path}").pack(side=tk.LEFT, padx=5)
-
-        ttk.Button(
-            btn_frame, text="Open Output Folder", command=self._open_batch_output_folder
-        ).pack(side=tk.RIGHT, padx=5)
-
-        ttk.Button(
-            btn_frame,
-            text="Open Results Viewer",
-            command=lambda: self._open_results_viewer(view.output_dir),
-        ).pack(side=tk.RIGHT, padx=5)
-
-    def _open_batch_output_folder(self):
-        """Open the batch output folder."""
-        import subprocess
-        import sys
-
-        if self.batch_state and self.batch_state.config.output_dir:
-            output_dir = self.batch_state.config.output_dir
-            if Path(output_dir).exists():
-                if sys.platform == "darwin":
-                    subprocess.run(["open", output_dir])
-                elif sys.platform == "linux":
-                    subprocess.run(["xdg-open", output_dir])
-                else:
-                    subprocess.run(["explorer", output_dir])
-
-    def _open_results_viewer(self, output_folder: str | None = None):
-        """Open the results viewer in its own process.
-
-        The viewer is now a Qt window (PRD 0010, Decision 6); a Qt QMainWindow
-        cannot be an in-process child of this Tk app, so it is spawned as a
-        separate process the same way output folders are opened above. From the
-        user's side, "View Results" still opens the viewer on the current
-        output folder.
-        """
-        import subprocess
-        import sys
-
-        # Use current output dir if not specified and available
-        if output_folder is None and self.batch_state:
-            output_folder = self.batch_state.config.output_dir
-
-        cmd = [sys.executable, "-m", "dti_alps", "--viewer"]
-        if output_folder:
-            cmd.append(output_folder)
-        subprocess.Popen(cmd)
-
+    # ------------------------------------------------------------------ #
+    # Misc
+    # ------------------------------------------------------------------ #
     def _show_about(self):
-        """Show about dialog."""
-        messagebox.showinfo(
+        QMessageBox.information(
+            self,
             "About",
             f"{config.APP_NAME}\n"
             f"Version {config.APP_VERSION}\n\n"
             "Automatic DTI-ALPS ROI Placement and Analysis\n\n"
             "Uses MRtrix3 for preprocessing and DTI fitting.",
         )
+
+
+def _bold(label: QLabel) -> QLabel:
+    """Make a label's font bold in place and return it (for inline use)."""
+    font = label.font()
+    font.setBold(True)
+    label.setFont(font)
+    return label
+
+
+def _hline() -> QWidget:
+    """A horizontal separator line."""
+    from PySide6.QtWidgets import QFrame
+
+    line = QFrame()
+    line.setFrameShape(QFrame.HLine)
+    line.setFrameShadow(QFrame.Sunken)
+    return line
+
+
+def launch_app(output_folder: str | None = None):
+    """Launch the DTI-ALPS main application as a standalone app.
+
+    Mirrors :func:`dti_alps.gui.viewer.launch_viewer`: reuses an existing
+    ``QApplication`` if one is running, otherwise owns one and runs its event
+    loop. ``output_folder`` is accepted for signature symmetry with the viewer
+    and is currently unused by the main window.
+    """
+    import sys
+
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    owns_app = app is None
+    if owns_app:
+        app = QApplication(sys.argv)
+
+    window = DTIALPSApplication()
+    window.show()
+
+    if owns_app:
+        app.exec()
+    return window
+
+
+if __name__ == "__main__":
+    launch_app()

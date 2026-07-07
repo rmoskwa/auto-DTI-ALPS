@@ -226,15 +226,6 @@ def main():
         print("\nFor reanalysis options, use: python -m dti_alps --reanalyze --help")
         return
 
-    # Hidden --gui-qt branch: the in-progress PySide6 port of the main window
-    # (PRD 0013). Intentionally absent from __doc__/--help; removed at the final
-    # flip when --gui points at the Qt window.
-    if len(sys.argv) >= 2 and sys.argv[1] == "--gui-qt":
-        from .gui import main_qt
-
-        main_qt()
-        return
-
     # Default: Launch GUI
     from .gui import main as gui_main
 
