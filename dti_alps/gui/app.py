@@ -927,9 +927,9 @@ class DTIALPSApplication(QMainWindow):
         layout.addWidget(
             self._build_options_group(
                 "dwidenoise Options", config.DWIDENOISE_OPTIONS, "dwidenoise", resolver
-            ),
-            stretch=1,
+            )
         )
+        layout.addStretch()
         self._register_page("dwidenoise", page)
 
     def _create_mrdegibbs_page(self):
@@ -942,9 +942,9 @@ class DTIALPSApplication(QMainWindow):
         layout.addWidget(self.run_degibbs_check)
 
         layout.addWidget(
-            self._build_options_group("mrdegibbs Options", config.MRDEGIBBS_OPTIONS, "mrdegibbs"),
-            stretch=1,
+            self._build_options_group("mrdegibbs Options", config.MRDEGIBBS_OPTIONS, "mrdegibbs")
         )
+        layout.addStretch()
         self._register_page("mrdegibbs", page)
 
     def _create_dwifslpreproc_page(self):
@@ -992,9 +992,9 @@ class DTIALPSApplication(QMainWindow):
         layout.addWidget(
             self._build_options_group(
                 "Eddy Options", config.SYNB0_EDDY_OPTIONS, "synb0_eddy", resolver
-            ),
-            stretch=1,
+            )
         )
+        layout.addStretch()
 
         # Pre-enable repol (recommended), mirroring the Tk default.
         repol = self.cli_option_rows.get("synb0_eddy", {}).get("repol")
@@ -1023,9 +1023,9 @@ class DTIALPSApplication(QMainWindow):
         layout.addWidget(
             self._build_options_group(
                 "dwi2tensor Options", config.DWI2TENSOR_OPTIONS, "dwi2tensor", resolver
-            ),
-            stretch=1,
+            )
         )
+        layout.addStretch()
         self._register_page("dwi2tensor", page)
 
     def _create_tensor2metric_page(self):
@@ -1054,9 +1054,9 @@ class DTIALPSApplication(QMainWindow):
                 config.TENSOR2METRIC_OPTIONS,
                 "tensor2metric",
                 resolver,
-            ),
-            stretch=1,
+            )
         )
+        layout.addStretch()
         self._register_page("tensor2metric", page)
 
     def _create_registration_page(self):
