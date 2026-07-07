@@ -22,6 +22,7 @@ flip.
 
 import queue
 import threading
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
@@ -49,19 +50,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..processing import results_layout
 from ..processing.discovery import (
     SubjectFiles,
     discover_with_subdir_fallback,
     new_unique_runs,
 )
 from ..processing.pipeline import (
+    BatchRunner,
     BatchState,
+    BatchWorker,
 )
-from ..processing.validators import validate_synb0_output_dir
+from ..processing.validators import validate_runnable, validate_synb0_output_dir
 from . import config
 from .form_model import (
     FormState,
     OptionState,
+    build_batch_state,
     collect_output_config,
     compute_readiness,
 )
@@ -69,6 +74,7 @@ from .result_model import (
     AppendLog,
     BatchResultsView,
     ResetStageButtons,
+    ResultModel,
     SetRowStatus,
     ShowBatchResults,
     UpdateStageStatus,
@@ -1419,12 +1425,71 @@ class DTIALPSApplication(QMainWindow):
     # Run / cancel (live in region d)
     # ------------------------------------------------------------------ #
     def _run_pipeline(self):
-        """Start batch pipeline execution (wired live in region d)."""
-        # Inert until region (d).
+        """Start batch pipeline execution."""
+        # Pre-flight validation (first-failure-wins); adapter owns dialog phrasing.
+        output_dir = self.output_dir_edit.text()
+        ok, kind, invalid_ids = validate_runnable(self.subject_files_list, output_dir)
+        if not ok:
+            if kind == "no_subjects":
+                QMessageBox.critical(self, "Validation Error", "No subject folders added.")
+            elif kind == "invalid_subjects":
+                names = ", ".join(invalid_ids[:5])
+                if len(invalid_ids) > 5:
+                    names += f" (and {len(invalid_ids) - 5} more)"
+                QMessageBox.critical(
+                    self,
+                    "Validation Error",
+                    f"Some subjects have missing files:\n{names}\n\n"
+                    "Please remove invalid subjects or add missing files.",
+                )
+            elif kind == "no_output_dir":
+                QMessageBox.critical(
+                    self, "Validation Error", "Please specify an output directory."
+                )
+            return
+
+        self.batch_state = build_batch_state(self._form_state(), self.subject_files_list)
+
+        # Disable Run, arm Cancel.
+        self.run_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.cancel_btn.setText("Cancel")
+
+        # Clear log and console tree, then seed the tree with the subjects.
+        self.log_text.clear()
+        self.console_tree.clear()
+        for subject_files in self.subject_files_list:
+            QTreeWidgetItem(self.console_tree, [subject_files.subject_id, "Pending"])
+
+        # No stage-button reset (status coloring dropped, Decision 6).
+
+        self._show_console()
+
+        self._init_log_file(output_dir)
+        self._log("Starting batch processing...")
+
+        self.result_queue = queue.Queue()
+        self.cancel_event = threading.Event()
+        self.result_model = ResultModel([s.subject_id for s in self.subject_files_list])
+
+        batch_runner = BatchRunner(self.batch_state)
+        self.worker = BatchWorker(batch_runner, self.result_queue, self.cancel_event)
+        self.worker.start()
+
+        QTimer.singleShot(100, self._check_results)
 
     def _cancel_pipeline(self):
-        """Signal cancellation (wired live in region d)."""
-        # Inert until region (d).
+        """Signal cancellation at the next subject boundary (Decision 7).
+
+        Sets ``cancel_event``, disables Cancel, and relabels it to "Cancelling…"
+        until the worker actually stops (the drain loop sees the thread die and
+        the already-emitted ``BatchCancelled`` logs the line). The in-flight
+        subject runs to completion; the batch stops before the next subject.
+        """
+        if self.cancel_event is not None:
+            self.cancel_event.set()
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setText("Cancelling…")
 
     # ------------------------------------------------------------------ #
     # Worker-message drain
@@ -1505,9 +1570,91 @@ class DTIALPSApplication(QMainWindow):
         self.cancel_btn.setText("Cancel")
         self._update_run_button_state()
 
+    def _clear_layout(self, layout):
+        """Recursively remove and delete everything in ``layout``."""
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+            else:
+                child = item.layout()
+                if child is not None:
+                    self._clear_layout(child)
+
     def _show_batch_results(self, view: BatchResultsView):
-        """Render the finished batch-results view (region d)."""
-        # Filled in by region (d).
+        """Render the finished batch-results view (built by build_batch_results_table).
+
+        Cells are already formatted strings; the adapter owns only chrome —
+        column widths/alignments (``_BATCH_COLUMN_LAYOUT``), the footer buttons,
+        and the "Results saved to:" label.
+        """
+        # Switch to the results stage (last stage, index varies by mode).
+        self._show_stage(len(self.stage_buttons) - 1)
+
+        self._clear_layout(self.results_page_layout)
+
+        # Title + summary
+        title_row = QHBoxLayout()
+        title = _bold(QLabel(view.title))
+        font = title.font()
+        font.setPointSize(font.pointSize() + 2)
+        title.setFont(font)
+        title_row.addWidget(title)
+        title_row.addWidget(QLabel(f"  ({view.summary})"))
+        title_row.addStretch()
+        self.results_page_layout.addLayout(title_row)
+
+        # Results table — render the columns the builder chose, generically.
+        results_group = QGroupBox("Subject Results")
+        results_group_layout = QVBoxLayout(results_group)
+        tree = QTreeWidget()
+        tree.setRootIsDecorated(False)
+        tree.setColumnCount(len(view.columns))
+        tree.setHeaderLabels([col.label for col in view.columns])
+        for i, col in enumerate(view.columns):
+            width, _anchor = self._BATCH_COLUMN_LAYOUT.get(col.key, self._BATCH_COLUMN_DEFAULT)
+            tree.setColumnWidth(i, width)
+        for row in view.rows:
+            item = QTreeWidgetItem(tree, [row[col.key] for col in view.columns])
+            for i, col in enumerate(view.columns):
+                _width, anchor = self._BATCH_COLUMN_LAYOUT.get(col.key, self._BATCH_COLUMN_DEFAULT)
+                item.setTextAlignment(i, anchor)
+        results_group_layout.addWidget(tree)
+        self.batch_results_tree = tree  # Store for export
+        self.results_page_layout.addWidget(results_group, stretch=1)
+
+        # Footer: results-on-disk label + folder/viewer buttons.
+        footer = QHBoxLayout()
+        csv_path = Path(view.output_dir) / results_layout.alps_csv_name(
+            results_layout.DEFAULT_ROI_TOKEN
+        )
+        footer.addWidget(QLabel(f"Results saved to: {csv_path}"))
+        footer.addStretch()
+        open_viewer = QPushButton("Open Results Viewer")
+        open_viewer.clicked.connect(
+            lambda _c=False, d=view.output_dir: self._open_results_viewer(d)
+        )
+        open_folder = QPushButton("Open Output Folder")
+        open_folder.clicked.connect(self._open_batch_output_folder)
+        footer.addWidget(open_viewer)
+        footer.addWidget(open_folder)
+        self.results_page_layout.addLayout(footer)
+
+    def _open_batch_output_folder(self):
+        """Open the batch output folder in the OS file manager."""
+        import subprocess
+        import sys
+
+        if self.batch_state and self.batch_state.config.output_dir:
+            output_dir = self.batch_state.config.output_dir
+            if Path(output_dir).exists():
+                if sys.platform == "darwin":
+                    subprocess.run(["open", output_dir])
+                elif sys.platform == "linux":
+                    subprocess.run(["xdg-open", output_dir])
+                else:
+                    subprocess.run(["explorer", output_dir])
 
     # ------------------------------------------------------------------ #
     # Logging
