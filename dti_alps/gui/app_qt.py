@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QStackedWidget,
     QTreeWidget,
     QTreeWidgetItem,
@@ -733,29 +734,388 @@ class DTIALPSApplication(QMainWindow):
         if path:
             self.staging_dir_edit.setText(path)
 
+    # ------------------------------------------------------------------ #
+    # Shared CLI-option-row builder (Decision 9)
+    # ------------------------------------------------------------------ #
+    def _cli_header(self, grid: QGridLayout):
+        """Add the aligned 5-column header + separator to a CLI-options grid."""
+        grid.addWidget(_bold(QLabel("Option")), 0, 1, Qt.AlignLeft)
+        grid.addWidget(_bold(QLabel("Value")), 0, 2, Qt.AlignLeft)
+        grid.addWidget(_bold(QLabel("Description")), 0, 4, Qt.AlignLeft)
+        grid.addWidget(_hline(), 1, 0, 1, 5)
+
+    def add_cli_option_row(
+        self,
+        grid: QGridLayout,
+        row: int,
+        name: str,
+        opt_type: str,
+        description: str,
+        stage_prefix: str,
+        filetypes: list | None = None,
+        choices: list | None = None,
+    ) -> dict:
+        """
+        Populate one CLI-option row in a shared grid and return its handle.
+
+        Five aligned columns (checkbox | name | value | Browse | description) in
+        the caller's single grid, so columns line up across the header and every
+        row (Decision 9). The handle exposes ``is_enabled()``/``value()`` (value
+        always a string; int coercion stays in the model) and is registered under
+        ``cli_option_rows[stage_prefix][name]`` — the Qt twin of
+        ``cli_option_vars``.
+        """
+        self.cli_option_rows.setdefault(stage_prefix, {})
+
+        checkbox = QCheckBox()
+        grid.addWidget(checkbox, row, 0, Qt.AlignLeft)
+        grid.addWidget(QLabel(name), row, 1, Qt.AlignLeft)
+
+        value_widget = None
+        browse_btn = None
+
+        if opt_type == "flag":
+            pass  # flags have no value widget
+        elif opt_type == "choice" and choices:
+            value_widget = QComboBox()
+            value_widget.addItems(choices)
+            value_widget.setEnabled(False)
+            grid.addWidget(value_widget, row, 2, Qt.AlignLeft)
+        elif opt_type in ("file", "dir", "output", "prefix"):
+            value_widget = QLineEdit()
+            value_widget.setEnabled(False)
+            grid.addWidget(value_widget, row, 2)
+            browse_btn = QPushButton("Browse...")
+            browse_btn.setEnabled(False)
+            if opt_type in ("file", "prefix"):
+                browse_btn.clicked.connect(
+                    lambda _c=False, v=value_widget, ft=filetypes: self._browse_cli_file(v, ft)
+                )
+            elif opt_type == "dir":
+                browse_btn.clicked.connect(lambda _c=False, v=value_widget: self._browse_cli_dir(v))
+            elif opt_type == "output":
+                browse_btn.clicked.connect(
+                    lambda _c=False, v=value_widget, ft=filetypes: self._browse_cli_save(
+                        v, ft or config.NIFTI_FILETYPES
+                    )
+                )
+            grid.addWidget(browse_btn, row, 3)
+        else:
+            value_widget = QLineEdit()
+            value_widget.setEnabled(False)
+            grid.addWidget(value_widget, row, 2, Qt.AlignLeft)
+
+        desc_label = QLabel(description)
+        desc_label.setStyleSheet("color: gray;")
+        grid.addWidget(desc_label, row, 4, Qt.AlignLeft)
+
+        def on_toggle(checked, vw=value_widget, bb=browse_btn):
+            if vw is not None:
+                vw.setEnabled(checked)
+            if bb is not None:
+                bb.setEnabled(checked)
+
+        checkbox.toggled.connect(on_toggle)
+
+        def value_getter(vw=value_widget):
+            if vw is None:
+                return ""
+            if isinstance(vw, QComboBox):
+                return vw.currentText()
+            return vw.text()
+
+        handle = {
+            "checkbox": checkbox,
+            "value_widget": value_widget,
+            "browse_btn": browse_btn,
+            "type": opt_type,
+            "is_enabled": checkbox.isChecked,
+            "value": value_getter,
+        }
+        self.cli_option_rows[stage_prefix][name] = handle
+        return handle
+
+    def _build_options_group(self, title, options, stage_prefix, resolver=None):
+        """Build a titled group box holding a header + one CLI row per option."""
+        group = QGroupBox(title)
+        grid = QGridLayout(group)
+        self._cli_header(grid)
+        for i, (name, opt_type, desc, _default) in enumerate(options):
+            filetypes, choices = resolver(name, opt_type) if resolver else (None, None)
+            self.add_cli_option_row(
+                grid, i + 2, name, opt_type, desc, stage_prefix, filetypes, choices
+            )
+        grid.setColumnStretch(2, 1)
+        return group
+
+    def _browse_cli_file(self, value_widget, filetypes):
+        """Browse for a file and set the value widget."""
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_FILE)
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select File", initial_dir, _qt_name_filter(filetypes)
+        )
+        if path:
+            value_widget.setText(path)
+            user_config.set_from_path(UserConfig.KEY_CLI_FILE, path)
+
+    def _browse_cli_dir(self, value_widget):
+        """Browse for a directory and set the value widget."""
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_DIR)
+        path = QFileDialog.getExistingDirectory(self, "Select Directory", initial_dir)
+        if path:
+            value_widget.setText(path)
+            user_config.set_from_path(UserConfig.KEY_CLI_DIR, path)
+
+    def _browse_cli_save(self, value_widget, filetypes):
+        """Browse for a save-file location and set the value widget."""
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_SAVE)
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Select Output File", initial_dir, _qt_name_filter(filetypes)
+        )
+        if path:
+            value_widget.setText(path)
+            user_config.set_from_path(UserConfig.KEY_CLI_SAVE, path)
+
+    def _scroll_page(self, info_text: str):
+        """A page with an info label above a vertical-scrolling content area."""
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        if info_text:
+            info = QLabel(info_text)
+            info.setWordWrap(True)
+            outer.addWidget(info)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        scroll.setWidget(content)
+        outer.addWidget(scroll, stretch=1)
+        return page, content_layout
+
+    # ------------------------------------------------------------------ #
+    # CLI-row stage pages (c-i)
+    # ------------------------------------------------------------------ #
     def _create_dwidenoise_page(self):
-        self._placeholder("dwidenoise", "dwidenoise — coming in region (c-i).")
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(QLabel("Thermal noise removal using Marchenko-Pastur PCA denoising."))
+
+        self.run_denoising_check = QCheckBox("Enable denoising (recommended)")
+        self.run_denoising_check.setChecked(True)
+        layout.addWidget(self.run_denoising_check)
+
+        def resolver(name, t):
+            if t == "file" and "mask" in name:
+                return config.NIFTI_FILETYPES, None
+            if t == "output":
+                return config.NIFTI_FILETYPES, None
+            if t == "choice" and name == "-datatype":
+                return None, config.DWIDENOISE_DATATYPE_CHOICES
+            if t == "choice" and name == "-estimator":
+                return None, config.DWIDENOISE_ESTIMATOR_CHOICES
+            return None, None
+
+        layout.addWidget(
+            self._build_options_group(
+                "dwidenoise Options", config.DWIDENOISE_OPTIONS, "dwidenoise", resolver
+            ),
+            stretch=1,
+        )
+        self._register_page("dwidenoise", page)
 
     def _create_mrdegibbs_page(self):
-        self._placeholder("mrdegibbs", "mrdegibbs — coming in region (c-i).")
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(QLabel("Gibbs ringing artifact removal using local subvoxel-shifts."))
+
+        self.run_degibbs_check = QCheckBox("Enable Gibbs ringing removal (recommended)")
+        self.run_degibbs_check.setChecked(True)
+        layout.addWidget(self.run_degibbs_check)
+
+        layout.addWidget(
+            self._build_options_group("mrdegibbs Options", config.MRDEGIBBS_OPTIONS, "mrdegibbs"),
+            stretch=1,
+        )
+        self._register_page("mrdegibbs", page)
 
     def _create_dwifslpreproc_page(self):
-        self._placeholder("dwifslpreproc", "dwifslpreproc — coming in region (c-i).")
+        page, content = self._scroll_page(
+            "Configure optional CLI arguments for dwifslpreproc.\n"
+            "Core parameters (PE direction, readout time, RPE scheme) are set in Data Input."
+        )
+
+        def resolver(name, t):
+            if t == "file":
+                if "mask" in name:
+                    return config.NIFTI_FILETYPES, None
+                if "json" in name:
+                    return config.JSON_FILETYPES, None
+                if "slspec" in name:
+                    return [("Text files", "*.txt"), ("All files", "*.*")], None
+            return None, None
+
+        content.addWidget(
+            self._build_options_group(
+                "dwifslpreproc Options",
+                config.DWIFSLPREPROC_OPTIONS,
+                "dwifslpreproc",
+                resolver,
+            )
+        )
+        content.addStretch()
+        self._register_page("dwifslpreproc", page)
+
+    def _create_eddy_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(
+            QLabel(
+                "Configure FSL eddy for motion and distortion correction.\n"
+                "Eddy will use the topup outputs from your synB0-DISCO run."
+            )
+        )
+
+        def resolver(name, t):
+            if name == "slm":
+                return None, config.SYNB0_EDDY_SLM_CHOICES
+            return None, None
+
+        layout.addWidget(
+            self._build_options_group(
+                "Eddy Options", config.SYNB0_EDDY_OPTIONS, "synb0_eddy", resolver
+            ),
+            stretch=1,
+        )
+
+        # Pre-enable repol (recommended), mirroring the Tk default.
+        repol = self.cli_option_rows.get("synb0_eddy", {}).get("repol")
+        if repol:
+            repol["checkbox"].setChecked(True)
+
+        self._register_page("eddy", page)
+
+    def _create_dwi2tensor_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(
+            QLabel(
+                "Configure optional CLI arguments for dwi2tensor (DTI fitting).\n"
+                "The diffusion tensor will be computed from the preprocessed DWI data."
+            )
+        )
+
+        def resolver(name, t):
+            if t == "file" and "mask" in name:
+                return config.NIFTI_FILETYPES, None
+            if t == "output":
+                return config.NIFTI_FILETYPES, None
+            return None, None
+
+        layout.addWidget(
+            self._build_options_group(
+                "dwi2tensor Options", config.DWI2TENSOR_OPTIONS, "dwi2tensor", resolver
+            ),
+            stretch=1,
+        )
+        self._register_page("dwi2tensor", page)
+
+    def _create_tensor2metric_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(
+            QLabel(
+                "Configure optional CLI arguments for tensor2metric (metric extraction).\n"
+                "FA and V1 are always computed (required for ALPS analysis).\n"
+                "Additional metrics can be enabled below."
+            )
+        )
+
+        def resolver(name, t):
+            if t == "file" and "mask" in name:
+                return config.NIFTI_FILETYPES, None
+            if t == "output":
+                return config.NIFTI_FILETYPES, None
+            if t == "choice" and name == "-modulate":
+                return None, config.TENSOR2METRIC_MODULATE_CHOICES
+            return None, None
+
+        layout.addWidget(
+            self._build_options_group(
+                "tensor2metric Options",
+                config.TENSOR2METRIC_OPTIONS,
+                "tensor2metric",
+                resolver,
+            ),
+            stretch=1,
+        )
+        self._register_page("tensor2metric", page)
+
+    def _create_registration_page(self):
+        page, content = self._scroll_page(
+            "Configure parameters for FA-to-template registration.\n"
+            "This step registers the subject FA map to the JHU-ICBM template\n"
+            "using dwi2mask for brain extraction and FSL tools (FLIRT/FNIRT) for registration."
+        )
+
+        # Brain extraction (dwi2mask) info panel — static text, no options.
+        dwi2mask_group = QGroupBox("Brain Extraction (dwi2mask)")
+        dwi2mask_layout = QVBoxLayout(dwi2mask_group)
+        dwi2mask_info = QLabel(
+            "Brain extraction is performed automatically using MRtrix3's dwi2mask.\n"
+            "This method extracts a brain mask directly from the preprocessed DWI data,\n"
+            "which is more reliable for diffusion images than traditional T1-based methods.\n\n"
+            "The brain mask is then applied to the FA map before registration."
+        )
+        dwi2mask_layout.addWidget(dwi2mask_info)
+        details = QGridLayout()
+        details.addWidget(_bold(QLabel("Input:")), 0, 0, Qt.AlignLeft)
+        details.addWidget(QLabel("Preprocessed DWI with bvecs/bvals"), 0, 1, Qt.AlignLeft)
+        details.addWidget(_bold(QLabel("Output:")), 1, 0, Qt.AlignLeft)
+        details.addWidget(QLabel("Binary brain mask applied to FA"), 1, 1, Qt.AlignLeft)
+        details.addWidget(_bold(QLabel("Validation:")), 2, 0, Qt.AlignLeft)
+        details.addWidget(
+            QLabel("Pipeline fails if no b0 volumes found in DWI data"), 2, 1, Qt.AlignLeft
+        )
+        details.setColumnStretch(1, 1)
+        dwi2mask_layout.addLayout(details)
+        content.addWidget(dwi2mask_group)
+
+        def flirt_resolver(name, t):
+            if name == "-dof":
+                return None, config.FLIRT_DOF_CHOICES
+            if name == "-cost":
+                return None, config.FLIRT_COST_CHOICES
+            if name == "-interp":
+                return None, config.FLIRT_INTERP_CHOICES
+            return None, None
+
+        content.addWidget(
+            self._build_options_group(
+                "FLIRT (Linear Registration)", config.FLIRT_OPTIONS, "flirt", flirt_resolver
+            )
+        )
+
+        def fnirt_resolver(name, t):
+            if name == "--intmod":
+                return None, config.FNIRT_INTMOD_CHOICES
+            return None, None
+
+        content.addWidget(
+            self._build_options_group(
+                "FNIRT (Non-linear Registration)",
+                config.FNIRT_OPTIONS,
+                "fnirt",
+                fnirt_resolver,
+            )
+        )
+        content.addStretch()
+        self._register_page("registration", page)
 
     def _create_synb0_page(self):
         self._placeholder("synb0", "synB0-DISCO — coming in region (c-ii).")
-
-    def _create_eddy_page(self):
-        self._placeholder("eddy", "Eddy — coming in region (c-i).")
-
-    def _create_dwi2tensor_page(self):
-        self._placeholder("dwi2tensor", "dwi2tensor — coming in region (c-i).")
-
-    def _create_tensor2metric_page(self):
-        self._placeholder("tensor2metric", "tensor2metric — coming in region (c-i).")
-
-    def _create_registration_page(self):
-        self._placeholder("registration", "Registration — coming in region (c-i).")
 
     def _create_roi_page(self):
         self._placeholder("roi", "ROI Placement — coming in region (c-ii).")
