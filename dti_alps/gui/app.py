@@ -23,7 +23,6 @@ import threading
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -174,7 +173,6 @@ class DTIALPSApplication(QMainWindow):
         self.output_option_checks: dict[str, QWidget] = {}
 
         # Build UI
-        self._create_menu()
         self._create_toolbar()
         self._create_main_layout()
 
@@ -258,22 +256,8 @@ class DTIALPSApplication(QMainWindow):
         self.run_btn.setEnabled(readiness.can_run and not running)
 
     # ------------------------------------------------------------------ #
-    # Menu / toolbar
+    # Toolbar
     # ------------------------------------------------------------------ #
-    def _create_menu(self):
-        """Create the menu bar (File / Help)."""
-        menubar = self.menuBar()
-
-        file_menu = menubar.addMenu("File")
-        exit_action = QAction("Exit", self)
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-
-        help_menu = menubar.addMenu("Help")
-        about_action = QAction("About", self)
-        about_action.triggered.connect(self._show_about)
-        help_menu.addAction(about_action)
-
     def _create_toolbar(self):
         """Create the centered two-button toolbar (Run + Cancel)."""
         self.toolbar_widget = QWidget()
@@ -1709,19 +1693,6 @@ class DTIALPSApplication(QMainWindow):
                 self.log_file.flush()
             except OSError:
                 pass
-
-    # ------------------------------------------------------------------ #
-    # Misc
-    # ------------------------------------------------------------------ #
-    def _show_about(self):
-        QMessageBox.information(
-            self,
-            "About",
-            f"{config.APP_NAME}\n"
-            f"Version {config.APP_VERSION}\n\n"
-            "Automatic DTI-ALPS ROI Placement and Analysis\n\n"
-            "Uses MRtrix3 for preprocessing and DTI fitting.",
-        )
 
 
 def _bold(label: QLabel) -> QLabel:
