@@ -7,14 +7,14 @@ A tkinter-based graphical interface for end-to-end DTI-ALPS analysis.
 import sys
 
 
-def _check_dependencies():
-    """Check for required GUI dependencies."""
-    import importlib.util
+def _check_science_deps():
+    """Check for the numpy/nibabel/scipy science stack (toolkit-independent).
 
-    if importlib.util.find_spec("tkinter") is None:
-        print("Error: tkinter is required but not installed.")
-        print("On Ubuntu/Debian: sudo apt-get install python3-tk")
-        sys.exit(1)
+    Factored out of :func:`_check_dependencies` so the Qt entry points
+    (``main_qt`` / the viewer) can validate the science stack without also
+    requiring tkinter (PRD 0013, Decision 12).
+    """
+    import importlib.util
 
     missing_packages = []
     for pkg in ["nibabel", "numpy", "scipy"]:
@@ -25,6 +25,18 @@ def _check_dependencies():
         print(f"Error: Required packages not found: {', '.join(missing_packages)}")
         print("Please install: pip install nibabel numpy scipy")
         sys.exit(1)
+
+
+def _check_dependencies():
+    """Check for required GUI dependencies (Tk app)."""
+    import importlib.util
+
+    if importlib.util.find_spec("tkinter") is None:
+        print("Error: tkinter is required but not installed.")
+        print("On Ubuntu/Debian: sudo apt-get install python3-tk")
+        sys.exit(1)
+
+    _check_science_deps()
 
 
 def _check_viewer_dependencies():
@@ -50,6 +62,21 @@ def main():
 
     app = DTIALPSApplication()
     app.mainloop()
+
+
+def main_qt():
+    """Launch the PySide6 main application (temporary ``--gui-qt`` entry point).
+
+    Mirrors :func:`viewer`: it validates PySide6 (same message as the viewer)
+    plus the science stack, and never requires tkinter. Removed at the final
+    flip when ``--gui`` points at the Qt window (PRD 0013, Decision 12).
+    """
+    _check_viewer_dependencies()
+    _check_science_deps()
+
+    from .app_qt import launch_app_qt
+
+    launch_app_qt()
 
 
 def viewer(output_folder: str | None = None):
