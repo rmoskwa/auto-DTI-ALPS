@@ -8,9 +8,12 @@ not redefined here.
 ## The engine / GUI split
 
 - **Engine** — the `dti_alps/processing/` package: the distributable analysis core.
-  It is tk-free and does not import `dti_alps.gui`. The dependency
-  arrow points one way only: **`gui → processing`, never the reverse** (pinned by a
-  subprocess import-guard test).
+  It imports **no GUI toolkit** (`PySide6`, `tkinter`) — not directly, and not via
+  `dti_alps.gui`, which it also does not import. The dependency arrow points one way
+  only: **`gui → processing`, never the reverse**. Pinned by a subprocess import-guard
+  test that asserts the *property* (no toolkit resident after importing an engine
+  module — the engine runs headless), not merely the proxy (no `dti_alps.gui`
+  resident).
 - **GUI** — the `dti_alps/gui/` package. May hold tk-free **presentation models**
   (see *ResultModel*, *ViewerModel*) that carry GUI text and shaping but import no
   Tkinter, plus the Tkinter **adapter** layer that renders them.
