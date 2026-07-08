@@ -1191,20 +1191,14 @@ class DTIALPSApplication(QMainWindow):
         param_group = QGroupBox("ROI Placement Parameters")
         params = QGridLayout(param_group)
 
-        # ROI shapes
+        # ROI shapes — token, label, default, and order all come from the
+        # catalog (config.ROI_SHAPES), the single source shared with form_model.
         params.addWidget(QLabel("ROI Shapes:"), 0, 0, Qt.AlignLeft | Qt.AlignTop)
         shapes_row = QHBoxLayout()
-        shape_labels = [
-            ("sphere2", "Sphere 2.0mm", False),
-            ("sphere2p5", "Sphere 2.5mm", False),
-            ("sphere3", "Sphere 3.0mm", True),
-            ("squarev4", "Square 2x2", False),
-            ("squarev9", "Square 3x3", False),
-        ]
-        for token, label, default in shape_labels:
-            chk = QCheckBox(label)
-            chk.setChecked(default)
-            self.roi_shape_checks[token] = chk
+        for shape in config.ROI_SHAPES:
+            chk = QCheckBox(shape.label)
+            chk.setChecked(shape.default)
+            self.roi_shape_checks[shape.token] = chk
             shapes_row.addWidget(chk)
         shapes_row.addStretch()
         shapes_container = QWidget()
