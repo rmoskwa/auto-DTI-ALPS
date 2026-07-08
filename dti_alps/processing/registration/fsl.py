@@ -460,15 +460,9 @@ class FSLRegistration(RegistrationBackend):
                 shape_type = shape_config.get("type", "sphere")
                 sphere_radius = shape_config.get("radius", 3.0) if shape_type == "sphere" else None
 
-                # Create descriptive directory name
-                if shape_type == "sphere":
-                    # Format: sphere3, sphere2p5, sphere3p5
-                    r_str = str(sphere_radius).replace(".", "p").rstrip("0").rstrip("p")
-                    shape_name = f"sphere{r_str}"
-                else:
-                    shape_name = shape_type  # squarev9, squarev4
-
-                # Add _refined suffix if refinement is enabled
+                # The on-disk token (with the default-3mm-sphere -> `rois` collapse)
+                # is owned by results_layout; the _refined suffix is added here.
+                shape_name = results_layout.shape_token(shape_type, sphere_radius)
                 dir_name = results_layout.roi_dir_name(shape_name, refined=do_refinement)
 
                 roi_dir = Path(state.output_dir) / dir_name

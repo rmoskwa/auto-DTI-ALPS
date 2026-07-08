@@ -67,6 +67,10 @@ COL_LEGACY_COMBINED = "Combined ALPS"
 DEFAULT_ROI_TOKEN = "rois"
 _ROI_DIR_PREFIX = "rois_"
 
+# The default sphere radius (mm). A sphere of this radius is *the* default ROI
+# and collapses to the bare ``rois`` token (see :func:`shape_token`).
+DEFAULT_SPHERE_RADIUS = 3.0
+
 # --- ROI-mask identity ------------------------------------------------------
 # The four canonical ROI-mask names (projection/association x left/right). The
 # single home for the set: the registration backend builds its template-path
@@ -80,6 +84,34 @@ ROI_NAMES = ("left_proj", "right_proj", "left_assoc", "right_assoc")
 _ROI_MASK_TEMPLATE = "{subject}_{roi_name}.nii.gz"
 
 
+def shape_token(shape_type: str, sphere_radius: float | None) -> str:
+    """
+    Map an ROI geometry to its base on-disk token (before any refinement).
+
+    The single home for *geometry -> token*, including the **default collapse**:
+    the default 3.0 mm sphere is the bare ``rois`` token, every other sphere is
+    ``sphere{radius}`` (``2.5 -> sphere2p5``, ``2.0 -> sphere2``), and squares
+    pass through by type. Writers call this instead of hand-formatting the token,
+    so the default 3.0 mm sphere cannot bypass the collapse and land in
+    ``rois_sphere3/`` (the bug this replaced).
+
+    >>> shape_token("sphere", 3.0)
+    'rois'
+    >>> shape_token("sphere", 2.5)
+    'sphere2p5'
+    >>> shape_token("sphere", 2.0)
+    'sphere2'
+    >>> shape_token("squarev9", None)
+    'squarev9'
+    """
+    if shape_type != "sphere":
+        return shape_type  # squarev9, squarev4
+    if sphere_radius == DEFAULT_SPHERE_RADIUS:
+        return DEFAULT_ROI_TOKEN
+    r_str = str(sphere_radius).replace(".", "p").rstrip("0").rstrip("p")
+    return f"sphere{r_str}"
+
+
 def roi_dir_name(token: str, refined: bool = False) -> str:
     """
     Build the on-disk ROI-directory name for ``token``.
@@ -89,8 +121,14 @@ def roi_dir_name(token: str, refined: bool = False) -> str:
     first. The viewer passes whole tokens (with ``_refined`` already baked in)
     and leaves ``refined`` at its default.
 
+    The default token maps to the bare ``rois/`` directory; its refined variant
+    is ``rois_refined/`` (not ``rois_rois_refined/``). Every other token gets the
+    ``rois_{token}`` form.
+
     >>> roi_dir_name("rois")
     'rois'
+    >>> roi_dir_name("rois", refined=True)
+    'rois_refined'
     >>> roi_dir_name("squarev9")
     'rois_squarev9'
     >>> roi_dir_name("squarev9", refined=True)
@@ -100,6 +138,10 @@ def roi_dir_name(token: str, refined: bool = False) -> str:
         token = f"{token}_refined"
     if token == DEFAULT_ROI_TOKEN:
         return DEFAULT_ROI_TOKEN
+    # The refined default ("rois_refined") is already a directory name — it
+    # carries the ``rois`` base, so it must not gain a second ``rois_`` prefix.
+    if token.startswith(_ROI_DIR_PREFIX):
+        return token
     return f"{_ROI_DIR_PREFIX}{token}"
 
 
@@ -113,6 +155,8 @@ def parse_roi_dir(name: str) -> str | None:
 
     >>> parse_roi_dir("rois")
     'rois'
+    >>> parse_roi_dir("rois_refined")
+    'rois_refined'
     >>> parse_roi_dir("rois_squarev9_refined")
     'squarev9_refined'
     >>> parse_roi_dir("registration") is None
@@ -120,6 +164,10 @@ def parse_roi_dir(name: str) -> str | None:
     """
     if name == DEFAULT_ROI_TOKEN:
         return DEFAULT_ROI_TOKEN
+    # The refined default keeps its ``rois`` base rather than stripping to a bare
+    # ``refined`` token (which would not round-trip and would mis-display).
+    if name == f"{DEFAULT_ROI_TOKEN}_refined":
+        return name
     if name.startswith(_ROI_DIR_PREFIX):
         return name[len(_ROI_DIR_PREFIX) :]
     return None

@@ -19,8 +19,11 @@ ROI Reanalysis (post-processing with different ROI shapes):
 Output naming:
     Without --refine: rois_{shape}/ and alps_results_{shape}.csv
     With --refine:    rois_{shape}_refined/ and alps_results_{shape}_refined.csv
+    The default 3 mm sphere collapses to the bare rois/ and alps_results.csv.
 
     Examples:
+        --sphere 3          -> rois/, alps_results.csv
+        --sphere 3 --refine -> rois_refined/, alps_results_rois_refined.csv
         --squarev9          -> rois_squarev9/, alps_results_squarev9.csv
         --squarev9 --refine -> rois_squarev9_refined/, alps_results_squarev9_refined.csv
         --squarev4          -> rois_squarev4/, alps_results_squarev4.csv

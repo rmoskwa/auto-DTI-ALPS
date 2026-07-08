@@ -29,10 +29,17 @@ ViewerModel work).
   disk: `rois` (the default 3.0 mm sphere), `squarev9`, `squarev4`, `sphere2p5`,
   optionally suffixed `_refined`. The engine speaks **tokens**; the GUI maps a token
   to a **display name** (`"Square 3x3"`, `"Sphere 2.5mm (r)"`) for the user.
+- **Geometry → token** — `shape_token(shape_type, sphere_radius)` is the single
+  home for turning an ROI *geometry* into its base on-disk **token**, including the
+  **default collapse**: the default 3.0 mm sphere (`DEFAULT_SPHERE_RADIUS`) is the
+  bare `rois` token, every other sphere is `sphere{radius}` (`2.5 → sphere2p5`),
+  squares pass through by type. Both writers (`registration/fsl.py`,
+  `reanalysis.py`) call it, so the default sphere cannot bypass the collapse and
+  land in `rois_sphere3/` (PRD 0016; was previously duplicated + drifted).
 - **ROI directory** — `rois/` for the default, `rois_{token}/` otherwise
-  (`{token}_refined` when refined). Built by `roi_dir_name`, parsed by
-  `parse_roi_dir` — replacing the scattered `f"rois_{...}"` literals and the magic
-  `name[5:]` strip.
+  (`{token}_refined` when refined; the refined default is `rois_refined/`, not
+  `rois_rois_refined/`). Built by `roi_dir_name`, parsed by `parse_roi_dir` —
+  replacing the scattered `f"rois_{...}"` literals and the magic `name[5:]` strip.
 - **ALPS results CSV** — `alps_results.csv` for the default, `alps_results_{token}.csv`
   otherwise (`alps_csv_name`).
 - **ALPS column schema** — the canonical column names of the results CSV
