@@ -16,6 +16,7 @@ import csv
 import pytest
 
 from dti_alps.processing.results_layout import (
+    DEFAULT_ROI_TOKEN,
     METHOD_BOTH,
     METHOD_LAB,
     METHOD_PAS,
@@ -30,6 +31,7 @@ from dti_alps.processing.results_layout import (
     roi_dir_name,
     roi_mask_glob,
     roi_mask_name,
+    shape_token,
     write_alps_csv,
 )
 
@@ -49,7 +51,15 @@ class TestNamingRoundTrip:
 
     @pytest.mark.parametrize(
         "token",
-        ["rois", "squarev9", "squarev4", "sphere2p5", "sphere3", "squarev9_refined"],
+        [
+            "rois",
+            "rois_refined",
+            "squarev9",
+            "squarev4",
+            "sphere2p5",
+            "sphere3",
+            "squarev9_refined",
+        ],
     )
     def test_dir_round_trips_for_whole_tokens(self, token):
         assert parse_roi_dir(roi_dir_name(token)) == token
@@ -58,6 +68,12 @@ class TestNamingRoundTrip:
         assert roi_dir_name("rois") == "rois"
         assert parse_roi_dir("rois") == "rois"
 
+    def test_refined_default_is_rois_refined_not_double_prefixed(self):
+        # The default's refined variant is `rois_refined/`, NOT `rois_rois_refined/`.
+        assert roi_dir_name("rois", refined=True) == "rois_refined"
+        assert parse_roi_dir("rois_refined") == "rois_refined"
+        assert alps_csv_name("rois", refined=True) == "alps_results_rois_refined.csv"
+
     def test_non_default_token_gets_the_rois_prefix(self):
         assert roi_dir_name("squarev9") == "rois_squarev9"
         assert parse_roi_dir("rois_squarev9") == "squarev9"
@@ -65,6 +81,24 @@ class TestNamingRoundTrip:
     def test_refined_flag_appends_suffix(self):
         assert roi_dir_name("squarev9", refined=True) == "rois_squarev9_refined"
         assert alps_csv_name("squarev9", refined=True) == "alps_results_squarev9_refined.csv"
+
+
+class TestShapeToken:
+    """geometry -> token, the single home including the default-3mm collapse."""
+
+    def test_default_sphere_collapses_to_the_bare_rois_token(self):
+        assert shape_token("sphere", 3.0) == DEFAULT_ROI_TOKEN
+
+    @pytest.mark.parametrize(
+        ("radius", "expected"),
+        [(2.0, "sphere2"), (2.5, "sphere2p5"), (3.5, "sphere3p5"), (4.0, "sphere4")],
+    )
+    def test_non_default_sphere_gets_explicit_token(self, radius, expected):
+        assert shape_token("sphere", radius) == expected
+
+    def test_squares_pass_through_by_type(self):
+        assert shape_token("squarev9", None) == "squarev9"
+        assert shape_token("squarev4", None) == "squarev4"
 
     def test_parse_rejects_non_roi_dirs(self):
         assert parse_roi_dir("registration") is None
