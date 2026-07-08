@@ -28,7 +28,7 @@ from .alps_calculation import (
 )
 from .constants import FA_THRESHOLD
 from .native_placement import place_rois_in_native
-from .registration.base import get_roi_template_paths
+from .registration.results import get_roi_template_paths
 from .tool_runner import SubprocessToolRunner, ToolRunner
 
 

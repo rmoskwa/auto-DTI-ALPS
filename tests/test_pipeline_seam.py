@@ -194,23 +194,24 @@ def test_failure_scripted_by_predicate_not_position(tmp_path):
 def test_run_registration_forwards_runner_to_backend(tmp_path, monkeypatch):
     # Deviation #2 closure (fsl): the single fake injected at the pipeline must
     # reach the registration backend, so the backend's FSL commands cross the
-    # same seam. We assert the pipeline forwards *its own* runner to the
-    # get_backend factory -- the seam-crossing call. (run_registration then fails
-    # at the real check_available() gate because no FSL is installed; that is
-    # expected and not what this test is about. The backend actually routing FSL
-    # commands through that runner is covered in tests/test_registration_seam.py.)
+    # same seam. We assert the pipeline forwards *its own* runner into the
+    # FSLRegistration constructor -- the seam-crossing call. (run_registration
+    # then fails at the real check_available() gate because no FSL is installed;
+    # that is expected and not what this test is about. The backend actually
+    # routing FSL commands through that runner is covered in
+    # tests/test_registration_seam.py.)
     state = _make_state(tmp_path)
     fake = FakeToolRunner()
     pipeline = _runner(state, fake)
 
     captured: dict[str, object] = {}
-    real_get_backend = registration.get_backend
+    real_cls = registration.FSLRegistration
 
-    def spy(name, runner=None):
+    def spy(runner=None):
         captured["runner"] = runner
-        return real_get_backend(name, runner=runner)
+        return real_cls(runner=runner)
 
-    monkeypatch.setattr(registration, "get_backend", spy)
+    monkeypatch.setattr(registration, "FSLRegistration", spy)
 
     pipeline.run_registration()
 

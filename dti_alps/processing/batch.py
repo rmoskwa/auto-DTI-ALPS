@@ -144,7 +144,6 @@ class BatchRunner:
             # Registration parameters
             flirt_options=dict(batch_config.flirt_options),
             fnirt_options=dict(batch_config.fnirt_options),
-            registration_backend=batch_config.registration_backend,
             # ROI placement parameters
             roi_shapes=list(batch_config.roi_shapes),
             fa_threshold=batch_config.fa_threshold,

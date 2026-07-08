@@ -1,10 +1,10 @@
 """
 Fake-driven tests for the FSL registration backend across the ToolRunner seam.
 
-These prove the fsl conversion (strangler step 3): the runner threaded through
-``get_backend`` reaches every FSL command, so a single fake injected where the
-pipeline injects it (see ``test_run_registration_forwards_runner_to_backend`` in
-test_pipeline_seam.py) captures registration / ROI-placement commands too.
+These prove the fsl conversion (strangler step 3): the runner threaded into
+``FSLRegistration`` reaches every FSL command, so a single fake injected where
+the pipeline injects it (see ``test_run_registration_forwards_runner_to_backend``
+in test_pipeline_seam.py) captures registration / ROI-placement commands too.
 
 As with the pipeline-seam tests, no FSL is installed and nothing is written to
 disk by the seam. ``register()`` itself is not driven end-to-end here: it has
@@ -14,7 +14,6 @@ asserting a full real run is the integration smoke's job, not the fake's. So we
 exercise the command-issuing helpers directly, which is where the seam lives.
 """
 
-from dti_alps.processing import registration
 from dti_alps.processing.b0_extraction import (
     apply_mask_to_image,
     create_brain_mask_from_dwi,
@@ -23,22 +22,21 @@ from dti_alps.processing.registration.fsl import FSLRegistration
 from dti_alps.processing.tool_runner import SubprocessToolRunner
 from tests.fakes import FakeToolRunner
 
-# --- Factory threading ------------------------------------------------------
+# --- Runner threading -------------------------------------------------------
 
 
-def test_get_backend_threads_runner_into_fsl_backend():
-    # The exact call the pipeline makes -- get_backend(name, runner=...) -- hands
+def test_fsl_backend_threads_runner():
+    # The exact call the pipeline makes -- FSLRegistration(runner=...) -- hands
     # the backend the injected runner, so its FSL commands cross the same seam.
     fake = FakeToolRunner()
-    backend = registration.get_backend("fsl", runner=fake)
-    assert isinstance(backend, FSLRegistration)
+    backend = FSLRegistration(runner=fake)
     assert backend.runner is fake
 
 
-def test_get_backend_without_runner_defaults_to_real():
+def test_fsl_backend_without_runner_defaults_to_real():
     # Production construction (no runner) keeps a real subprocess-backed runner,
     # so the live pipeline path is unchanged.
-    backend = registration.get_backend("fsl")
+    backend = FSLRegistration()
     assert isinstance(backend.runner, SubprocessToolRunner)
 
 

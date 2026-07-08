@@ -136,9 +136,6 @@ class PipelineState:
     flirt_options: dict[str, Any] = field(default_factory=dict)
     fnirt_options: dict[str, Any] = field(default_factory=dict)
 
-    # Registration backend to use for FA-to-template registration ('fsl', 'ants' in future)
-    registration_backend: str = "fsl"
-
     # Stage 8: ROI placement parameters
     # ROI shapes to create - list of dicts with 'type' and optional 'radius'
     # e.g., [{'type': 'sphere', 'radius': 3.0}, {'type': 'squarev9'}]
@@ -273,7 +270,6 @@ class BatchConfig:
     # Registration parameters (FSL FLIRT/FNIRT)
     flirt_options: dict[str, Any] = field(default_factory=dict)
     fnirt_options: dict[str, Any] = field(default_factory=dict)
-    registration_backend: str = "fsl"  # Registration backend ('fsl', 'ants' in future)
 
     # ROI placement parameters
     # ROI shapes to create - list of dicts with 'type' and optional 'radius'

@@ -1,7 +1,7 @@
 """
-FSL-based registration backend for DTI-ALPS pipeline.
+FSL-based registration for the DTI-ALPS pipeline.
 
-This module implements the RegistrationBackend interface using FSL tools
+This module provides `FSLRegistration`, using FSL tools
 (FLIRT, FNIRT, invwarp, applywarp) for FA-to-template registration.
 
 Brain extraction is performed using MRtrix3's dwi2mask on the preprocessed
@@ -25,8 +25,7 @@ from ..b0_extraction import (
 )
 from ..native_placement import ROIPlacementError, place_rois_in_native
 from ..tool_runner import SubprocessToolRunner, ToolRunner
-from .base import (
-    RegistrationBackend,
+from .results import (
     RegistrationResult,
     ROIPlacementResult,
     get_roi_template_paths,
@@ -36,9 +35,9 @@ if TYPE_CHECKING:
     from ..state import PipelineState
 
 
-class FSLRegistration(RegistrationBackend):
+class FSLRegistration:
     """
-    FSL-based registration backend.
+    FSL-based registration for the pipeline's registration step.
 
     Uses FLIRT for linear registration and FNIRT for nonlinear registration
     to transform ROI templates from JHU space to subject native space.
@@ -54,11 +53,6 @@ class FSLRegistration(RegistrationBackend):
             command this backend issues is captured without FSL installed.
         """
         self.runner = runner or SubprocessToolRunner()
-
-    @property
-    def name(self) -> str:
-        """Return the backend name."""
-        return "fsl"
 
     def check_available(self) -> tuple[bool, list[str]]:
         """

@@ -395,8 +395,7 @@ class PipelineRunner:
         """
         Run FA-to-template registration to create inverse warp.
 
-        Uses the registration backend specified in state.registration_backend
-        (defaults to 'fsl'). Creates the inverse warp needed for ROI placement.
+        Uses FSL (FLIRT/FNIRT). Creates the inverse warp needed for ROI placement.
 
         Returns
         -------
@@ -405,23 +404,14 @@ class PipelineRunner:
         """
         self._update_stage("registration", "running")
 
-        # Get registration backend
-        backend_name = self.state.registration_backend
-        self._log(f"Starting FA-to-template registration using {backend_name} backend...")
-
-        try:
-            backend = registration.get_backend(backend_name, runner=self.runner)
-        except ValueError as e:
-            self._log(f"ERROR: {e}")
-            self._update_stage("registration", "failed")
-            return False
+        self._log("Starting FA-to-template registration using FSL...")
+        backend = registration.FSLRegistration(runner=self.runner)
 
         # Check if required tools are available
         available, missing = backend.check_available()
         if not available:
-            self._log(f"ERROR: Missing {backend_name} tools: {', '.join(missing)}")
-            if backend_name == "fsl":
-                self._log("Please ensure FSL is installed and FSLDIR is set")
+            self._log(f"ERROR: Missing FSL tools: {', '.join(missing)}")
+            self._log("Please ensure FSL is installed and FSLDIR is set")
             self._update_stage("registration", "failed")
             return False
 
@@ -452,16 +442,8 @@ class PipelineRunner:
         """
         self._update_stage("roi", "running")
 
-        # Get registration backend
-        backend_name = self.state.registration_backend
         self._log("Starting ROI placement...")
-
-        try:
-            backend = registration.get_backend(backend_name, runner=self.runner)
-        except ValueError as e:
-            self._log(f"ERROR: {e}")
-            self._update_stage("roi", "failed")
-            return False
+        backend = registration.FSLRegistration(runner=self.runner)
 
         # Run ROI placement
         result = backend.place_rois(
