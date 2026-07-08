@@ -45,19 +45,6 @@ class SetRowStatus:
 
 
 @dataclass(frozen=True)
-class UpdateStageStatus:
-    """Update the stage indicator (log + button colour) for a pipeline stage."""
-
-    stage: str
-    status: str
-
-
-@dataclass(frozen=True)
-class ResetStageButtons:
-    """Reset all stage buttons to their default style."""
-
-
-@dataclass(frozen=True)
 class ResultColumn:
     """One column of the batch-results table: a stable key and its display label."""
 
@@ -99,7 +86,28 @@ class ShowBatchResults:
 
 
 # Union of all view-intents the adapter knows how to apply.
-Intent = AppendLog | SetRowStatus | UpdateStageStatus | ResetStageButtons | ShowBatchResults
+Intent = AppendLog | SetRowStatus | ShowBatchResults
+
+
+# The stage-id -> display-name map. The engine speaks stage *ids* (``Stage`` carries
+# ``denoise``/``roi``/…); the display names are presentation text and so live here,
+# never in ``processing/``. An unknown id falls through to the raw id.
+_STAGE_NAMES = {
+    "denoise": "Denoising",
+    "degibbs": "Gibbs Ringing Removal",
+    "preproc": "Preprocessing",
+    "synb0": "synB0-DISCO",
+    "eddy": "Eddy",
+    "dti": "DTI Fitting",
+    "registration": "Registration",
+    "roi": "ROI Placement",
+    "results": "Calculating ALPS",
+}
+
+# Stage-status -> log verb. ``failed`` logs ``Failed: {stage}`` for every stage,
+# filling the previously-silent gap for denoise/degibbs/preproc/dti (which emit no
+# other failure detail line). An unrecognized status logs nothing.
+_STAGE_VERBS = {"running": "Running", "complete": "Completed", "failed": "Failed"}
 
 
 def _format_cell(value: float | None) -> str:
@@ -227,7 +235,10 @@ class ResultModel:
                 return [AppendLog(text)]
 
             case Stage(stage, status):
-                return [UpdateStageStatus(stage, status)]
+                verb = _STAGE_VERBS.get(status)
+                if verb is None:
+                    return []
+                return [AppendLog(f"{verb}: {_STAGE_NAMES.get(stage, stage)}")]
 
             case BatchStart(total):
                 return [AppendLog(f"Processing 0/{total} subjects")]
@@ -236,7 +247,6 @@ class ResultModel:
                 return [
                     AppendLog(f"Processing {index + 1}/{self.total}: {subject_id}"),
                     SetRowStatus(index, "Processing", "processing"),
-                    ResetStageButtons(),
                 ]
 
             case SubjectComplete(index, result):

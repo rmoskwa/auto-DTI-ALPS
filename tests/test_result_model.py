@@ -18,12 +18,10 @@ import pytest
 
 from dti_alps.gui.result_model import (
     AppendLog,
-    ResetStageButtons,
     ResultColumn,
     ResultModel,
     SetRowStatus,
     ShowBatchResults,
-    UpdateStageStatus,
     build_batch_results_table,
 )
 from dti_alps.processing.discovery import SubjectFiles
@@ -278,15 +276,13 @@ def test_batch_lifecycle_golden():
         AppendLog("Processing 0/2 subjects"),
         AppendLog("Processing 1/2: sub-a"),
         SetRowStatus(0, "Processing", "processing"),
-        ResetStageButtons(),
-        UpdateStageStatus("denoise", "running"),
-        UpdateStageStatus("denoise", "complete"),
+        AppendLog("Running: Denoising"),
+        AppendLog("Completed: Denoising"),
         AppendLog("  Auto-detected PE direction: AP"),
         AppendLog("Completed 1/2 subjects"),
         SetRowStatus(0, "Completed", "completed"),
         AppendLog("Processing 2/2: sub-b"),
         SetRowStatus(1, "Processing", "processing"),
-        ResetStageButtons(),
         AppendLog("Completed 2/2 subjects"),
         SetRowStatus(1, "Failed", "failed"),
         AppendLog("Batch complete: 1/2 succeeded"),
@@ -326,11 +322,31 @@ def test_error_message_maps_to_append_log():
     assert model.handle(Error("boom")) == [AppendLog("Error: boom")]
 
 
-def test_log_and_stage_passthrough():
-    """A bare log message and a stage message map 1:1."""
+def test_log_passthrough():
+    """A bare log message maps 1:1 to an AppendLog."""
     model = ResultModel([])
     assert model.handle(Log("hello")) == [AppendLog("hello")]
-    assert model.handle(Stage("roi", "running")) == [UpdateStageStatus("roi", "running")]
+
+
+def test_stage_phrasing_running_complete_failed():
+    """A Stage message becomes a fully-phrased AppendLog, including 'Failed:'."""
+    model = ResultModel([])
+    assert model.handle(Stage("denoise", "running")) == [AppendLog("Running: Denoising")]
+    assert model.handle(Stage("roi", "complete")) == [AppendLog("Completed: ROI Placement")]
+    # The previously-silent case: a failed early stage now logs a marker.
+    assert model.handle(Stage("denoise", "failed")) == [AppendLog("Failed: Denoising")]
+
+
+def test_stage_unknown_status_logs_nothing():
+    """A status outside running/complete/failed produces no intent."""
+    model = ResultModel([])
+    assert model.handle(Stage("denoise", "queued")) == []
+
+
+def test_stage_unknown_id_falls_back_to_raw_id():
+    """An unmapped stage id logs its raw id rather than dropping the line."""
+    model = ResultModel([])
+    assert model.handle(Stage("mystery", "running")) == [AppendLog("Running: mystery")]
 
 
 def test_unknown_message_raises():
@@ -373,5 +389,4 @@ def test_total_tracks_subject_count():
     assert model.handle(SubjectStart(0, "s1")) == [
         AppendLog("Processing 1/3: s1"),
         SetRowStatus(0, "Processing", "processing"),
-        ResetStageButtons(),
     ]

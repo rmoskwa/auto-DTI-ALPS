@@ -69,11 +69,9 @@ from .form_model import (
 from .result_model import (
     AppendLog,
     BatchResultsView,
-    ResetStageButtons,
     ResultModel,
     SetRowStatus,
     ShowBatchResults,
-    UpdateStageStatus,
 )
 from .user_config import UserConfig, get_user_config
 
@@ -1491,18 +1489,13 @@ class DTIALPSApplication(QMainWindow):
     def _apply_intent(self, intent):
         """Apply a single view-intent from ResultModel to the widgets.
 
-        Per Decision 6 the adapter keeps only the **log** half of
-        ``UpdateStageStatus`` and treats ``ResetStageButtons`` as a **no-op**
-        (the sidebar no longer recolors during a run).
+        Every intent's log wording is baked by the model (stage transitions
+        included, since PRD 0017); the adapter only pokes widgets.
         """
         if isinstance(intent, AppendLog):
             self._log(intent.text)
-        elif isinstance(intent, UpdateStageStatus):
-            self._update_stage_status(intent.stage, intent.status)
         elif isinstance(intent, SetRowStatus):
             self._set_row_status(intent.index, intent.text, intent.tag)
-        elif isinstance(intent, ResetStageButtons):
-            pass  # No-op: status coloring dropped (Decision 6).
         elif isinstance(intent, ShowBatchResults):
             self._show_batch_results(intent.view)
 
@@ -1518,25 +1511,6 @@ class DTIALPSApplication(QMainWindow):
                 brush = QBrush(QColor(color))
                 item.setForeground(0, brush)
                 item.setForeground(1, brush)
-
-    def _update_stage_status(self, stage: str, status: str):
-        """Log stage transitions (the log half of the intent; no button colour)."""
-        stage_names = {
-            "denoise": "Denoising",
-            "degibbs": "Gibbs Ringing Removal",
-            "preproc": "Preprocessing",
-            "synb0": "synB0-DISCO",
-            "eddy": "Eddy",
-            "dti": "DTI Fitting",
-            "registration": "Registration",
-            "roi": "ROI Placement",
-            "results": "Calculating ALPS",
-        }
-        stage_name = stage_names.get(stage, stage)
-        if status == "running":
-            self._log(f"Running: {stage_name}")
-        elif status == "complete":
-            self._log(f"Completed: {stage_name}")
 
     def _on_run_finished(self):
         """Tear down after the worker thread dies (region d wires the rest)."""
