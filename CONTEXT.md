@@ -41,7 +41,10 @@ ViewerModel work).
   `rois_rois_refined/`). Built by `roi_dir_name`, parsed by `parse_roi_dir` —
   replacing the scattered `f"rois_{...}"` literals and the magic `name[5:]` strip.
 - **ALPS results CSV** — `alps_results.csv` for the default, `alps_results_{token}.csv`
-  otherwise (`alps_csv_name`).
+  otherwise (`alps_csv_name`). A single run writes **one CSV per shape token**; the whole
+  set it produces is named by `alps_csv_names(tokens)` (empty tokens → the single default
+  name), the one home shared by the batch writer and the results-screen footer so the
+  count the GUI shows cannot drift from the files that land on disk (PRD 0017).
 - **ALPS column schema** — the canonical column names of the results CSV
   (`Left/Right Hemisphere ALPS-LAB/-PAS`, `Combined ALPS-*`, plus the legacy
   no-suffix `…ALPS`), ordered by `alps_columns(method)`. `read_alps_csv(path) ->
@@ -83,15 +86,22 @@ Owned by `processing/messages.py`.
 
 - **ResultModel** (`gui/result_model.py`) — translates a worker-queue message into an
   ordered list of **view-intents** (frozen dataclasses the adapter applies). Drives
-  the live pipeline run. A *translator*: `handle(msg) -> list[Intent]`.
+  the live pipeline run. A *translator*: `handle(msg) -> list[Intent]`. Owns **all** log
+  phrasing, including the stage-id → display-name map and the `Running:`/`Completed:`/
+  `Failed:` stage lines — a `Stage` message becomes a fully-phrased `AppendLog` here, not
+  a raw pass-through the adapter re-phrases (PRD 0017). The intent union is only what the
+  adapter renders: `AppendLog`, `SetRowStatus`, `ShowBatchResults`.
   - **BatchResultsView** — the finished batch results screen as plain data, carried by
-    the `ShowBatchResults` intent: `title`, `summary`, `output_dir`, an ordered tuple of
-    **ResultColumn**(`key`, `label`), and `rows` (a tuple of dicts keyed by column key,
-    cells already formatted — the `.4f` precision and `None → ""` rule are baked in).
-    Built by the pure `build_batch_results_table(batch_state) -> BatchResultsView`; the
-    adapter renders it with a generic `for col in columns` loop and an adapter-side
-    key→(width, anchor) map. The live-panel twin of [[render_dec_slice]]. (There is no
-    single-subject results view — the GUI runs every job, even one subject, as a batch.)
+    the `ShowBatchResults` intent: `title`, `summary`, `output_dir`, `csv_count` (how many
+    CSVs the run wrote, so the footer says "Results saved to: {dir} ({n} CSV files)" —
+    the token/filename *decision* lives in the model, only the label chrome stays in the
+    adapter), an ordered tuple of **ResultColumn**(`key`, `label`), and `rows` (a tuple of
+    dicts keyed by column key, cells already formatted — the `.4f` precision and
+    `None → ""` rule are baked in). Built by the pure
+    `build_batch_results_table(batch_state) -> BatchResultsView`; the adapter renders it
+    with a generic `for col in columns` loop and an adapter-side key→(width, anchor) map.
+    The live-panel twin of [[render_dec_slice]]. (There is no single-subject results view —
+    the GUI runs every job, even one subject, as a batch.)
 - **ViewerModel** (`gui/viewer_model.py`) — the Results Viewer's stateful **session
   model**. Owns the loaded session and recomputes a rendered slice on demand. Not a
   translator (there is no message stream); a session object with command/query
