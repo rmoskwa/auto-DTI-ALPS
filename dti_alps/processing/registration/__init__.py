@@ -17,13 +17,7 @@ Example usage:
     result = backend.register(state, log_callback=print)
 """
 
-from .fsl import (
-    FSLRegistration,
-    check_fsl_registration_available,
-    get_fsl_bin_dir,
-    get_fsldir,
-    get_jhu_template_path,
-)
+from .fsl import FSLRegistration
 from .results import (
     RegistrationResult,
     ROIPlacementResult,
@@ -36,11 +30,6 @@ __all__ = [
     "ROIPlacementResult",
     # FSL implementation
     "FSLRegistration",
-    # Backward compatibility functions
-    "check_fsl_registration_available",
-    "get_fsldir",
-    "get_fsl_bin_dir",
-    "get_jhu_template_path",
     # Common utilities
     "get_roi_template_paths",
 ]

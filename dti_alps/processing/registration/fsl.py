@@ -632,28 +632,3 @@ class FSLRegistration:
         """
         log = log_callback or (lambda x: None)
         return self.runner.run(cmd, on_line=log).returncode == 0
-
-
-# =============================================================================
-# Backward compatibility functions
-# =============================================================================
-
-
-def get_fsldir() -> str | None:
-    """Get FSLDIR from environment or common installation paths."""
-    return FSLRegistration()._get_fsldir()
-
-
-def get_fsl_bin_dir() -> Path | None:
-    """Get path to FSL bin directory."""
-    return FSLRegistration()._get_fsl_bin_dir()
-
-
-def check_fsl_registration_available() -> tuple[bool, list[str]]:
-    """Check if FSL registration tools are available."""
-    return FSLRegistration().check_available()
-
-
-def get_jhu_template_path() -> Path | None:
-    """Get path to JHU-ICBM-FA-1mm.nii.gz template."""
-    return FSLRegistration().get_template_path()
