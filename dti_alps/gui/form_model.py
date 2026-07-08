@@ -1,17 +1,18 @@
 """
-tk-free input/form model — the mirror image of ``result_model``.
+Toolkit-free input/form model — the mirror image of ``result_model``.
 
 Where :class:`~dti_alps.gui.result_model.ResultModel` maps *worker messages ->
 view-intents*, this module maps a *form-state snapshot -> domain objects*. The
-``gui/app.py`` adapter reads its Tk Variables into a :class:`FormState`, then
+``gui/app.py`` Qt adapter reads its widgets into a :class:`FormState`, then
 calls :func:`build_batch_state` (on Run) and :func:`compute_readiness` (on any
-input change, for the live Run button). When ``app.py`` is later ported, the Qt
-adapter fills the **same** ``FormState`` and calls the **same** functions, so no
-input-mapping logic is rewritten during the port.
+input change, for the live Run button). Because this input-mapping logic is
+toolkit-agnostic, the Tk-to-Qt port (PRD 0013) reused it unchanged — the Qt
+adapter fills the **same** ``FormState`` and calls the **same** functions the
+former Tk adapter did.
 
 Naming honesty: unlike its ``result_model``/``viewer_model`` siblings this is
 **not** a stateful ``*Model`` class — it is a module of pure functions plus
-frozen dataclasses. The symmetry with them is at the *seam* level (tk-free
+frozen dataclasses. The symmetry with them is at the *seam* level (toolkit-free
 presentation logic the adapter delegates to), not the *shape* level: the form
 lives in the widgets, so the model is a snapshot-at-decision-time, not a second
 source of truth. It imports only ``processing`` types, ``processing.validators``,
@@ -54,7 +55,7 @@ class Readiness:
 
     ``can_run`` is the overall Run-button decision; the remaining flags are the
     individual conditions behind it, so a future adapter can surface *why* a run
-    is blocked without re-deriving them. Today's Tk adapter reads only
+    is blocked without re-deriving them. The Qt adapter reads only
     ``can_run``.
     """
 

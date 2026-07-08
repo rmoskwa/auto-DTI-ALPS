@@ -1,11 +1,12 @@
 """
-tk-free presentation model for the live results dispatch.
+Toolkit-free presentation model for the live results dispatch.
 
 ``ResultModel`` maps a worker queue message to an ordered list of *view-intents*
 — plain frozen dataclasses describing what should change in the GUI. The
-``gui/app.py`` adapter interprets each intent into a widget call. The model
-holds no Tkinter and addresses console-tree rows by index, so the dispatch can
-be unit-tested as a value map rather than a sequence of imperative widget pokes.
+``gui/app.py`` Qt adapter interprets each intent into a widget call. The model
+holds no GUI toolkit and addresses console-tree rows by index, so the dispatch
+can be unit-tested as a value map rather than a sequence of imperative widget
+pokes.
 """
 
 from dataclasses import dataclass
@@ -135,7 +136,7 @@ def build_batch_results_table(batch_state: BatchState) -> BatchResultsView:
 
     The ALPS method chooses the column set ("Both" -> 8 columns; ALPS-LAB /
     ALPS-PAS -> 5) and the per-row metric source; cells are pre-formatted
-    (``.4f``, ``None -> ""``). Pure: no Tkinter, no I/O — the live-panel twin of
+    (``.4f``, ``None -> ""``). Pure: no GUI toolkit, no I/O — the live-panel twin of
     the viewer's ``render_dec_slice``.
     """
     method = batch_state.config.alps_method

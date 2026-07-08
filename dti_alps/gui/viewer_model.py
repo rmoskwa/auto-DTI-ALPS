@@ -1,9 +1,9 @@
 """
-tk-free presentation model for the Results Viewer.
+Toolkit-free presentation model for the Results Viewer.
 
 ``ViewerModel`` is the viewer's session object: it loads a results folder and
-answers queries with plain data and finished NumPy pictures, holding no
-Tkinter. It is the genuine twin of ``gui/result_model.py`` in *role* (tk-free,
+answers queries with plain data and finished NumPy pictures, holding no GUI
+toolkit. It is the genuine twin of ``gui/result_model.py`` in *role* (toolkit-free,
 GUI-side, owns presentation logic) but not in *shape* -- the viewer has no
 worker-queue message stream to translate, so this is a stateful session with
 command/query methods rather than a ``msg -> [Intent]`` translator.
@@ -264,7 +264,7 @@ class MetricsView:
 
 
 class ViewerModel:
-    """Stateful, tk-free session for the Results Viewer.
+    """Stateful, toolkit-free session for the Results Viewer.
 
     Owns the loaded session (subject records, the per-ROI-type CSV cache, the
     current selection, and the current subject's decoded arrays) and answers
