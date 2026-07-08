@@ -42,9 +42,10 @@ Quality Report Generation:
 import argparse
 import sys
 
-# Sphere radius range (must match config.ROI_SPHERE_RADIUS_RANGE)
-SPHERE_RADIUS_MIN = 1.0
-SPHERE_RADIUS_MAX = 4.0
+from .processing.constants import ROI_SPHERE_RADIUS_RANGE
+
+# Sphere radius validation bounds, read from the engine's single source of truth.
+SPHERE_RADIUS_MIN, SPHERE_RADIUS_MAX = ROI_SPHERE_RADIUS_RANGE
 
 
 def _validate_sphere_radii(value: str) -> list[float]:

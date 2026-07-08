@@ -15,6 +15,7 @@ from ..processing.constants import (  # noqa: F401
     DEFAULT_RPE_SCHEME,
     FA_THRESHOLD,
     READOUT_TIME_RANGE,
+    ROI_SPHERE_RADIUS_RANGE,
     TENSOR_DXX_INDEX,
     TENSOR_DYY_INDEX,
     TENSOR_DZZ_INDEX,
@@ -48,9 +49,6 @@ DEFAULT_ALPS_METHOD = "Both"
 # ROI refinement options
 ROI_REFINEMENT_OPTIONS = ["Refined", "Standard", "Both"]
 DEFAULT_ROI_REFINEMENT = "Both"
-
-# Parameter ranges for validation
-ROI_SPHERE_RADIUS_RANGE = (1.0, 4.0)  # Range for ROI sphere radius (mm)
 
 
 # ROI shape catalog (PRD 0015) — the single ordered source for the *selectable*

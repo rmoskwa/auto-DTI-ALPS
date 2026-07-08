@@ -23,6 +23,9 @@ FA_THRESHOLD = 0.2  # Minimum FA value for ROI voxels (filters out CSF)
 # Readout time validation range (seconds)
 READOUT_TIME_RANGE = (0.001, 1.0)
 
+# ROI sphere radius validation range (mm)
+ROI_SPHERE_RADIUS_RANGE = (1.0, 4.0)
+
 # MRtrix3 tensor volume indices
 # dwi2tensor outputs: D11, D22, D33, D12, D13, D23
 TENSOR_DXX_INDEX = 0  # D11
