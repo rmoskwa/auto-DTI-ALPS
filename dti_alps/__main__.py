@@ -230,7 +230,13 @@ def main():
         print("\nFor reanalysis options, use: python -m dti_alps --reanalyze --help")
         return
 
-    # Default: Launch GUI
+    # GUI mode: launched explicitly with --gui, or as the default with no args.
+    # Reject anything else rather than silently launching the GUI.
+    if len(sys.argv) >= 2 and sys.argv[1] != "--gui":
+        print(f"ERROR: unknown option '{sys.argv[1]}'")
+        print(__doc__)
+        sys.exit(2)
+
     from .gui import main as gui_main
 
     gui_main()

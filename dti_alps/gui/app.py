@@ -438,16 +438,6 @@ class DTIALPSApplication(QMainWindow):
 
         self._register_page("console", page)
 
-    # ------------------------------------------------------------------ #
-    # Placeholder pages (filled in by later regions)
-    # ------------------------------------------------------------------ #
-    def _placeholder(self, page_id: str, text: str):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.addWidget(QLabel(text))
-        layout.addStretch()
-        self._register_page(page_id, page)
-
     def _create_data_page(self):
         """Create the batch data-input page (subjects + common params + output)."""
         page = QWidget()
