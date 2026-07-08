@@ -193,6 +193,31 @@ def alps_csv_name(token: str, refined: bool = False) -> str:
     return f"alps_results_{token}.csv"
 
 
+def alps_csv_names(tokens) -> list[str]:
+    """
+    Enumerate the ALPS-results CSV filenames a run produces, in stable order.
+
+    The single home for "which CSVs a batch writes": ``batch._write_csv_results``
+    loops it to write and ``build_batch_results_table`` takes ``len()`` of it for
+    the footer count, so the files on disk and the count on screen come from one
+    function and cannot drift.
+
+    Empty ``tokens`` -> the single backward-compat default name
+    (``alps_results.csv``); otherwise one suffixed name per token, ordered by
+    ``sorted(tokens)`` to match the writer's per-shape loop.
+
+    >>> alps_csv_names([])
+    ['alps_results.csv']
+    >>> alps_csv_names(["squarev9"])
+    ['alps_results_squarev9.csv']
+    >>> alps_csv_names({"squarev9", "rois", "sphere2p5"})
+    ['alps_results.csv', 'alps_results_sphere2p5.csv', 'alps_results_squarev9.csv']
+    """
+    if not tokens:
+        return [alps_csv_name(DEFAULT_ROI_TOKEN)]
+    return [alps_csv_name(token) for token in sorted(tokens)]
+
+
 def roi_mask_name(subject: str, roi_name: str) -> str:
     """
     Build the on-disk ROI-mask filename a backend writes for one subject + ROI.

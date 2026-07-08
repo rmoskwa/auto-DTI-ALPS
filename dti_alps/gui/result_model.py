@@ -11,6 +11,7 @@ pokes.
 
 from dataclasses import dataclass
 
+from ..processing import results_layout
 from ..processing.messages import (
     BatchCancelled,
     BatchComplete,
@@ -73,7 +74,13 @@ class BatchResultsView:
     :class:`ShowBatchResults`. Cells are already formatted strings (the ``.4f``
     precision and ``None -> ""`` rule are baked in), so the adapter inserts them
     verbatim and owns only widget chrome — column widths/anchors, the footer
-    buttons, and the "Results saved to:" label (fed ``output_dir``).
+    buttons, and the "Results saved to:" label (fed ``output_dir`` and
+    ``csv_count``).
+
+    ``csv_count`` is how many ALPS-results CSVs the run wrote (one per shape
+    token, or 1 for the default single-CSV case). It comes from the same
+    :func:`results_layout.alps_csv_names` the batch writer loops, so the footer
+    count cannot disagree with the files on disk.
     """
 
     title: str
@@ -81,6 +88,7 @@ class BatchResultsView:
     columns: tuple[ResultColumn, ...]
     rows: tuple[dict[str, str], ...]
     output_dir: str
+    csv_count: int
 
 
 @dataclass(frozen=True)
@@ -168,12 +176,22 @@ def build_batch_results_table(batch_state: BatchState) -> BatchResultsView:
     )
     rows = tuple(_build_row(result, method) for result in batch_state.results)
 
+    # The shape-token union gather is the same one the batch writer does; only
+    # the token -> filename mapping is centralized (in alps_csv_names), so the
+    # count here matches the files _write_csv_results lands.
+    all_shapes: set[str] = set()
+    for result in batch_state.results:
+        if result.alps_results_by_shape:
+            all_shapes.update(result.alps_results_by_shape.keys())
+    csv_count = len(results_layout.alps_csv_names(all_shapes))
+
     return BatchResultsView(
         title=f"Batch Processing Results ({method})",
         summary=summary,
         columns=columns,
         rows=rows,
         output_dir=batch_state.config.output_dir,
+        csv_count=csv_count,
     )
 
 

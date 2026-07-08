@@ -25,6 +25,7 @@ from dti_alps.processing.results_layout import (
     AlpsTable,
     alps_columns,
     alps_csv_name,
+    alps_csv_names,
     detect_method,
     parse_roi_dir,
     read_alps_csv,
@@ -108,6 +109,31 @@ class TestShapeToken:
         assert alps_csv_name("rois") == "alps_results.csv"
         assert alps_csv_name("squarev9") == "alps_results_squarev9.csv"
         assert alps_csv_name("sphere2p5") == "alps_results_sphere2p5.csv"
+
+
+class TestCsvNames:
+    """alps_csv_names — the single enumerator of the written-CSV set."""
+
+    def test_empty_tokens_yield_the_single_default_name(self):
+        assert alps_csv_names([]) == ["alps_results.csv"]
+        assert alps_csv_names(set()) == ["alps_results.csv"]
+
+    def test_single_non_default_token_yields_its_suffixed_name(self):
+        assert alps_csv_names(["squarev9"]) == ["alps_results_squarev9.csv"]
+
+    def test_multiple_tokens_yield_the_ordered_suffixed_set(self):
+        assert alps_csv_names(["squarev9", "sphere2p5"]) == [
+            "alps_results_sphere2p5.csv",
+            "alps_results_squarev9.csv",
+        ]
+
+    def test_ordering_is_stable_sorted_regardless_of_input_order(self):
+        tokens = {"squarev9", "rois", "sphere2p5"}
+        assert alps_csv_names(tokens) == [
+            "alps_results.csv",
+            "alps_results_sphere2p5.csv",
+            "alps_results_squarev9.csv",
+        ]
 
 
 class TestDetectMethod:

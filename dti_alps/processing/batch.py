@@ -407,9 +407,11 @@ class BatchRunner:
                 self._write_single_csv(alps_method)
                 return
 
-            # Write a CSV for each shape
-            for shape_name in sorted(all_shapes):
-                csv_filename = results_layout.alps_csv_name(shape_name)
+            # Write a CSV for each shape, sourcing the filename set from the
+            # single enumerator so the footer count cannot drift from the files.
+            for shape_name, csv_filename in zip(
+                sorted(all_shapes), results_layout.alps_csv_names(all_shapes)
+            ):
                 csv_path = os.path.join(self.batch_state.config.output_dir, csv_filename)
                 self._write_shape_csv(csv_path, shape_name, alps_method)
                 self._notify(Log(f"Results saved to {csv_path}"))

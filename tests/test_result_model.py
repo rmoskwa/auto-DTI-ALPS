@@ -83,6 +83,8 @@ def test_build_both_columns_title_summary_and_rows():
     assert view.title == "Batch Processing Results (Both)"
     assert view.summary == "1/2 succeeded, 1 failed"
     assert view.output_dir == "/out/both"
+    # No per-shape results -> the single default CSV.
+    assert view.csv_count == 1
     assert view.columns == (
         ResultColumn("subject", "Subject ID"),
         ResultColumn("lab_left", "Left LAB"),
@@ -190,6 +192,24 @@ def test_build_alps_pas_uses_pas_metrics_and_blanks_missing():
             "status": "completed",
         },
     )
+
+
+def test_build_csv_count_matches_shape_token_set():
+    """csv_count is the size of the shape-token union — N shapes -> N CSVs."""
+    results = [
+        SubjectResult(
+            subject_id="s1",
+            folder_path="/d/s1",
+            status="completed",
+            alps_results_by_shape={
+                "rois": {"alps_lab_bilateral": 1.0},
+                "squarev9": {"alps_lab_bilateral": 1.1},
+                "sphere2p5": {"alps_lab_bilateral": 1.2},
+            },
+        ),
+    ]
+    view = build_batch_results_table(_batch("ALPS-LAB", results))
+    assert view.csv_count == 3
 
 
 def test_build_empty_batch_has_columns_but_no_rows():

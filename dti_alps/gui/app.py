@@ -47,7 +47,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..processing import results_layout
 from ..processing.discovery import (
     SubjectFiles,
     discover_with_subdir_fallback,
@@ -1600,12 +1599,13 @@ class DTIALPSApplication(QMainWindow):
         self.batch_results_tree = tree  # Store for export
         self.results_page_layout.addWidget(results_group, stretch=1)
 
-        # Footer: results-on-disk label + folder/viewer buttons.
+        # Footer: results-on-disk label + folder/viewer buttons. The count comes
+        # from the view (built off results_layout.alps_csv_names); the adapter
+        # owns only the label wording.
         footer = QHBoxLayout()
-        csv_path = Path(view.output_dir) / results_layout.alps_csv_name(
-            results_layout.DEFAULT_ROI_TOKEN
+        footer.addWidget(
+            QLabel(f"Results saved to: {view.output_dir}  ({view.csv_count} CSV files)")
         )
-        footer.addWidget(QLabel(f"Results saved to: {csv_path}"))
         footer.addStretch()
         open_viewer = QPushButton("Open Results Viewer")
         open_viewer.clicked.connect(
