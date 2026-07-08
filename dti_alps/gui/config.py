@@ -2,6 +2,8 @@
 Configuration constants and default values for DTI-ALPS GUI.
 """
 
+from dataclasses import dataclass
+
 # Domain constants live in the engine (processing/constants.py). They are
 # re-exported here (not redefined) so the GUI's existing ``config.X`` references
 # keep resolving and the GUI and engine cannot disagree about a value. The
@@ -49,6 +51,31 @@ DEFAULT_ROI_REFINEMENT = "Both"
 
 # Parameter ranges for validation
 ROI_SPHERE_RADIUS_RANGE = (1.0, 4.0)  # Range for ROI sphere radius (mm)
+
+
+# ROI shape catalog (PRD 0015) — the single ordered source for the *selectable*
+# ROI shapes. One row per shape; the checkbox adapter reads token/label/default
+# and the row order, the form builder reads token/geometry. This owns the closed
+# input-selection vocabulary; the viewer's roi_display_name parses the open
+# on-disk vocabulary separately. Exactly one row is default=True — it both
+# pre-checks the box and is the "nothing selected" fallback in form_model.
+@dataclass(frozen=True)
+class RoiShape:
+    """One selectable ROI shape: its token, GUI label, engine geometry, default."""
+
+    token: str  # input-selection token, e.g. "sphere3", "squarev9"
+    label: str  # GUI display text, e.g. "Sphere 3.0mm"
+    geometry: dict  # engine contract value passed into BatchConfig.roi_shapes
+    default: bool  # the one canonical default (pre-check + empty-selection fallback)
+
+
+ROI_SHAPES = (
+    RoiShape("sphere2", "Sphere 2.0mm", {"type": "sphere", "radius": 2.0}, False),
+    RoiShape("sphere2p5", "Sphere 2.5mm", {"type": "sphere", "radius": 2.5}, False),
+    RoiShape("sphere3", "Sphere 3.0mm", {"type": "sphere", "radius": 3.0}, True),
+    RoiShape("squarev4", "Square 2x2", {"type": "squarev4"}, False),
+    RoiShape("squarev9", "Square 3x3", {"type": "squarev9"}, False),
+)
 
 # File type filters for file dialogs
 NIFTI_FILETYPES = [("NIfTI files", "*.nii *.nii.gz"), ("All files", "*.*")]
