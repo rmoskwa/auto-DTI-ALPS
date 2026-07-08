@@ -152,9 +152,9 @@ Owned by `processing/messages.py`.
 The geometry / quality / search cluster that decides *which voxels* the ALPS
 formula reads. A dependency-free, numpy-only leaf, `processing/roi_placement.py`
 (lifted out of the registration backend; the sibling of the pure
-ALPS module and `constants.py`). The IO shells that load FA/V1/L2/L3 and save the
-masks stay in `registration/fsl.py` and `reanalysis.py`; the science is pure
-(arrays in → masks/tuples out).
+ALPS module and `constants.py`); the science is pure (arrays in → masks/tuples out).
+The IO shell that loads FA/V1/L2/L3, transforms the templates, and saves the masks
+is its own module, **native placement** (below) — no longer copied into each caller.
 
 - **ROI mask creators** — `create_sphere_mask` (mm-distance, **inclusive**
   boundary `dist² ≤ r²`, so anisotropic voxels are honoured), `create_square_v9_mask`
@@ -176,3 +176,30 @@ masks stay in `registration/fsl.py` and `reanalysis.py`; the science is pure
   ROIs on the same X-direction pathway. A degenerate neighbourhood (all out of
   bounds, or every candidate scoring ≤ 0) keeps the original centroids and returns
   score `−1`.
+
+## Native ROI placement (the IO shell)
+
+The single IO shell that composes the pure [[ROI placement]] kernels into masks on
+disk. Owned by `processing/native_placement.py` — the *paths in → mask files out*
+twin of the *arrays in → masks out* pure leaf. Both callers (`registration/fsl.py`'s
+`place_rois()` and `reanalysis.py`'s `reanalyze_subject()`) call it instead of each
+carrying its own copy of the loop (PRD 0014; previously duplicated).
+
+- **place_rois_in_native** — does one shape × one refinement mode over the four ROI
+  templates: cache-if-exists `applywarp` (via the injected **ToolRunner**) →
+  `find_mask_centroid` → conditional V1/L2/L3 load (with the V1-missing fallbacks) →
+  joint pair-refinement → mask creation → save under `roi_mask_name`. Takes resolved
+  **paths** and a required `applywarp_cmd` (the caller resolves FSL's bin — the shell
+  never falls back to `PATH`, so FSLDIR-only installs keep working). Returns
+  `(roi_mask_paths, roi_centroids)`; raises **ROIPlacementError** on a failed
+  transform or an empty centroid — each caller translates that into its own envelope
+  (`ROIPlacementResult` / `ReanalysisResult`), which stay caller-side. The engine leaf
+  never imports the `registration` result dataclasses (the dependency arrow points
+  `registration → placement`, never back).
+- **Transform cache** — the four `{prefix}_{roi}_transformed.nii.gz` in `reg_dir`
+  depend only on the (immutable) inverse warp + template + FA grid, so they are reused
+  across shapes/modes and across a later reanalysis of the same subject (`prefix ==
+  subject_id`). Correct-by-construction, not merely an optimization.
+- **Outer looping stays in the callers** — the pipeline's `shapes × refinement_modes`
+  loop and `"Both"` mode live in `fsl.place_rois()`; reanalysis is one-shape-per-CLI-
+  invocation. The shell is single-shape/single-mode.

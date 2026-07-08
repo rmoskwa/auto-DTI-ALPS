@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import nibabel as nib
-import numpy as np
 
 from . import results_layout
 from .alps_calculation import (
@@ -28,15 +27,8 @@ from .alps_calculation import (
     load_roi_masks,
 )
 from .constants import FA_THRESHOLD
+from .native_placement import place_rois_in_native
 from .registration.base import get_roi_template_paths
-from .roi_placement import (
-    calculate_roi_quality,
-    create_sphere_mask,
-    create_square_v4_mask,
-    create_square_v9_mask,
-    find_mask_centroid,
-    refine_roi_pair_placement,
-)
 from .tool_runner import SubprocessToolRunner, ToolRunner
 
 
@@ -249,25 +241,8 @@ def reanalyze_subject(
             result.error_message = "ROI templates not found"
             return result
 
-        # Load FA for reference shape and voxel size
-        fa_img = nib.load(fa_path)
-        fa_data = fa_img.get_fdata()
-        ref_shape = fa_data.shape[:3]
-        voxel_size = fa_img.header.get_zooms()[:3]
-
-        # Load V1 for refinement or squarev4 (needs V1 for config selection)
-        v1_data = None
-        needs_v1 = enable_refinement or roi_shape.shape_type == "squarev4"
-        if needs_v1 and v1_path:
-            v1_data = nib.load(v1_path).get_fdata()
-
-        # Load L2/L3 for radial asymmetry penalty in refinement
-        l2_data = None
-        l3_data = None
-        if enable_refinement and l2_path and l3_path:
-            l2_data = nib.load(l2_path).get_fdata()
-            l3_data = nib.load(l3_path).get_fdata()
-            log("  L2/L3 data loaded for radial asymmetry penalty")
+        # Load FA data for ALPS calculation
+        fa_data = nib.load(fa_path).get_fdata()
 
         # Create output directory for new ROIs
         # Include _refined suffix if refinement is enabled
@@ -277,150 +252,26 @@ def reanalyze_subject(
 
         log(f"  Creating {roi_suffix} ROIs...")
 
-        # Transform and create ROIs
-        roi_mask_paths = {}
-        template_centroids = {}
-
-        # First pass: Transform all ROI templates
-        for roi_name, roi_template in roi_templates.items():
-            roi_transformed = reg_dir / f"{subject_id}_{roi_name}_transformed.nii.gz"
-
-            # Transform if not already exists
-            if not roi_transformed.exists():
-                applywarp_cmd = [
-                    str(fsl_bin / "applywarp"),
-                    f"--ref={fa_path}",
-                    f"--in={roi_template}",
-                    f"--warp={inverse_warp}",
-                    f"--out={roi_transformed}",
-                    "--interp=nn",
-                ]
-                # The runner never raises: a non-zero exit (including a missing
-                # binary, returncode 127 with an explanatory output) is reported
-                # here, so there is no CalledProcessError to catch.
-                applywarp_result = runner.run(applywarp_cmd)
-                if applywarp_result.returncode != 0:
-                    result.status = "failed"
-                    result.error_message = f"FSL applywarp failed: {applywarp_result.output}"
-                    return result
-
-            # Find centroid
-            transformed_data = nib.load(str(roi_transformed)).get_fdata()
-            centroid = find_mask_centroid(transformed_data)
-            if centroid is None:
-                result.status = "failed"
-                result.error_message = f"No voxels in transformed {roi_name}"
-                return result
-
-            template_centroids[roi_name] = centroid
-
-        # Second pass: Jointly refine projection and association ROI pairs
-        # This optimizes both ROIs together to find the best combined placement
-        roi_centroids = {}
-        for side in ["left", "right"]:
-            proj_name = f"{side}_proj"
-            assoc_name = f"{side}_assoc"
-            proj_centroid = template_centroids[proj_name]
-            assoc_centroid = template_centroids[assoc_name]
-
-            if enable_refinement and v1_data is not None:
-                # Calculate original purities for logging
-                if roi_shape.shape_type == "sphere":
-                    orig_proj_mask = create_sphere_mask(
-                        ref_shape, proj_centroid, roi_shape.sphere_radius, voxel_size
-                    )
-                    orig_assoc_mask = create_sphere_mask(
-                        ref_shape, assoc_centroid, roi_shape.sphere_radius, voxel_size
-                    )
-                elif roi_shape.shape_type == "squarev4":
-                    orig_proj_mask = create_square_v4_mask(
-                        ref_shape, proj_centroid, v1_data, "proj"
-                    )
-                    orig_assoc_mask = create_square_v4_mask(
-                        ref_shape, assoc_centroid, v1_data, "assoc"
-                    )
-                else:
-                    orig_proj_mask = create_square_v9_mask(ref_shape, proj_centroid)
-                    orig_assoc_mask = create_square_v9_mask(ref_shape, assoc_centroid)
-
-                orig_proj_purity, _, _, _ = calculate_roi_quality(
-                    v1_data, fa_data, orig_proj_mask, "proj"
-                )
-                orig_assoc_purity, _, _, _ = calculate_roi_quality(
-                    v1_data, fa_data, orig_assoc_mask, "assoc"
-                )
-
-                # Jointly refine both ROIs as a pair
-                (
-                    refined_proj,
-                    refined_assoc,
-                    refined_proj_purity,
-                    refined_assoc_purity,
-                    _,
-                ) = refine_roi_pair_placement(
-                    proj_centroid,
-                    assoc_centroid,
-                    v1_data,
-                    fa_data,
-                    ref_shape,
-                    voxel_size,
-                    radius_mm=roi_shape.sphere_radius or 3.0,
-                    search_x=3,
-                    search_y=1,
-                    search_z=2,
-                    max_y_drift=1,
-                    max_z_drift=1,
-                    shape_type=roi_shape.shape_type,
-                    l2_data=l2_data,
-                    l3_data=l3_data,
-                )
-
-                if refined_proj != proj_centroid:
-                    log(
-                        f"    {proj_name}: purity {orig_proj_purity * 100:.0f}% -> "
-                        f"{refined_proj_purity * 100:.0f}%"
-                    )
-                if refined_assoc != assoc_centroid:
-                    log(
-                        f"    {assoc_name}: purity {orig_assoc_purity * 100:.0f}% -> "
-                        f"{refined_assoc_purity * 100:.0f}%"
-                    )
-
-                proj_centroid = refined_proj
-                assoc_centroid = refined_assoc
-
-            roi_centroids[proj_name] = proj_centroid
-            roi_centroids[assoc_name] = assoc_centroid
-
-            # Create and save projection ROI mask
-            if roi_shape.shape_type == "sphere":
-                proj_mask = create_sphere_mask(
-                    ref_shape, proj_centroid, roi_shape.sphere_radius, voxel_size
-                )
-            elif roi_shape.shape_type == "squarev4":
-                proj_mask = create_square_v4_mask(ref_shape, proj_centroid, v1_data, "proj")
-            else:
-                proj_mask = create_square_v9_mask(ref_shape, proj_centroid)
-
-            proj_path = roi_dir / results_layout.roi_mask_name(subject_id, proj_name)
-            proj_img = nib.Nifti1Image(proj_mask.astype(np.float32), fa_img.affine, fa_img.header)
-            nib.save(proj_img, str(proj_path))
-            roi_mask_paths[proj_name] = str(proj_path)
-
-            # Create and save association ROI mask
-            if roi_shape.shape_type == "sphere":
-                assoc_mask = create_sphere_mask(
-                    ref_shape, assoc_centroid, roi_shape.sphere_radius, voxel_size
-                )
-            elif roi_shape.shape_type == "squarev4":
-                assoc_mask = create_square_v4_mask(ref_shape, assoc_centroid, v1_data, "assoc")
-            else:
-                assoc_mask = create_square_v9_mask(ref_shape, assoc_centroid)
-
-            assoc_path = roi_dir / results_layout.roi_mask_name(subject_id, assoc_name)
-            assoc_img = nib.Nifti1Image(assoc_mask.astype(np.float32), fa_img.affine, fa_img.header)
-            nib.save(assoc_img, str(assoc_path))
-            roi_mask_paths[assoc_name] = str(assoc_path)
+        # Transform templates and build the masks through the shared shell
+        # (same body the pipeline uses; a raised ROIPlacementError is caught by
+        # the surrounding try/except and reported as a failed result).
+        roi_mask_paths, _ = place_rois_in_native(
+            runner=runner,
+            applywarp_cmd=str(fsl_bin / "applywarp"),
+            fa_path=str(fa_path),
+            inverse_warp=inverse_warp,
+            roi_templates=roi_templates,
+            reg_dir=reg_dir,
+            roi_dir=roi_dir,
+            prefix=subject_id,
+            shape_type=roi_shape.shape_type,
+            sphere_radius=roi_shape.sphere_radius,
+            refine=enable_refinement,
+            v1_path=str(v1_path) if v1_path else None,
+            l2_path=str(l2_path) if l2_path else None,
+            l3_path=str(l3_path) if l3_path else None,
+            log=log,
+        )
 
         # Load ROI masks for ALPS calculation (shared loader -- same IO edge
         # the pipeline uses, so the two paths cannot drift apart)
