@@ -41,12 +41,13 @@ class ROIShape:
 
     @property
     def name(self) -> str:
-        """Get a short name for folder/file naming."""
-        if self.shape_type == "sphere":
-            # Format radius: 3.0 -> "sphere3", 2.5 -> "sphere2p5"
-            r_str = str(self.sphere_radius).replace(".", "p").rstrip("p0")
-            return f"sphere{r_str}"
-        return self.shape_type  # squarev9 or squarev4
+        """The base on-disk token for folder/file naming.
+
+        Delegates to ``results_layout.shape_token`` (the single geometry->token
+        home), so the default 3.0 mm sphere collapses to ``rois`` exactly as the
+        pipeline's writer does — the two cannot drift.
+        """
+        return results_layout.shape_token(self.shape_type, self.sphere_radius)
 
 
 @dataclass
