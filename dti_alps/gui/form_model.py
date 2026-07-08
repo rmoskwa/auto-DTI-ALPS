@@ -30,6 +30,7 @@ from ..processing.constants import (
 from ..processing.discovery import SubjectFiles
 from ..processing.state import BatchConfig, BatchState, OutputConfig
 from ..processing.validators import is_readout_valid, resolve_readout_time
+from .config import ROI_SHAPES
 
 
 @dataclass(frozen=True)
@@ -105,15 +106,11 @@ class FormState:
     cli_options: dict[str, dict[str, OptionState]] = field(default_factory=dict)
 
 
-# Checkbox token -> the ROI-shape dict it maps to. Order matches the GUI's
-# checkbox order so the assembled roi_shapes list order is preserved.
-_ROI_SHAPE_CONFIGS: dict[str, dict] = {
-    "sphere2": {"type": "sphere", "radius": 2.0},
-    "sphere2p5": {"type": "sphere", "radius": 2.5},
-    "sphere3": {"type": "sphere", "radius": 3.0},
-    "squarev4": {"type": "squarev4"},
-    "squarev9": {"type": "squarev9"},
-}
+# Token -> geometry lookup and the empty-selection fallback, both derived from
+# the ROI shape catalog (config.ROI_SHAPES, PRD 0015) so the selectable set, its
+# geometry, and its default live in exactly one place.
+_ROI_GEOMETRY_BY_TOKEN: dict[str, dict] = {shape.token: shape.geometry for shape in ROI_SHAPES}
+_DEFAULT_ROI_GEOMETRY: dict = next(shape.geometry for shape in ROI_SHAPES if shape.default)
 
 
 def _collect_cli_options(stage_options: dict[str, OptionState]) -> dict:
@@ -145,14 +142,16 @@ def _collect_cli_options(stage_options: dict[str, OptionState]) -> dict:
 
 def _collect_roi_shapes(flags: dict[str, bool]) -> list[dict]:
     """
-    Map selected ROI-shape checkboxes to shape dicts, defaulting to sphere 3 mm.
+    Map selected ROI-shape checkboxes to shape dicts, defaulting to the catalog's
+    default shape (3 mm sphere).
 
-    Preserves the checkbox iteration order and the "nothing selected -> sphere
-    3 mm" fallback of ``_collect_roi_shapes``.
+    Preserves the checkbox iteration order and the "nothing selected -> default
+    shape" fallback of ``_collect_roi_shapes``. Geometry and the default both come
+    from the ROI shape catalog (PRD 0015).
     """
-    shapes = [_ROI_SHAPE_CONFIGS[key] for key, on in flags.items() if on]
+    shapes = [_ROI_GEOMETRY_BY_TOKEN[key] for key, on in flags.items() if on]
     if not shapes:
-        shapes.append({"type": "sphere", "radius": 3.0})
+        shapes.append(_DEFAULT_ROI_GEOMETRY)
     return shapes
 
 

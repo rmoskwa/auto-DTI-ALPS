@@ -104,6 +104,16 @@ Owned by `processing/messages.py`.
     overlay, and the per-view orientation, returning a finished oriented uint8 RGB
     picture. `ViewerModel.render_slice` is a thin wrapper feeding it the current
     loaded arrays; zoom and toolkit conversion stay in the adapter.
+- **ROI shape catalog** (`gui/config.py`, `ROI_SHAPES`) — the single ordered table of
+  the *selectable* ROI shapes: one frozen **RoiShape**(`token`, `label`, `geometry`,
+  `default`) row per shape. It owns the **closed** input-selection vocabulary
+  (`sphere2`, `sphere2p5`, `sphere3`, `squarev4`, `squarev9`) — distinct from the
+  **open** on-disk token vocabulary (any reanalysis radius, `_refined`, the `rois`
+  default alias) that [[ViewerModel]]'s `roi_display_name` parses. The checkbox
+  adapter reads `token`/`label`/`default`/order; the form builder reads `token`/
+  `geometry`. Exactly one row is `default=True` — it both pre-checks the box and is
+  the form model's "nothing selected → this shape" fallback. The engine never imports
+  the catalog; it sees only the `geometry` dict inside `BatchConfig` (PRD 0015).
 - **Form model** (input side, `gui/form_model.py`) — the tk-free **input model**:
   *not* a stateful `*Model` class but a module of pure builders over a **FormState**
   snapshot. The input-side mirror of [[ResultModel]]: ResultModel maps *worker message
