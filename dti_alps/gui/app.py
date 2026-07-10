@@ -74,6 +74,7 @@ from .result_model import (
     ShowBatchResults,
 )
 from .user_config import UserConfig, get_user_config
+from .viewer import ResultsViewerPanel
 
 # One-line QSS for the prominent green Run button — the whole app's only styling
 # (PRD 0013, Decision 6). Disabled state greys out via the ``:disabled`` rule.
@@ -319,6 +320,8 @@ class DTIALPSApplication(QMainWindow):
         sidebar_layout.addWidget(_bold(QLabel("Output Settings")))
         self.output_setup_btn = self._nav_button("Output Setup", self._show_output_setup)
         sidebar_layout.addWidget(self.output_setup_btn)
+        self.results_viewing_btn = self._nav_button("Results Viewing", self._show_results_viewing)
+        sidebar_layout.addWidget(self.results_viewing_btn)
 
         sidebar_layout.addStretch()
 
@@ -344,6 +347,7 @@ class DTIALPSApplication(QMainWindow):
         self._create_roi_page()
         self._create_output_setup_page()
         self._create_results_page()
+        self._create_results_viewing_page()
 
     def _nav_button(self, text: str, on_click) -> QPushButton:
         """Create a checkable nav button wired into the exclusive nav group."""
@@ -401,6 +405,9 @@ class DTIALPSApplication(QMainWindow):
 
     def _show_output_setup(self):
         self._show_page("output_setup", "Output Setup", self.output_setup_btn)
+
+    def _show_results_viewing(self):
+        self._show_page("results_viewing", "Results Viewing", self.results_viewing_btn)
 
     def _show_stage(self, stage_idx: int):
         """Show the pipeline stage at ``stage_idx`` for the current mode."""
@@ -1354,7 +1361,7 @@ class DTIALPSApplication(QMainWindow):
         self.results_page_layout.addWidget(self.results_label)
 
         viewer_row = QHBoxLayout()
-        open_viewer = QPushButton("Open Results Viewer...")
+        open_viewer = QPushButton("View Results")
         open_viewer.clicked.connect(lambda: self._open_results_viewer())
         viewer_row.addWidget(open_viewer)
         viewer_note = QLabel("(View any previously processed results)")
@@ -1366,23 +1373,26 @@ class DTIALPSApplication(QMainWindow):
 
         self._register_page("results", page)
 
-    def _open_results_viewer(self, output_folder: str | None = None):
-        """Open the results viewer in its own process.
+    def _create_results_viewing_page(self):
+        """Build the docked results viewer as a resident page (PRD 0020)."""
+        self.results_panel = ResultsViewerPanel()
+        self._register_page("results_viewing", self.results_panel)
 
-        The viewer is a Qt QMainWindow (PRD 0010) and cannot be an in-process
-        child of this window, so it is spawned as a separate process — the same
-        as the Tk app did.
+    def _open_results_viewer(self, output_folder: str | None = None):
+        """Navigate to the docked "Results Viewing" page and load a folder in place.
+
+        No subprocess: the viewer is an in-app resident page (PRD 0020). Switch
+        to it first so the panel is visible before loading (the panel's initial
+        fit reads the viewport size). Folder resolution is the explicit argument,
+        else the current batch's output dir; with neither, the empty page shows.
         """
-        import subprocess
-        import sys
+        self._show_results_viewing()
 
         if output_folder is None and self.batch_state:
             output_folder = self.batch_state.config.output_dir
 
-        cmd = [sys.executable, "-m", "dti_alps", "--viewer"]
         if output_folder:
-            cmd.append(output_folder)
-        subprocess.Popen(cmd)
+            self.results_panel.load_folder(output_folder)
 
     # ------------------------------------------------------------------ #
     # Run / cancel (live in region d)
@@ -1571,7 +1581,7 @@ class DTIALPSApplication(QMainWindow):
             QLabel(f"Results saved to: {view.output_dir}  ({view.csv_count} CSV files)")
         )
         footer.addStretch()
-        open_viewer = QPushButton("Open Results Viewer")
+        open_viewer = QPushButton("View Results")
         open_viewer.clicked.connect(
             lambda _c=False, d=view.output_dir: self._open_results_viewer(d)
         )
