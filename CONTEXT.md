@@ -124,6 +124,15 @@ Owned by `processing/messages.py`.
     overlay, and the per-view orientation, returning a finished oriented uint8 RGB
     picture. `ViewerModel.render_slice` is a thin wrapper feeding it the current
     loaded arrays; zoom and toolkit conversion stay in the adapter.
+  - **ResultsViewerPanel** (`gui/viewer.py`) — the reusable Qt widget that is
+    [[ViewerModel]]'s adapter: the whole viewer surface (subject list, DEC image
+    pane, navigation/zoom controls, metrics) as one host-agnostic `QWidget`. Both
+    hosts embed the **same** panel class — the standalone `dti-alps --viewer`
+    window wraps one as its central widget, and the main app docks another as its
+    **"Results Viewing"** page under Output Settings. Self-sufficient: every
+    control (Load folder, view, slice, zoom, show-ROIs) is a panel widget, so it
+    carries no menu bar. Loading is on-demand only (a host calls `load_folder`);
+    a finished batch run does not auto-populate it.
 - **ROI shape catalog** (`gui/config.py`, `ROI_SHAPES`) — the single ordered table of
   the *selectable* ROI shapes: one frozen **RoiShape**(`token`, `label`, `geometry`,
   `default`) row per shape. It owns the **closed** input-selection vocabulary

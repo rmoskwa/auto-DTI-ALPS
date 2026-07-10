@@ -11,6 +11,12 @@ zoom, and image placement; the session logic, the ALPS/CSV parsing, and the DEC
 rendering math live in the model and the engine leaf, reused here
 byte-for-byte from the Tkinter viewer.
 
+The viewer content is :class:`ResultsViewerPanel`, a host-agnostic ``QWidget``
+shared by two hosts: the standalone :class:`ResultsViewer` window wraps one as
+its central widget, and the main app embeds one as a resident page. All controls
+(load, view, slice, zoom, show-ROIs) live in the panel body — there is no menu
+bar — so both hosts get every capability from the one implementation.
+
 The one deliberate behavior change from the Tk viewer: the image
 pane is a ``QGraphicsView`` that shows real scrollbars when a slice is zoomed
 past the viewport, instead of silently clipping and centering it. Everything
@@ -22,10 +28,11 @@ import sys
 
 import numpy as np
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QImage, QPixmap, QTransform
+from PySide6.QtGui import QColor, QImage, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QGraphicsPixmapItem,
@@ -86,26 +93,21 @@ class _ImageView(QGraphicsView):
         event.accept()
 
 
-class ResultsViewer(QMainWindow):
+class ResultsViewerPanel(QWidget):
     """
-    Viewer for DTI-ALPS processing results.
+    Host-agnostic viewer surface for DTI-ALPS processing results.
 
-    Displays FA-modulated RGB DEC images with ROI overlays and ALPS metrics.
+    A self-sufficient ``QWidget`` (no menu bar) holding the subject list, DEC
+    image pane and legend, navigation/zoom controls, the "Show ROIs" toggle, and
+    the ALPS metrics panel. It is the adapter for the unchanged
+    :class:`ViewerModel` and is shared by both hosts: the standalone
+    :class:`ResultsViewer` window and the main app's docked "Results Viewing"
+    page. Loading is on demand via :meth:`load_folder` (or the panel's own "Load
+    Folder..." button).
     """
 
-    def __init__(self, output_folder: str | None = None, parent=None):
-        """
-        Initialize the results viewer.
-
-        Args:
-            output_folder: Path to output folder to load immediately (optional)
-            parent: Parent Qt widget (optional)
-        """
+    def __init__(self, parent=None):
         super().__init__(parent)
-
-        self.setWindowTitle("DTI-ALPS Results Viewer")
-        self.resize(1400, 900)
-        self.setMinimumSize(1000, 700)
 
         # The tk-free session model owns the loaded session, the per-ROI-type
         # CSV cache, the current selection, and the current subject's arrays.
@@ -125,47 +127,19 @@ class ResultsViewer(QMainWindow):
         # Subject ids present in the tree (defensive guard for selection).
         self._known_ids: set[str] = set()
 
-        # Build UI
-        self._create_menu()
         self._create_layout()
 
-        # Load output folder if provided (after the window is realized).
-        if output_folder:
-            QTimer.singleShot(100, lambda: self._load_output_folder(output_folder))
+    def load_folder(self, folder_path: str):
+        """Load a results folder into the panel (the public external entry point).
 
-    def _create_menu(self):
-        """Create menu bar."""
-        menubar = self.menuBar()
-
-        # File menu
-        file_menu = menubar.addMenu("File")
-        load_action = QAction("Load Results Folder...", self)
-        load_action.triggered.connect(self._browse_folder)
-        file_menu.addAction(load_action)
-        file_menu.addSeparator()
-        close_action = QAction("Close", self)
-        close_action.triggered.connect(self.close)
-        file_menu.addAction(close_action)
-
-        # View menu
-        view_menu = menubar.addMenu("View")
-        for view in ("axial", "coronal", "sagittal"):
-            action = QAction(f"{view.capitalize()} View", self)
-            action.triggered.connect(lambda _checked=False, v=view: self._set_view(v))
-            view_menu.addAction(action)
-        view_menu.addSeparator()
-
-        self.show_rois_action = QAction("Show ROI Overlays", self)
-        self.show_rois_action.setCheckable(True)
-        self.show_rois_action.setChecked(True)
-        self.show_rois_action.triggered.connect(self._update_display)
-        view_menu.addAction(self.show_rois_action)
+        Both hosts call this: the standalone wrapper on construction when given a
+        folder, and the main app when a "View Results" button is clicked.
+        """
+        self._load_output_folder(folder_path)
 
     def _create_layout(self):
         """Create main layout."""
-        central = QWidget()
-        self.setCentralWidget(central)
-        main_layout = QHBoxLayout(central)
+        main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(5, 5, 5, 5)
 
         # Left panel - Subject list
@@ -236,7 +210,7 @@ class ResultsViewer(QMainWindow):
         self._create_legend(layout)
 
     def _create_legend(self, layout: QVBoxLayout):
-        """Create ROI indicator legend (white swatch == ROI)."""
+        """Create ROI indicator legend (white swatch == ROI) + show-ROIs toggle."""
         legend = QHBoxLayout()
         swatch = QLabel()
         swatch.setFixedSize(16, 16)
@@ -244,6 +218,14 @@ class ResultsViewer(QMainWindow):
         legend.addWidget(swatch)
         legend.addWidget(QLabel("ROI regions"))
         legend.addStretch(1)
+
+        # Show-ROIs toggle lives in the panel body (no menu bar); it drives the
+        # same show-ROIs state the render path consumes.
+        self.show_rois_check = QCheckBox("Show ROIs")
+        self.show_rois_check.setChecked(True)
+        self.show_rois_check.toggled.connect(self._update_display)
+        legend.addWidget(self.show_rois_check)
+
         layout.addLayout(legend)
 
     def _create_controls(self, parent_layout: QHBoxLayout):
@@ -564,7 +546,7 @@ class ResultsViewer(QMainWindow):
 
         # The model returns a finished, oriented RGB picture for this view/slice.
         image = self.model.render_slice(
-            self.current_view(), self.current_slice, self.show_rois_action.isChecked()
+            self.current_view(), self.current_slice, self.show_rois_check.isChecked()
         )
         if image is None:
             return
@@ -637,14 +619,6 @@ class ResultsViewer(QMainWindow):
                 self._set_slider_value(self.current_slice)
                 self._update_display()
 
-    def _set_view(self, view: str):
-        """Set the current view type (from the View menu)."""
-        button = self.view_buttons[view]
-        if button.isChecked():
-            self._on_view_change()
-        else:
-            button.setChecked(True)  # fires toggled -> _on_view_change
-
     def current_view(self) -> str:
         """The currently selected orthogonal view."""
         for name, button in self.view_buttons.items():
@@ -689,6 +663,40 @@ class ResultsViewer(QMainWindow):
             zoom_h = canvas_h / img_h
             self.zoom_level = min(zoom_w, zoom_h) * 0.9
             self._apply_zoom()
+
+
+class ResultsViewer(QMainWindow):
+    """
+    Standalone window host for :class:`ResultsViewerPanel`.
+
+    A thin wrapper: it instantiates a panel as the central widget, sets the
+    window title/size, and forwards an optional initial folder. It has no menu
+    bar — every control lives in the panel body, and the OS window chrome closes
+    the window.
+    """
+
+    def __init__(self, output_folder: str | None = None, parent=None):
+        """
+        Initialize the standalone results viewer window.
+
+        Args:
+            output_folder: Path to output folder to load immediately (optional)
+            parent: Parent Qt widget (optional)
+        """
+        super().__init__(parent)
+
+        self.setWindowTitle("DTI-ALPS Results Viewer")
+        self.resize(1400, 900)
+        self.setMinimumSize(1000, 700)
+
+        self.panel = ResultsViewerPanel(self)
+        self.setCentralWidget(self.panel)
+
+        # Load output folder if provided. Defer so the window is realized first:
+        # the panel's initial fit reads the viewport size, meaningful only once
+        # the window is shown (fit-timing guard).
+        if output_folder:
+            QTimer.singleShot(100, lambda: self.panel.load_folder(output_folder))
 
 
 def launch_viewer(output_folder: str | None = None):
