@@ -17,11 +17,14 @@ its central widget, and the main app embeds one as a resident page. All controls
 (load, view, slice, zoom, show-ROIs) live in the panel body — there is no menu
 bar — so both hosts get every capability from the one implementation.
 
-The one deliberate behavior change from the Tk viewer: the image
-pane is a ``QGraphicsView`` that shows real scrollbars when a slice is zoomed
-past the viewport, instead of silently clipping and centering it. Everything
-else mirrors the Tk viewer's phrasing, layout, and control semantics. The mouse
-wheel still changes the *slice* (not the zoom), via :class:`_ImageView`.
+The image pane is a ``QGraphicsView`` (:class:`_ImageView`) with the standard
+PACS mouse conventions (PRD 0021): left-drag = window/level, right-drag = zoom,
+middle-drag = pan, and the wheel still changes the *slice*. Zoom is driven by a
+geometric 10%-800% slider and right-drag sharing one center-anchored scalar; a
+"Reset view" button re-fits the zoom and restores the default window. The
+``AsNeeded`` scrollbars remain as a pan fallback for users without a middle
+button. The window/level pixel math lives in the pure ``render_dec_slice``; this
+adapter owns only the transient cursor state (slice, zoom, window/level).
 """
 
 import math
@@ -64,6 +67,14 @@ _ZOOM_MIN = 0.10
 _ZOOM_MAX = 8.0
 _ZOOM_SLIDER_MAX = 1000  # integer slider resolution over the geometric span
 
+# Mouse drag sensitivities (Decision 1/8). Window/level is in abstract FA units
+# (FA is bounded ~[0, 1]); zoom drag is geometric (each pixel multiplies zoom by
+# a constant ratio). Tuned by manual smoke.
+_WL_LEVEL_PER_PIXEL = 0.004  # vertical left-drag -> window center (brightness)
+_WL_WIDTH_PER_PIXEL = 0.004  # horizontal left-drag -> window width (contrast)
+_WL_MIN_WIDTH = 1e-3  # adapter clamp so a drag never reaches a zero-width window
+_ZOOM_DRAG_PER_PIXEL = 0.01  # vertical right-drag -> geometric zoom exponent
+
 
 def _clamp_zoom(zoom: float) -> float:
     """Clamp a zoom scalar into the 10%-800% band."""
@@ -100,22 +111,73 @@ def _clear_layout(layout) -> None:
 
 
 class _ImageView(QGraphicsView):
-    """A ``QGraphicsView`` whose mouse wheel scrolls slices rather than the view.
+    """A ``QGraphicsView`` implementing the PACS mouse conventions (Decision 1).
 
-    Overriding ``wheelEvent`` keeps the established interaction (wheel == change
-    slice) from the Tk viewer; real scrollbars (dragged, or keyboard) reach the
-    edges of a zoomed-in slice.
+    The raw mouse mechanics live here; the semantic state (window/level, zoom)
+    is owned by the panel and mutated through callbacks, keeping this a thin
+    interaction shell:
+
+    * **wheel** changes the slice (``on_wheel``, unchanged from PRD 0010);
+    * **left-drag** adjusts window/level -- horizontal delta = width, vertical
+      delta = level -- via ``on_window_level(dx, dy)``;
+    * **right-drag** zooms -- vertical delta, up = in -- via ``on_zoom(dy)``;
+    * **middle-drag** pans, handled here by translating this view's own
+      scrollbars (the left button is taken by window/level, so ``ScrollHandDrag``
+      is unavailable).
+
+    The ``AsNeeded`` scrollbars from PRD 0010 remain as a pan fallback for users
+    without a middle button (Decision 6).
     """
 
-    def __init__(self, on_wheel):
+    def __init__(self, on_wheel, on_window_level, on_zoom):
         super().__init__()
         self._on_wheel = on_wheel
+        self._on_window_level = on_window_level
+        self._on_zoom = on_zoom
+        self._drag_button = Qt.NoButton
+        self._last_pos = None
 
     def wheelEvent(self, event):  # noqa: N802 (Qt override name)
         dy = event.angleDelta().y()
         if dy:
             self._on_wheel(1 if dy > 0 else -1)
         event.accept()
+
+    def mousePressEvent(self, event):  # noqa: N802 (Qt override name)
+        if event.button() in (Qt.LeftButton, Qt.RightButton, Qt.MiddleButton):
+            self._drag_button = event.button()
+            self._last_pos = event.position()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):  # noqa: N802 (Qt override name)
+        if self._drag_button == Qt.NoButton or self._last_pos is None:
+            super().mouseMoveEvent(event)
+            return
+        pos = event.position()
+        dx = pos.x() - self._last_pos.x()
+        dy = pos.y() - self._last_pos.y()
+        self._last_pos = pos
+
+        if self._drag_button == Qt.LeftButton:
+            self._on_window_level(dx, dy)
+        elif self._drag_button == Qt.RightButton:
+            self._on_zoom(dy)
+        elif self._drag_button == Qt.MiddleButton:
+            # Pan by translating the scrollbars (the same mechanism the fallback
+            # scrollbars drive), moving the content with the cursor.
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - int(dx))
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - int(dy))
+        event.accept()
+
+    def mouseReleaseEvent(self, event):  # noqa: N802 (Qt override name)
+        if event.button() == self._drag_button:
+            self._drag_button = Qt.NoButton
+            self._last_pos = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class ResultsViewerPanel(QWidget):
@@ -226,7 +288,7 @@ class ResultsViewerPanel(QWidget):
     def _create_image_pane(self, layout: QVBoxLayout):
         """Create the QGraphicsView image display + legend."""
         self.scene = QGraphicsScene(self)
-        self.view = _ImageView(self._on_wheel)
+        self.view = _ImageView(self._on_wheel, self._on_window_level_drag, self._on_zoom_drag)
         self.view.setScene(self.scene)
         self.view.setBackgroundBrush(QColor("black"))
         self.view.setAlignment(Qt.AlignCenter)
@@ -669,6 +731,27 @@ class ResultsViewerPanel(QWidget):
                 self.current_slice = new_slice
                 self._set_slider_value(self.current_slice)
                 self._update_display()
+
+    def _on_window_level_drag(self, dx: float, dy: float):
+        """Left-drag: horizontal delta widens/narrows the window (contrast),
+        vertical delta shifts the level/center (brightness).
+
+        Moving up (``dy`` negative) lowers the center, mapping more of the FA
+        range bright -- i.e. up brightens. Width is clamped to a small positive
+        minimum so a drag never produces a zero-width window (Decision 8).
+        """
+        if self.model.current_shape is None:
+            return
+        self.wl_center += dy * _WL_LEVEL_PER_PIXEL
+        self.wl_width = max(_WL_MIN_WIDTH, self.wl_width + dx * _WL_WIDTH_PER_PIXEL)
+        self._update_display()
+
+    def _on_zoom_drag(self, dy: float):
+        """Right-drag: vertical delta zooms geometrically (up = in, down = out),
+        center-anchored, syncing the slider thumb via :meth:`_set_zoom`."""
+        if self.model.current_shape is None:
+            return
+        self._set_zoom(self.zoom_level * math.exp(-dy * _ZOOM_DRAG_PER_PIXEL))
 
     def current_view(self) -> str:
         """The currently selected orthogonal view."""
