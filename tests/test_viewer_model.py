@@ -31,7 +31,11 @@ from dti_alps.gui.viewer_model import (
     render_dec_slice,
     roi_display_name,
 )
-from dti_alps.processing.results_layout import roi_dir_name
+from dti_alps.processing.results_layout import (
+    REGISTRATION_DIR,
+    brain_mask_name,
+    roi_dir_name,
+)
 
 # --------------------------------------------------------------------------- #
 # render_dec_slice: pure array oracle
@@ -66,7 +70,9 @@ class TestRenderColorAndOrientation:
         fa[s, 3, 3] = 2.0
         v1[s, 3, 3] = (0.3, 0.4, 0.0)  # normalises to (0.75, 1, 0)
 
-        out = render_dec_slice(fa, v1, {}, "sagittal", s, show_rois=False)
+        out = render_dec_slice(
+            fa, v1, {}, None, "sagittal", s, show_rois=False, show_brain_mask=False
+        )
 
         assert out.shape == (4, 4, 3)
         assert out.dtype == np.uint8
@@ -95,7 +101,9 @@ class TestRenderFaModulation:
         fa[s, 1, 0] = 1.0  # half of max -> fa_norm 0.5
         v1[s, 1, 0] = (1.0, 0.0, 0.0)
 
-        out = render_dec_slice(fa, v1, {}, "sagittal", s, show_rois=False)
+        out = render_dec_slice(
+            fa, v1, {}, None, "sagittal", s, show_rois=False, show_brain_mask=False
+        )
 
         # k=0 for both -> output row i = 3 - 0 = 3; j = the slice's j index.
         assert tuple(out[3, 0]) == (255, 0, 0)  # full
@@ -114,27 +122,101 @@ class TestRenderRoiOverlay:
 
     def test_overlay_painted_when_enabled(self):
         fa, v1, masks = self._setup()
-        out = render_dec_slice(fa, v1, masks, "sagittal", 1, show_rois=True)
+        out = render_dec_slice(
+            fa, v1, masks, None, "sagittal", 1, show_rois=True, show_brain_mask=False
+        )
         # (j=0, k=2) -> output (3-2, 0) = (1, 0)
         assert tuple(out[1, 0]) == (255, 255, 255)
 
     def test_no_overlay_when_disabled(self):
         fa, v1, masks = self._setup()
-        out = render_dec_slice(fa, v1, masks, "sagittal", 1, show_rois=False)
+        out = render_dec_slice(
+            fa, v1, masks, None, "sagittal", 1, show_rois=False, show_brain_mask=False
+        )
         assert tuple(out[1, 0]) == (0, 0, 0)
 
     def test_empty_mask_set_is_a_noop(self):
         fa, v1, _ = self._setup()
-        out = render_dec_slice(fa, v1, {}, "sagittal", 1, show_rois=True)
+        out = render_dec_slice(
+            fa, v1, {}, None, "sagittal", 1, show_rois=True, show_brain_mask=False
+        )
         assert tuple(out[1, 0]) == (0, 0, 0)
+
+
+class TestRenderBrainMask:
+    """Brain-mask blackening: out-of-brain voxels go black, in-brain untouched,
+    ROI overlay wins over the mask, and None/mismatched masks are no-ops."""
+
+    def _setup(self):
+        # Two bright voxels in slice 1: (j=0,k=0) and (j=1,k=1). Mask keeps only
+        # the first. Sagittal: (j,k) -> output (3-k, j).
+        fa = _empty_fa()
+        v1 = _empty_v1()
+        fa[1, 0, 0] = 2.0
+        v1[1, 0, 0] = (1.0, 0.0, 0.0)  # -> output (3, 0), red
+        fa[1, 1, 1] = 2.0
+        v1[1, 1, 1] = (1.0, 0.0, 0.0)  # -> output (2, 1), red
+        mask = np.zeros((4, 4, 4), dtype=float)
+        mask[1, 0, 0] = 1.0  # keep only the first voxel
+        return fa, v1, mask
+
+    def test_blackens_out_of_brain_and_keeps_in_brain(self):
+        fa, v1, mask = self._setup()
+        out = render_dec_slice(
+            fa, v1, {}, mask, "sagittal", 1, show_rois=False, show_brain_mask=True
+        )
+        assert tuple(out[3, 0]) == (255, 0, 0)  # in-brain: kept
+        assert tuple(out[2, 1]) == (0, 0, 0)  # out-of-brain: blackened
+
+    def test_in_brain_pixels_identical_toggle_on_vs_off(self):
+        fa, v1, mask = self._setup()
+        on = render_dec_slice(
+            fa, v1, {}, mask, "sagittal", 1, show_rois=False, show_brain_mask=True
+        )
+        off = render_dec_slice(
+            fa, v1, {}, mask, "sagittal", 1, show_rois=False, show_brain_mask=False
+        )
+        # The one in-brain voxel is byte-for-byte identical either way.
+        assert tuple(on[3, 0]) == tuple(off[3, 0]) == (255, 0, 0)
+
+    def test_roi_overlay_wins_over_mask(self):
+        # An ROI voxel that falls outside the brain mask is still painted white:
+        # blackening runs before the overlay.
+        fa, v1, mask = self._setup()
+        roi = np.zeros((4, 4, 4), dtype=float)
+        roi[1, 1, 1] = 1.0  # the out-of-brain voxel -> output (2, 1)
+        out = render_dec_slice(
+            fa, v1, {"left_proj": roi}, mask, "sagittal", 1, show_rois=True, show_brain_mask=True
+        )
+        assert tuple(out[2, 1]) == (255, 255, 255)
+
+    def test_none_mask_is_a_noop(self):
+        fa, v1, _ = self._setup()
+        out = render_dec_slice(
+            fa, v1, {}, None, "sagittal", 1, show_rois=False, show_brain_mask=True
+        )
+        assert tuple(out[2, 1]) == (255, 0, 0)  # nothing blackened
+
+    def test_shape_mismatch_mask_is_a_noop(self):
+        fa, v1, _ = self._setup()
+        wrong = np.ones((3, 3, 3), dtype=float)  # off the FA/V1 grid
+        out = render_dec_slice(
+            fa, v1, {}, wrong, "sagittal", 1, show_rois=False, show_brain_mask=True
+        )
+        assert tuple(out[2, 1]) == (255, 0, 0)  # unchanged, no raise
 
 
 class TestRenderBounds:
     """Out-of-range slices return None rather than raising."""
 
     def test_out_of_range_returns_none(self):
-        assert render_dec_slice(_empty_fa(), _empty_v1(), {}, "sagittal", 4, False) is None
-        assert render_dec_slice(_empty_fa(), _empty_v1(), {}, "axial", 99, False) is None
+        assert (
+            render_dec_slice(_empty_fa(), _empty_v1(), {}, None, "sagittal", 4, False, False)
+            is None
+        )
+        assert (
+            render_dec_slice(_empty_fa(), _empty_v1(), {}, None, "axial", 99, False, False) is None
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -159,12 +241,16 @@ def _save_nii(path, arr):
     nib.save(nib.Nifti1Image(arr.astype(np.float32), np.eye(4)), str(path))
 
 
-def _make_subject(folder, sid, tokens, with_images=True):
+def _make_subject(folder, sid, tokens, with_images=True, with_mask=False):
     sub = folder / sid
     sub.mkdir()
     if with_images:
         _save_nii(sub / f"{sid}_FA.nii.gz", np.zeros((4, 4, 4)))
         _save_nii(sub / f"{sid}_V1.nii.gz", np.zeros((4, 4, 4, 3)))
+    if with_mask:
+        reg_dir = sub / REGISTRATION_DIR
+        reg_dir.mkdir()
+        _save_nii(reg_dir / brain_mask_name(sid), np.ones((4, 4, 4)))
     for token in tokens:
         roi_dir = sub / roi_dir_name(token)
         roi_dir.mkdir()
@@ -225,6 +311,33 @@ class TestLoadSessionBasic:
         assert rec.v1_path == tmp_path / "sub-01" / "sub-01_V1.nii.gz"
         assert set(rec.all_roi_paths["rois"].keys()) == set(ROI_NAMES)
         assert rec.status == "completed"
+
+    def test_brain_mask_discovered_and_loaded(self, tmp_path):
+        _make_subject(tmp_path, "sub-01", ["rois"], with_mask=True)
+        _make_subject(tmp_path, "sub-02", ["rois"], with_mask=False)
+        _write_csv(
+            tmp_path / "alps_results.csv",
+            _LAB_HEADER,
+            [
+                ["sub-01", "1", "1", "1", "ok", ""],
+                ["sub-02", "1", "1", "1", "ok", ""],
+            ],
+        )
+
+        model = ViewerModel()
+        result = model.load_session(tmp_path)
+
+        by_id = {r.subject_id: r for r in result.subjects}
+        assert by_id["sub-01"].brain_mask_path == (
+            tmp_path / "sub-01" / REGISTRATION_DIR / brain_mask_name("sub-01")
+        )
+        assert by_id["sub-02"].brain_mask_path is None
+
+        # has_brain_mask follows the current subject's mask presence.
+        model.select_subject("sub-01")
+        assert model.has_brain_mask is True
+        model.select_subject("sub-02")
+        assert model.has_brain_mask is False
 
     def test_multiple_roi_types_ordered(self, tmp_path):
         _make_subject(tmp_path, "sub-01", ["rois", "squarev9"])
@@ -367,7 +480,7 @@ class TestSetRoiTypeAndMetrics:
         assert model.num_slices("axial") == 4
         assert model.default_slice("axial") == 2
         assert model.current_shape == (4, 4, 4)
-        out = model.render_slice("axial", 2, show_rois=True)
+        out = model.render_slice("axial", 2, show_rois=True, show_brain_mask=False)
         assert out is not None
         assert out.shape == (4, 4, 3)
 

@@ -175,11 +175,11 @@ class FSLRegistration:
             )
 
         # Set up output paths
-        reg_dir = Path(state.output_dir) / "registration"
+        reg_dir = Path(state.output_dir) / results_layout.REGISTRATION_DIR
         reg_dir.mkdir(parents=True, exist_ok=True)
 
         prefix = state.output_prefix
-        brain_mask = reg_dir / f"{prefix}_brain_mask.nii.gz"
+        brain_mask = reg_dir / results_layout.brain_mask_name(prefix)
         fa_nonan = reg_dir / f"{prefix}_FA_nonan.nii.gz"
         fa_brain = reg_dir / f"{prefix}_FA_brain.nii.gz"
         affine_mat = reg_dir / f"{prefix}_subject2jhu_affine.mat"

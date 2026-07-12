@@ -152,22 +152,46 @@ def _overlay_rois(
     return result
 
 
+def _apply_brain_mask(image: np.ndarray, brain_mask: np.ndarray, view: str, s: int) -> np.ndarray:
+    """Blacken every voxel outside the brain on a copy of ``image``.
+
+    Sets voxels where the brain-mask slice is ``0`` to ``[0, 0, 0]``, leaving
+    in-brain voxels byte-for-byte unchanged. A shape mismatch between the mask
+    slice and the image (a mask off the FA/V1 grid) is treated as "no mask" and
+    ``image`` is returned unchanged rather than raising.
+    """
+    mask_slice = _extract_slice(brain_mask, view, s)
+    if mask_slice is None or mask_slice.shape != image.shape[:2]:
+        return image
+    result = image.copy()
+    result[mask_slice == 0] = [0, 0, 0]
+    return result
+
+
 def render_dec_slice(
     fa: np.ndarray,
     v1: np.ndarray,
     roi_masks: dict[str, np.ndarray],
+    brain_mask: np.ndarray | None,
     view: str,
     slice_index: int,
     show_rois: bool,
+    show_brain_mask: bool,
 ) -> np.ndarray | None:
     """
     Render one display-ready FA-modulated direction-encoded-colour slice.
 
     Builds RGB from ``|V1|`` (``|x|``=R, ``|y|``=G, ``|z|``=B), normalises per
-    voxel, modulates by FA, optionally paints ROI voxels solid white, then
-    applies the per-view orientation. Returns a finished oriented ``uint8``
-    H×W×3 array at native voxel resolution, or ``None`` when ``slice_index`` is
-    out of range. Zoom and toolkit conversion stay in the adapter.
+    voxel, modulates by FA, optionally blackens out-of-brain voxels, optionally
+    paints ROI voxels solid white, then applies the per-view orientation.
+    Returns a finished oriented ``uint8`` H×W×3 array at native voxel
+    resolution, or ``None`` when ``slice_index`` is out of range. Zoom and
+    toolkit conversion stay in the adapter.
+
+    The brain-mask blackening runs *before* the ROI overlay, so ROI voxels are
+    always painted on top and never hidden by the mask. It touches only the
+    final image (never the FA normalisation), so toggling ``show_brain_mask``
+    leaves in-brain pixels identical.
     """
     fa_slice = _extract_slice(fa, view, slice_index)
     if fa_slice is None:
@@ -192,6 +216,9 @@ def render_dec_slice(
     fa_mod = fa_norm[:, :, np.newaxis]
 
     image = (np.clip(rgb * fa_mod, 0, 1) * 255).astype(np.uint8)
+
+    if show_brain_mask and brain_mask is not None:
+        image = _apply_brain_mask(image, brain_mask, view, slice_index)
 
     if show_rois and roi_masks:
         image = _overlay_rois(image, roi_masks, view, slice_index)
@@ -218,6 +245,7 @@ class SubjectRecord:
     v1_path: Path
     all_roi_paths: dict[str, dict[str, Path]]  # token -> {roi_name -> path}
     status: str
+    brain_mask_path: Path | None = None  # registration/ mask, or None if absent
 
 
 @dataclass(frozen=True)
@@ -285,6 +313,7 @@ class ViewerModel:
         self._fa: np.ndarray | None = None
         self._v1: np.ndarray | None = None
         self._roi_data: dict[str, np.ndarray] = {}
+        self._brain_mask: np.ndarray | None = None
 
     # -- loading ----------------------------------------------------------- #
     def load_session(self, folder_path: str | Path) -> SessionView | LoadError:
@@ -336,6 +365,11 @@ class ViewerModel:
                 if roi_paths:
                     all_roi_paths[token] = roi_paths
 
+            reg_dir = subject_folder / results_layout.REGISTRATION_DIR
+            mask_files = (
+                list(reg_dir.glob(results_layout.brain_mask_glob())) if reg_dir.exists() else []
+            )
+
             subject_id = subject_folder.name
             row = table.rows.get(subject_id)
             record = SubjectRecord(
@@ -345,6 +379,7 @@ class ViewerModel:
                 v1_path=v1_files[0],
                 all_roi_paths=all_roi_paths,
                 status=row.status if row else "",
+                brain_mask_path=mask_files[0] if mask_files else None,
             )
             records.append(record)
             by_id[subject_id] = record
@@ -414,6 +449,12 @@ class ViewerModel:
         """Shape of the current subject's FA volume, or ``None``."""
         return self._fa.shape if self._fa is not None else None
 
+    @property
+    def has_brain_mask(self) -> bool:
+        """Whether the current subject has a loaded brain mask (drives the
+        adapter's enable/disable of the brain-mask toggle)."""
+        return self._brain_mask is not None
+
     def num_slices(self, view: str) -> int:
         """Number of slices available in ``view`` for the current subject."""
         if self._fa is None:
@@ -429,12 +470,23 @@ class ViewerModel:
         """The slice to show first in ``view`` -- the middle one."""
         return self.num_slices(view) // 2
 
-    def render_slice(self, view: str, slice_index: int, show_rois: bool) -> np.ndarray | None:
+    def render_slice(
+        self, view: str, slice_index: int, show_rois: bool, show_brain_mask: bool
+    ) -> np.ndarray | None:
         """Render the current subject's slice -- a thin wrapper over
         :func:`render_dec_slice` feeding it the loaded arrays."""
         if self._fa is None or self._v1 is None:
             return None
-        return render_dec_slice(self._fa, self._v1, self._roi_data, view, slice_index, show_rois)
+        return render_dec_slice(
+            self._fa,
+            self._v1,
+            self._roi_data,
+            self._brain_mask,
+            view,
+            slice_index,
+            show_rois,
+            show_brain_mask,
+        )
 
     def current_metrics(self) -> MetricsView | None:
         """The ALPS metrics for the current ``(roi_type, subject)``, or ``None``
@@ -463,6 +515,8 @@ class ViewerModel:
                 self._fa = nib.load(record.fa_path).get_fdata()
             if record.v1_path and record.v1_path.exists():
                 self._v1 = nib.load(record.v1_path).get_fdata()
+            if record.brain_mask_path and record.brain_mask_path.exists():
+                self._brain_mask = nib.load(record.brain_mask_path).get_fdata()
             self._load_rois(record, self.current_roi_type)
             return self._fa is not None and self._v1 is not None
         except Exception as e:  # pragma: no cover - mirrors the old console print
@@ -482,3 +536,4 @@ class ViewerModel:
         self._fa = None
         self._v1 = None
         self._roi_data = {}
+        self._brain_mask = None

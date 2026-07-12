@@ -226,6 +226,13 @@ class ResultsViewerPanel(QWidget):
         self.show_rois_check.toggled.connect(self._update_display)
         legend.addWidget(self.show_rois_check)
 
+        # Brain-mask toggle: blackens out-of-brain voxels for a focused view.
+        # Default on; disabled for a subject that has no brain mask on disk.
+        self.brain_mask_check = QCheckBox("Brain mask")
+        self.brain_mask_check.setChecked(True)
+        self.brain_mask_check.toggled.connect(self._update_display)
+        legend.addWidget(self.brain_mask_check)
+
         layout.addLayout(legend)
 
     def _create_controls(self, parent_layout: QHBoxLayout):
@@ -465,6 +472,9 @@ class ResultsViewerPanel(QWidget):
             QMessageBox.warning(self, "Warning", f"Could not load images for subject: {subject_id}")
             return
 
+        # Honest UI: only offer the brain-mask toggle when this subject has one.
+        self.brain_mask_check.setEnabled(self.model.has_brain_mask)
+
         # Reset slice to middle
         if self.model.current_shape:
             self._update_slice_range()
@@ -546,7 +556,10 @@ class ResultsViewerPanel(QWidget):
 
         # The model returns a finished, oriented RGB picture for this view/slice.
         image = self.model.render_slice(
-            self.current_view(), self.current_slice, self.show_rois_check.isChecked()
+            self.current_view(),
+            self.current_slice,
+            self.show_rois_check.isChecked(),
+            self.brain_mask_check.isChecked(),
         )
         if image is None:
             return
