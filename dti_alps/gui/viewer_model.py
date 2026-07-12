@@ -35,6 +35,10 @@ from ..processing.results_layout import METHOD_LAB, ROI_NAMES, AlpsTable, read_a
 # The three orthogonal views the viewer renders.
 VIEWS = ("axial", "coronal", "sagittal")
 
+# Smallest window width the pure remap will divide by, guarding against a
+# zero-width window (the adapter also clamps during a drag, Decision 8).
+_MIN_WL_WIDTH = 1e-6
+
 
 # --------------------------------------------------------------------------- #
 # Display-name mapping (GUI text; lives in the model, never in the engine)
@@ -177,16 +181,25 @@ def render_dec_slice(
     slice_index: int,
     show_rois: bool,
     show_brain_mask: bool,
+    wl_center: float,
+    wl_width: float,
 ) -> np.ndarray | None:
     """
     Render one display-ready FA-modulated direction-encoded-colour slice.
 
     Builds RGB from ``|V1|`` (``|x|``=R, ``|y|``=G, ``|z|``=B), normalises per
-    voxel, modulates by FA, optionally blackens out-of-brain voxels, optionally
-    paints ROI voxels solid white, then applies the per-view orientation.
-    Returns a finished oriented ``uint8`` H×W×3 array at native voxel
-    resolution, or ``None`` when ``slice_index`` is out of range. Zoom and
+    voxel, modulates by the windowed FA, optionally blackens out-of-brain
+    voxels, optionally paints ROI voxels solid white, then applies the per-view
+    orientation. Returns a finished oriented ``uint8`` H×W×3 array at native
+    voxel resolution, or ``None`` when ``slice_index`` is out of range. Zoom and
     toolkit conversion stay in the adapter.
+
+    FA is the intensity channel, remapped through the window/level
+    ``clip((FA − (center − width/2)) / width, 0, 1)`` -- a linear window that is
+    stable across slices, replacing the old per-slice ``FA / max(FA in slice)``
+    auto-normalise. Hue (from ``|V1|``) is untouched. ``wl_width`` is guarded
+    against a non-positive value so a zero-width window never divides by zero;
+    the adapter is expected to clamp it, this is defence in depth.
 
     The brain-mask blackening runs *before* the ROI overlay, so ROI voxels are
     always painted on top and never hidden by the mask. It touches only the
@@ -210,9 +223,10 @@ def render_dec_slice(
     rgb_max = np.where(rgb_max > 0, rgb_max, 1)
     rgb = rgb / rgb_max
 
-    # Modulate by FA.
-    fa_max = np.max(fa_slice)
-    fa_norm = np.clip(fa_slice / fa_max if fa_max > 0 else fa_slice, 0, 1)
+    # Modulate by the windowed FA (linear window/level, stable across slices).
+    width = wl_width if wl_width > 0 else _MIN_WL_WIDTH
+    fa_low = wl_center - width / 2.0
+    fa_norm = np.clip((fa_slice - fa_low) / width, 0, 1)
     fa_mod = fa_norm[:, :, np.newaxis]
 
     image = (np.clip(rgb * fa_mod, 0, 1) * 255).astype(np.uint8)
@@ -470,11 +484,34 @@ class ViewerModel:
         """The slice to show first in ``view`` -- the middle one."""
         return self.num_slices(view) // 2
 
+    def default_window(self) -> tuple[float, float]:
+        """The volume-derived default window ``(center, width)`` for the current
+        subject -- ``center = FA-volume-max / 2``, ``width = FA-volume-max``.
+
+        Pure query over the loaded FA volume, computed once per subject by the
+        adapter at select time. Reproduces the old brightness *feel* but stable
+        across slices (the point of moving to a window). Falls back to
+        ``(0.5, 1.0)`` when no FA is loaded or the volume is all-zero, so the
+        width is always positive.
+        """
+        if self._fa is None or self._fa.size == 0:
+            return (0.5, 1.0)
+        fa_max = float(np.nanmax(self._fa))
+        if not fa_max > 0:
+            return (0.5, 1.0)
+        return (fa_max / 2.0, fa_max)
+
     def render_slice(
-        self, view: str, slice_index: int, show_rois: bool, show_brain_mask: bool
+        self,
+        view: str,
+        slice_index: int,
+        show_rois: bool,
+        show_brain_mask: bool,
+        wl_center: float,
+        wl_width: float,
     ) -> np.ndarray | None:
         """Render the current subject's slice -- a thin wrapper over
-        :func:`render_dec_slice` feeding it the loaded arrays."""
+        :func:`render_dec_slice` feeding it the loaded arrays and window."""
         if self._fa is None or self._v1 is None:
             return None
         return render_dec_slice(
@@ -486,6 +523,8 @@ class ViewerModel:
             slice_index,
             show_rois,
             show_brain_mask,
+            wl_center,
+            wl_width,
         )
 
     def current_metrics(self) -> MetricsView | None:

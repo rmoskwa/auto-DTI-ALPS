@@ -113,10 +113,15 @@ class ResultsViewerPanel(QWidget):
         # CSV cache, the current selection, and the current subject's arrays.
         self.model = ViewerModel()
 
-        # View cursor (adapter-owned, transient): the current slice and zoom.
-        # The current view / show-ROIs live in their widgets below.
+        # View cursor (adapter-owned, transient): the current slice, zoom, and
+        # window/level. The current view / show-ROIs live in their widgets
+        # below. Window/level is the twin of slice and zoom (Decision 8): it is
+        # transient view-cursor state, never held in the model. Seeded from
+        # ``model.default_window()`` at subject-select.
         self.current_slice = 0
         self.zoom_level = 1.0
+        self.wl_center = 0.5
+        self.wl_width = 1.0
 
         # ALPS method the metrics labels are currently laid out for.
         self.alps_method = "ALPS-LAB"
@@ -475,6 +480,10 @@ class ResultsViewerPanel(QWidget):
         # Honest UI: only offer the brain-mask toggle when this subject has one.
         self.brain_mask_check.setEnabled(self.model.has_brain_mask)
 
+        # Seed the window/level from the new subject's FA volume (stable, per
+        # subject; window settings are not carried across subjects, Decision 3).
+        self.wl_center, self.wl_width = self.model.default_window()
+
         # Reset slice to middle
         if self.model.current_shape:
             self._update_slice_range()
@@ -560,6 +569,8 @@ class ResultsViewerPanel(QWidget):
             self.current_slice,
             self.show_rois_check.isChecked(),
             self.brain_mask_check.isChecked(),
+            self.wl_center,
+            self.wl_width,
         )
         if image is None:
             return
