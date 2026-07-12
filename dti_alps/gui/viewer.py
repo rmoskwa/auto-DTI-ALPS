@@ -24,6 +24,7 @@ else mirrors the Tk viewer's phrasing, layout, and control semantics. The mouse
 wheel still changes the *slice* (not the zoom), via :class:`_ImageView`.
 """
 
+import math
 import sys
 
 import numpy as np
@@ -55,6 +56,30 @@ from PySide6.QtWidgets import (
 
 from .user_config import UserConfig, get_user_config
 from .viewer_model import LoadError, ViewerModel
+
+# Geometric zoom band (Decision 5): the slider and right-drag drive one
+# center-anchored zoom scalar spanning 10%-800%, mapped so equal slider steps
+# are equal zoom *ratios*. Fit values are clamped into this band.
+_ZOOM_MIN = 0.10
+_ZOOM_MAX = 8.0
+_ZOOM_SLIDER_MAX = 1000  # integer slider resolution over the geometric span
+
+
+def _clamp_zoom(zoom: float) -> float:
+    """Clamp a zoom scalar into the 10%-800% band."""
+    return min(_ZOOM_MAX, max(_ZOOM_MIN, zoom))
+
+
+def _zoom_to_slider_pos(zoom: float) -> int:
+    """Map a zoom scalar to its integer slider position (geometric)."""
+    frac = math.log(_clamp_zoom(zoom) / _ZOOM_MIN) / math.log(_ZOOM_MAX / _ZOOM_MIN)
+    return int(round(frac * _ZOOM_SLIDER_MAX))
+
+
+def _slider_pos_to_zoom(pos: int) -> float:
+    """Map an integer slider position back to a zoom scalar (geometric)."""
+    frac = pos / _ZOOM_SLIDER_MAX
+    return _ZOOM_MIN * (_ZOOM_MAX / _ZOOM_MIN) ** frac
 
 
 def _bold(widget: QLabel) -> QLabel:
@@ -283,23 +308,21 @@ class ResultsViewerPanel(QWidget):
         slice_row.addWidget(self.slice_label)
         layout.addLayout(slice_row)
 
-        # Zoom controls
+        # Zoom controls: a geometric 10%-800% slider (the visible zoom
+        # affordance, Decision 5) + a zoom-% label, and a "Reset view" button
+        # that re-fits the zoom and restores the default window (Decision 4).
         zoom_row = QHBoxLayout()
         zoom_row.addWidget(QLabel("Zoom:"))
-        zoom_out = QPushButton("-")
-        zoom_out.setFixedWidth(30)
-        zoom_out.clicked.connect(self._zoom_out)
-        zoom_row.addWidget(zoom_out)
+        self.zoom_slider = QSlider(Qt.Horizontal)
+        self.zoom_slider.setRange(0, _ZOOM_SLIDER_MAX)
+        self.zoom_slider.setMinimumWidth(150)
+        self.zoom_slider.valueChanged.connect(self._on_zoom_slider)
+        zoom_row.addWidget(self.zoom_slider)
         self.zoom_label = QLabel("100%")
         zoom_row.addWidget(self.zoom_label)
-        zoom_in = QPushButton("+")
-        zoom_in.setFixedWidth(30)
-        zoom_in.clicked.connect(self._zoom_in)
-        zoom_row.addWidget(zoom_in)
-        zoom_fit = QPushButton("Fit")
-        zoom_fit.setFixedWidth(40)
-        zoom_fit.clicked.connect(self._zoom_fit)
-        zoom_row.addWidget(zoom_fit)
+        reset_view = QPushButton("Reset view")
+        reset_view.clicked.connect(self._reset_view)
+        zoom_row.addWidget(reset_view)
         zoom_row.addStretch(1)
         layout.addLayout(zoom_row)
 
@@ -626,6 +649,10 @@ class ResultsViewerPanel(QWidget):
         # Reset to middle slice
         self.current_slice = self.model.default_slice(self.current_view())
         self._set_slider_value(self.current_slice)
+        # Re-fit: axial/coronal/sagittal have very different in-plane dimensions,
+        # so a zoom that fit the old view can spill the new one out of frame
+        # (Decision 7). Window is unchanged (same subject/volume).
+        self._zoom_fit()
         self._update_display()
 
     def _on_slice_change(self, value):
@@ -651,22 +678,43 @@ class ResultsViewerPanel(QWidget):
         return "axial"
 
     def _apply_zoom(self):
-        """Apply the current zoom level as the view transform + update the label."""
+        """Apply the current zoom as the view transform + update the % label.
+
+        Does not move the slider thumb; callers that changed the zoom other than
+        via the slider call :meth:`_sync_zoom_slider` to keep the two in sync.
+        """
         self.view.setTransform(QTransform().scale(self.zoom_level, self.zoom_level))
-        self.zoom_label.setText(f"{int(self.zoom_level * 100)}%")
+        self.zoom_label.setText(f"{int(round(self.zoom_level * 100))}%")
 
-    def _zoom_in(self):
-        """Increase zoom level."""
-        self.zoom_level = min(5.0, self.zoom_level * 1.25)
+    def _sync_zoom_slider(self):
+        """Move the zoom slider thumb to match ``zoom_level`` without recursing."""
+        self.zoom_slider.blockSignals(True)
+        self.zoom_slider.setValue(_zoom_to_slider_pos(self.zoom_level))
+        self.zoom_slider.blockSignals(False)
+
+    def _set_zoom(self, zoom: float):
+        """Set a clamped zoom, apply the transform, and sync the slider thumb.
+
+        The one entry point for zoom changes that originate outside the slider
+        (fit and right-drag), keeping the slider and the zoom scalar in lockstep.
+        """
+        self.zoom_level = _clamp_zoom(zoom)
+        self._apply_zoom()
+        self._sync_zoom_slider()
+
+    def _on_zoom_slider(self, value: int):
+        """Handle the zoom slider moving: drive the shared zoom scalar."""
+        self.zoom_level = _slider_pos_to_zoom(value)
         self._apply_zoom()
 
-    def _zoom_out(self):
-        """Decrease zoom level."""
-        self.zoom_level = max(0.25, self.zoom_level / 1.25)
-        self._apply_zoom()
+    def _reset_view(self):
+        """Re-fit the zoom to the viewport and restore the default window."""
+        self._zoom_fit()
+        self.wl_center, self.wl_width = self.model.default_window()
+        self._update_display()
 
     def _zoom_fit(self):
-        """Fit image to viewport."""
+        """Fit image to viewport (best-effort), clamped into the zoom band."""
         shape = self.model.current_shape
         if shape is None:
             return
@@ -685,8 +733,7 @@ class ResultsViewerPanel(QWidget):
         if img_w > 0 and img_h > 0:
             zoom_w = canvas_w / img_w
             zoom_h = canvas_h / img_h
-            self.zoom_level = min(zoom_w, zoom_h) * 0.9
-            self._apply_zoom()
+            self._set_zoom(min(zoom_w, zoom_h) * 0.9)
 
 
 class ResultsViewer(QMainWindow):
