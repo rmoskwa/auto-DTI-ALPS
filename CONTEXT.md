@@ -128,14 +128,26 @@ Owned by `processing/messages.py`.
   - **MetricsView** — the ALPS numbers for the current `(roi_type, subject)`, shaped
     for display.
   - **render_dec_slice(fa, v1, roi_masks, brain_mask, view, slice, show_rois,
-    show_brain_mask)** — the pure rendering function: DEC (direction-encoded colour)
-    from |V1|, FA modulation, an optional **brain-mask blackening**, an ROI overlay,
-    and the per-view orientation, returning a finished oriented uint8 RGB picture.
-    The brain-mask step blackens out-of-brain voxels on the *finished* image (never
-    perturbing FA normalisation, so toggling leaves in-brain pixels identical) and
-    runs *before* the ROI overlay, so ROI voxels are never hidden by the mask.
-    `ViewerModel.render_slice` is a thin wrapper feeding it the current loaded
-    arrays; zoom and toolkit conversion stay in the adapter.
+    show_brain_mask, wl_center, wl_width)** — the pure rendering function: DEC
+    (direction-encoded colour) from |V1|, **FA windowing** (below), an optional
+    **brain-mask blackening**, an ROI overlay, and the per-view orientation, returning
+    a finished oriented uint8 RGB picture. The brain-mask step blackens out-of-brain
+    voxels on the *finished* image (never perturbing the windowed FA, so toggling
+    leaves in-brain pixels identical) and runs *before* the ROI overlay, so ROI voxels
+    are never hidden by the mask. `ViewerModel.render_slice` is a thin wrapper feeding
+    it the current loaded arrays; zoom, pan, and toolkit conversion stay in the adapter.
+  - **Window/level (FA windowing)** — FA is the *intensity* channel of the DEC image
+    (hue comes from |V1|). Brightness/contrast is a **window** over FA: `render_dec_slice`
+    remaps FA by `clip((FA − (center − width/2)) / width, 0, 1)` before it modulates the
+    colour, replacing the old per-slice `FA / slice-max` auto-normalisation (which made
+    brightness jump slice-to-slice). Hue is untouched. The **default window** is
+    volume-derived — `ViewerModel.default_window() -> (center, width)` returns
+    `(FA-volume-max / 2, FA-volume-max)`, so the default looks like the old brightness
+    but is *stable across slices*; it is recomputed only on subject-select and never
+    carried across subjects. `wl_center`/`wl_width` are adapter-owned transient view
+    cursor state (the twin of zoom and slice), driven by **left-drag**; the adapter
+    clamps `wl_width` to a small positive minimum so a zero-width window never divides
+    (PRD 0021).
   - **ResultsViewerPanel** (`gui/viewer.py`) — the reusable Qt widget that is
     [[ViewerModel]]'s adapter: the whole viewer surface (subject list, DEC image
     pane, navigation/zoom controls, metrics) as one host-agnostic `QWidget`. Both
@@ -148,6 +160,18 @@ Owned by `processing/messages.py`.
     with no mask on disk (driven by `ViewerModel.has_brain_mask`). Loading is
     on-demand only (a host calls `load_folder`); a finished batch run does not
     auto-populate it.
+  - **Radiological image interaction** — the image pane follows the PACS mouse
+    convention (PRD 0021, superseding PRD 0010's zoom buttons): **left-drag** =
+    [[window/level|Window/level (FA windowing)]] (vertical = level, horizontal = width),
+    **right-drag** = zoom (up = in, centre-anchored, geometric), **middle-drag** = pan,
+    **wheel** = change slice. Zoom is a single centre-anchored scalar shared by the
+    right-drag and a **geometric 10 %–800 % zoom slider** (the visible affordance that
+    replaced the `-`/`+`/`Fit` buttons), with a zoom-% label. **Best-effort fit** runs
+    on subject-load and on view-switch (not on resize or ROI-switch); a single **"Reset
+    view"** button re-fits the zoom *and* restores the default window. The
+    `QGraphicsView` scrollbars (PRD 0010) are kept `AsNeeded` as a pan fallback for
+    users without a middle button. All of zoom/pan/window-level is adapter-owned
+    transient cursor state; the pixel math stays in [[render_dec_slice]].
 - **ROI shape catalog** (`gui/config.py`, `ROI_SHAPES`) — the single ordered table of
   the *selectable* ROI shapes: one frozen **RoiShape**(`token`, `label`, `geometry`,
   `default`) row per shape. It owns the **closed** input-selection vocabulary
