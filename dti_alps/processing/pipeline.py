@@ -489,7 +489,7 @@ class PipelineRunner:
             if self.state.all_roi_results:
                 # Process each shape
                 for shape_dir_name, roi_info in self.state.all_roi_results.items():
-                    # Recover the shape token (e.g. "rois_sphere3_refined" -> "sphere3_refined").
+                    # Recover the shape token (e.g. "rois_sphere3_adaptive" -> "sphere3_adaptive").
                     # The fallback is unreachable: the backend only writes rois_* dir names.
                     shape_name = results_layout.parse_roi_dir(shape_dir_name) or shape_dir_name
 
@@ -522,7 +522,7 @@ class PipelineRunner:
                     # Try to determine shape name from roi_mask_paths
                     if self.state.roi_mask_paths:
                         first_path = list(self.state.roi_mask_paths.values())[0]
-                        # Extract from path like ".../rois_sphere3_refined/..."
+                        # Extract from path like ".../rois_sphere3_adaptive/..."
                         import os
 
                         roi_dir = os.path.dirname(first_path)

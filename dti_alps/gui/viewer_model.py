@@ -48,25 +48,25 @@ def roi_display_name(token: str) -> str:
 
     ``rois`` -> ``Sphere 3.0mm``; ``sphere2p5`` -> ``Sphere 2.5mm``;
     ``squarev9`` -> ``Square 3x3``; ``squarev4`` -> ``Square 2x2``. A
-    ``_refined`` suffix becomes a trailing `` (r)``.
+    ``_adaptive`` suffix becomes a trailing `` (a)``.
     """
-    is_refined = token.endswith("_refined")
-    base_type = token[:-8] if is_refined else token
-    refined_suffix = " (r)" if is_refined else ""
+    is_adaptive = token.endswith("_adaptive")
+    base_type = token[:-9] if is_adaptive else token
+    adaptive_suffix = " (a)" if is_adaptive else ""
 
     if base_type == "rois":
-        return f"Sphere 3.0mm{refined_suffix}"
+        return f"Sphere 3.0mm{adaptive_suffix}"
     elif base_type.startswith("sphere"):
         # e.g. "sphere2p5" -> "Sphere 2.5mm", "sphere2" -> "Sphere 2.0mm"
         radius_str = base_type[6:].replace("p", ".")
         radius = float(radius_str)
-        return f"Sphere {radius:.1f}mm{refined_suffix}"
+        return f"Sphere {radius:.1f}mm{adaptive_suffix}"
     elif base_type == "squarev9":
-        return f"Square 3x3{refined_suffix}"
+        return f"Square 3x3{adaptive_suffix}"
     elif base_type == "squarev4":
-        return f"Square 2x2{refined_suffix}"
+        return f"Square 2x2{adaptive_suffix}"
     else:
-        return base_type.replace("_", " ").title() + refined_suffix
+        return base_type.replace("_", " ").title() + adaptive_suffix
 
 
 def discover_roi_options(output_folder: Path) -> list[str]:

@@ -12,23 +12,23 @@ ROI Reanalysis (post-processing with different ROI shapes):
     python -m dti_alps --reanalyze /path/to/output --sphere 3.0
     python -m dti_alps --reanalyze /path/to/output --squarev9
     python -m dti_alps --reanalyze /path/to/output --squarev4
-    python -m dti_alps --reanalyze /path/to/output --sphere 2.5 --refine
+    python -m dti_alps --reanalyze /path/to/output --sphere 2.5 --adaptive
     python -m dti_alps --reanalyze /path/to/output --sphere 2,3,4
     python -m dti_alps --reanalyze /path/to/output --sphere 3 --squarev4
 
 Output naming:
-    Without --refine: rois_{shape}/ and alps_results_{shape}.csv
-    With --refine:    rois_{shape}_refined/ and alps_results_{shape}_refined.csv
+    Without --adaptive: rois_{shape}/ and alps_results_{shape}.csv
+    With --adaptive:    rois_{shape}_adaptive/ and alps_results_{shape}_adaptive.csv
     The default 3 mm sphere collapses to the bare rois/ and alps_results.csv.
 
     Examples:
         --sphere 3          -> rois/, alps_results.csv
-        --sphere 3 --refine -> rois_refined/, alps_results_rois_refined.csv
+        --sphere 3 --adaptive -> rois_adaptive/, alps_results_rois_adaptive.csv
         --squarev9          -> rois_squarev9/, alps_results_squarev9.csv
-        --squarev9 --refine -> rois_squarev9_refined/, alps_results_squarev9_refined.csv
+        --squarev9 --adaptive -> rois_squarev9_adaptive/, alps_results_squarev9_adaptive.csv
         --squarev4          -> rois_squarev4/, alps_results_squarev4.csv
         --sphere 2.5        -> rois_sphere2p5/, alps_results_sphere2p5.csv
-        --sphere 2.5 --refine -> rois_sphere2p5_refined/, alps_results_sphere2p5_refined.csv
+        --sphere 2.5 --adaptive -> rois_sphere2p5_adaptive/, alps_results_sphere2p5_adaptive.csv
 
 Quality Report Generation:
     python -m dti_alps --report /path/to/output
@@ -85,8 +85,8 @@ Examples:
   %(prog)s --reanalyze /path/to/output --squarev4
       Reanalyze with 2x2 voxel square ROIs (4 voxels, V1-optimized)
 
-  %(prog)s --reanalyze /path/to/output --sphere 2.5 --refine
-      Reanalyze with 2.5mm spheres and ROI refinement enabled
+  %(prog)s --reanalyze /path/to/output --sphere 2.5 --adaptive
+      Reanalyze with 2.5mm spheres and adaptive ROI placement enabled
 
   %(prog)s --reanalyze /path/to/output --sphere 2,3,4
       Reanalyze with 2mm, 3mm, and 4mm spheres in one run
@@ -94,8 +94,8 @@ Examples:
   %(prog)s --reanalyze /path/to/output --sphere 3 --squarev4
       Reanalyze with both 3mm sphere and 2x2 square ROIs
 
-  %(prog)s --reanalyze /path/to/output --squarev9 --refine --method ALPS-LAB
-      Reanalyze with square ROIs, refinement, and only ALPS-LAB calculation
+  %(prog)s --reanalyze /path/to/output --squarev9 --adaptive --method ALPS-LAB
+      Reanalyze with square ROIs, adaptive placement, and only ALPS-LAB calculation
         """,
     )
 
@@ -129,9 +129,9 @@ Examples:
     )
 
     parser.add_argument(
-        "--refine",
+        "--adaptive",
         action="store_true",
-        help="Enable ROI refinement based on fiber orientation",
+        help="Enable adaptive ROI placement based on fiber orientation",
     )
 
     parser.add_argument(
@@ -184,7 +184,7 @@ def _run_reanalysis() -> None:
         run_reanalysis(
             output_dir=args.reanalyze,
             roi_shape=roi_shape,
-            enable_refinement=args.refine,
+            enable_adaptive=args.adaptive,
             alps_method=args.method,
             fa_threshold=args.fa_threshold,
         )

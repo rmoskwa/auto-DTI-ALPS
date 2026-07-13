@@ -61,7 +61,7 @@ class TestBuildBatchState:
             rpe_scheme="all",
             fa_threshold=0.3,
             alps_method="ALPS-LAB",
-            refine_roi_placement="Standard",
+            adaptive_roi_placement="Standard",
             output_dir="/out",
             staging_enabled=True,
             staging_dir_raw="/scratch",
@@ -81,7 +81,7 @@ class TestBuildBatchState:
         assert cfg.rpe_scheme == "all"
         assert cfg.fa_threshold == 0.3
         assert cfg.alps_method == "ALPS-LAB"
-        assert cfg.refine_roi_placement == "Standard"
+        assert cfg.adaptive_roi_placement == "Standard"
         assert cfg.output_dir == "/out"
         assert cfg.staging_enabled is True
         assert cfg.staging_dir == "/scratch"

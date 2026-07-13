@@ -366,7 +366,7 @@ class TestSaveCsv:
 
     def test_default_csv_name(self):
         model = QualityReportModel()
-        assert model.default_csv_name("squarev9_refined") == "quality_report_squarev9_refined.csv"
+        assert model.default_csv_name("squarev9_adaptive") == "quality_report_squarev9_adaptive.csv"
 
 
 # --------------------------------------------------------------------------- #

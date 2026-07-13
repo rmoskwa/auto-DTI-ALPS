@@ -46,9 +46,9 @@ RPE_SCHEMES = {
 ALPS_METHODS = ["ALPS-LAB", "ALPS-PAS", "Both"]
 DEFAULT_ALPS_METHOD = "Both"
 
-# ROI refinement options
-ROI_REFINEMENT_OPTIONS = ["Refined", "Standard", "Both"]
-DEFAULT_ROI_REFINEMENT = "Both"
+# ROI method options
+ROI_METHOD_OPTIONS = ["Adaptive", "Standard", "Both"]
+DEFAULT_ROI_METHOD = "Both"
 
 
 # ROI shape catalog (PRD 0015) — the single ordered source for the *selectable*

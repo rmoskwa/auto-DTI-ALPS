@@ -9,7 +9,7 @@ Usage:
     python -m dti_alps --report /path/to/output
 
 Output:
-    For each ROI shape found (e.g., rois_sphere3, rois_squarev9_refined):
+    For each ROI shape found (e.g., rois_sphere3, rois_squarev9_adaptive):
     - quality_report_{shape}.csv
 """
 
@@ -246,7 +246,7 @@ def discover_roi_shapes(output_dir: Path) -> list[str]:
     Returns
     -------
     list of str
-        Unique ROI shape names (e.g., ['rois', 'squarev9', 'squarev9_refined'])
+        Unique ROI shape names (e.g., ['rois', 'squarev9', 'squarev9_adaptive'])
     """
     shapes = set()
 
@@ -282,7 +282,7 @@ def discover_subjects_for_shape(
     output_dir : Path
         Path to the batch output directory
     shape : str
-        ROI shape name (e.g., 'sphere3', 'squarev9_refined')
+        ROI shape name (e.g., 'sphere3', 'squarev9_adaptive')
 
     Returns
     -------

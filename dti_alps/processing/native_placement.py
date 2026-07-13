@@ -6,8 +6,8 @@ The *paths in -> mask files on disk* twin of the pure ``roi_placement`` leaf
 kernels into the one native-placement body both callers share: it transforms the
 four ROI templates into native space (cache-if-exists ``applywarp`` via the
 injected :class:`ToolRunner`), finds each template centroid, loads V1/L2/L3 only
-as the shape/refinement need them (with the V1-missing fallbacks), jointly
-refines each projection/association pair, creates the masks, and saves them under
+as the shape/adaptive placement need them (with the V1-missing fallbacks), jointly
+adapts each projection/association pair, creates the masks, and saves them under
 ``results_layout.roi_mask_name``.
 
 Both ``registration/fsl.py::place_rois`` and ``reanalysis.py::reanalyze_subject``
@@ -26,12 +26,12 @@ import numpy as np
 
 from . import results_layout
 from .roi_placement import (
+    adaptive_roi_pair_placement,
     calculate_roi_quality,
     create_sphere_mask,
     create_square_v4_mask,
     create_square_v9_mask,
     find_mask_centroid,
-    refine_roi_pair_placement,
 )
 from .tool_runner import ToolRunner
 
@@ -58,14 +58,14 @@ def place_rois_in_native(
     prefix: str,
     shape_type: str,
     sphere_radius: float | None,
-    refine: bool,
+    adaptive: bool,
     v1_path: str | None = None,
     l2_path: str | None = None,
     l3_path: str | None = None,
     log: Callable[[str], None] = lambda _: None,
 ) -> tuple[dict[str, str], dict[str, tuple[int, int, int]]]:
     """
-    Place the four ROIs in native space for one shape and one refinement mode.
+    Place the four ROIs in native space for one shape and one placement mode.
 
     Parameters
     ----------
@@ -91,10 +91,10 @@ def place_rois_in_native(
         "sphere", "squarev9", or "squarev4".
     sphere_radius : float or None
         Sphere radius in mm (only for the sphere shape).
-    refine : bool
-        Whether to jointly refine each projection/association pair.
+    adaptive : bool
+        Whether to jointly adapt each projection/association pair.
     v1_path, l2_path, l3_path : str or None
-        Eigenvector / eigenvalue paths, loaded only when the shape or refinement
+        Eigenvector / eigenvalue paths, loaded only when the shape or adaptive placement
         needs them.
     log : callable
         Sink for progress lines.
@@ -102,7 +102,7 @@ def place_rois_in_native(
     Returns
     -------
     tuple of (roi_mask_paths, roi_centroids)
-        The written mask paths and the (possibly refined) centroids, both keyed
+        The written mask paths and the (possibly adapted) centroids, both keyed
         by ROI name.
 
     Raises
@@ -124,11 +124,11 @@ def place_rois_in_native(
 
     v1_data = None
 
-    # Load V1 data if refinement is enabled OR if using squarev4 (needs V1 for config selection)
-    needs_v1_data = refine or shape_type == "squarev4"
+    # Load V1 data if adaptive placement is enabled OR if using squarev4 (needs V1 for config selection)
+    needs_v1_data = adaptive or shape_type == "squarev4"
     if needs_v1_data:
-        if refine:
-            log("  ROI refinement enabled (±3 X, ±1 Y, ±2 Z voxels)")
+        if adaptive:
+            log("  Adaptive ROI placement enabled (±3 X, ±1 Y, ±2 Z voxels)")
             log("  Association ROIs constrained to ±1 Y, ±1 Z voxels from projection ROI")
         if shape_type == "squarev4":
             log("  Square 2x2: V1-optimized configuration selection enabled")
@@ -137,16 +137,16 @@ def place_rois_in_native(
             v1_data = nib.load(v1_path).get_fdata()
         else:
             log("  WARNING: V1 data not available")
-            if refine:
-                log("  Skipping refinement")
-                refine = False
+            if adaptive:
+                log("  Skipping adaptive placement")
+                adaptive = False
             if shape_type == "squarev4":
                 log("  Squarev4 will use default configuration")
 
-    # Load L2/L3 data for radial asymmetry penalty in refinement
+    # Load L2/L3 data for radial asymmetry penalty in adaptive placement
     l2_data = None
     l3_data = None
-    if refine:
+    if adaptive:
         if l2_path and os.path.exists(l2_path) and l3_path and os.path.exists(l3_path):
             l2_data = nib.load(l2_path).get_fdata()
             l3_data = nib.load(l3_path).get_fdata()
@@ -161,7 +161,7 @@ def place_rois_in_native(
         roi_transformed = reg_dir / f"{prefix}_{roi_name}_transformed.nii.gz"
 
         # The transformed templates depend only on (inverse_warp, template, FA
-        # reference grid) -- none of which vary by shape or refinement mode -- so
+        # reference grid) -- none of which vary by shape or placement mode -- so
         # a previously-produced output is reused (PRD 0014 Decision 5).
         if not roi_transformed.exists():
             log(f"  Transforming {roi_name}...")
@@ -191,7 +191,7 @@ def place_rois_in_native(
         template_centroids[roi_name] = centroid
         log(f"    Template centroid: {centroid}")
 
-    # Second pass: Jointly refine projection and association ROI pairs
+    # Second pass: Jointly adapt projection and association ROI pairs
     # This optimizes both ROIs together to find the best combined placement
     # while respecting the Y/Z drift constraint between paired ROIs
     for side in ["left", "right"]:
@@ -200,7 +200,7 @@ def place_rois_in_native(
         proj_centroid = template_centroids[proj_name]
         assoc_centroid = template_centroids[assoc_name]
 
-        if refine and v1_data is not None:
+        if adaptive and v1_data is not None:
             # Calculate original purities for logging
             if shape_type == "sphere":
                 orig_proj_mask = create_sphere_mask(
@@ -223,14 +223,14 @@ def place_rois_in_native(
                 v1_data, fa_data, orig_assoc_mask, "assoc"
             )
 
-            # Jointly refine both ROIs as a pair
+            # Jointly adapt both ROIs as a pair
             (
-                refined_proj,
-                refined_assoc,
-                refined_proj_purity,
-                refined_assoc_purity,
+                adaptive_proj,
+                adaptive_assoc,
+                adaptive_proj_purity,
+                adaptive_assoc_purity,
                 _,
-            ) = refine_roi_pair_placement(
+            ) = adaptive_roi_pair_placement(
                 proj_centroid,
                 assoc_centroid,
                 v1_data,
@@ -248,46 +248,46 @@ def place_rois_in_native(
                 l3_data=l3_data,
             )
 
-            # Log projection ROI refinement
+            # Log projection ROI adjustment
             proj_offset = (
-                refined_proj[0] - proj_centroid[0],
-                refined_proj[1] - proj_centroid[1],
-                refined_proj[2] - proj_centroid[2],
+                adaptive_proj[0] - proj_centroid[0],
+                adaptive_proj[1] - proj_centroid[1],
+                adaptive_proj[2] - proj_centroid[2],
             )
             if proj_offset != (0, 0, 0):
-                log(f"    {proj_name} refined: {refined_proj} (offset: {proj_offset})")
+                log(f"    {proj_name} adapted: {adaptive_proj} (offset: {proj_offset})")
                 log(
-                    f"    Purity: {orig_proj_purity * 100:.0f}% -> {refined_proj_purity * 100:.0f}%"
+                    f"    Purity: {orig_proj_purity * 100:.0f}% -> {adaptive_proj_purity * 100:.0f}%"
                 )
             else:
                 log(
-                    f"    {proj_name} no refinement needed "
-                    f"(purity: {refined_proj_purity * 100:.0f}%)"
+                    f"    {proj_name} no adjustment needed "
+                    f"(purity: {adaptive_proj_purity * 100:.0f}%)"
                 )
 
-            # Log association ROI refinement
+            # Log association ROI adjustment
             assoc_offset = (
-                refined_assoc[0] - assoc_centroid[0],
-                refined_assoc[1] - assoc_centroid[1],
-                refined_assoc[2] - assoc_centroid[2],
+                adaptive_assoc[0] - assoc_centroid[0],
+                adaptive_assoc[1] - assoc_centroid[1],
+                adaptive_assoc[2] - assoc_centroid[2],
             )
-            y_drift = abs(refined_assoc[1] - refined_proj[1])
-            z_drift = abs(refined_assoc[2] - refined_proj[2])
+            y_drift = abs(adaptive_assoc[1] - adaptive_proj[1])
+            z_drift = abs(adaptive_assoc[2] - adaptive_proj[2])
             if assoc_offset != (0, 0, 0):
-                log(f"    {assoc_name} refined: {refined_assoc} (offset: {assoc_offset})")
+                log(f"    {assoc_name} adapted: {adaptive_assoc} (offset: {assoc_offset})")
                 log(
                     f"    Purity: {orig_assoc_purity * 100:.0f}% -> "
-                    f"{refined_assoc_purity * 100:.0f}%"
+                    f"{adaptive_assoc_purity * 100:.0f}%"
                 )
                 log(f"    Drift from {proj_name}: Y={y_drift}, Z={z_drift} voxels")
             else:
                 log(
-                    f"    {assoc_name} no refinement needed "
-                    f"(purity: {refined_assoc_purity * 100:.0f}%)"
+                    f"    {assoc_name} no adjustment needed "
+                    f"(purity: {adaptive_assoc_purity * 100:.0f}%)"
                 )
 
-            proj_centroid = refined_proj
-            assoc_centroid = refined_assoc
+            proj_centroid = adaptive_proj
+            assoc_centroid = adaptive_assoc
 
         roi_centroids[proj_name] = proj_centroid
         roi_centroids[assoc_name] = assoc_centroid

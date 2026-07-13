@@ -8,7 +8,7 @@ FSL installed**, in two parts:
 - **Happy path (full body).** The four ``{prefix}_{roi}_transformed.nii.gz`` are
   pre-seeded as tiny real NIfTIs, so cache-if-exists (Decision 5) skips
   ``applywarp`` entirely and the body runs on real ``nibabel``: centroid ->
-  joint refine (``refine=True`` with a crafted V1) -> mask creation -> save.
+  joint adaptive placement (``adaptive=True`` with a crafted V1) -> mask creation -> save.
   Zero ``applywarp`` calls proves the cache path.
 - **Seam path (argv + failure).** With no pre-seed the ``FakeToolRunner`` records
   the ``applywarp`` argv; a non-zero returncode maps to a raised
@@ -38,7 +38,7 @@ def _blob(shape=(8, 8, 8)):
 def _seed_common(tmp_path):
     """FA volume + a crafted V1 (+L2/L3); returns the resolved path kwargs."""
     reg_dir = tmp_path / "registration"
-    roi_dir = tmp_path / "rois_sphere3_refined"
+    roi_dir = tmp_path / "rois_sphere3_adaptive"
     reg_dir.mkdir()
     roi_dir.mkdir()
 
@@ -46,7 +46,7 @@ def _seed_common(tmp_path):
     fa_path = tmp_path / "sub-01_FA.nii.gz"
     nib.save(nib.Nifti1Image(_blob(), affine), str(fa_path))
 
-    # V1 with a Z-dominant vector everywhere so refinement has real data to score.
+    # V1 with a Z-dominant vector everywhere so adaptive placement has real data to score.
     v1 = np.zeros((8, 8, 8, 3), dtype=np.float32)
     v1[..., 2] = 1.0
     v1_path = tmp_path / "sub-01_V1.nii.gz"
@@ -86,7 +86,7 @@ def test_place_rois_full_body_uses_cache_and_writes_masks(tmp_path):
     fake = FakeToolRunner()
 
     mask_paths, centroids = place_rois_in_native(
-        runner=fake, applywarp_cmd=APPLYWARP, refine=True, **kwargs
+        runner=fake, applywarp_cmd=APPLYWARP, adaptive=True, **kwargs
     )
 
     # All four masks written and centroids returned.
@@ -108,7 +108,7 @@ def test_place_rois_issues_applywarp_argv_when_not_cached(tmp_path):
     # Default fake writes nothing, so the run raises "transformed ROI not
     # created" right after -- the seam is asserted from fake.calls before that.
     with pytest.raises(ROIPlacementError):
-        place_rois_in_native(runner=fake, applywarp_cmd=APPLYWARP, refine=False, **kwargs)
+        place_rois_in_native(runner=fake, applywarp_cmd=APPLYWARP, adaptive=False, **kwargs)
 
     applywarp_calls = [c for c in fake.calls if c and c[0] == APPLYWARP]
     assert applywarp_calls, "expected applywarp to cross the seam"
@@ -128,4 +128,4 @@ def test_place_rois_nonzero_applywarp_raises(tmp_path):
     )
 
     with pytest.raises(ROIPlacementError, match="FSL applywarp failed"):
-        place_rois_in_native(runner=fake, applywarp_cmd=APPLYWARP, refine=False, **kwargs)
+        place_rois_in_native(runner=fake, applywarp_cmd=APPLYWARP, adaptive=False, **kwargs)

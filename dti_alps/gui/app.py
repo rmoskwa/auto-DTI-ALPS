@@ -287,7 +287,7 @@ class DTIALPSApplication(QMainWindow):
             synb0_output_dir_raw=self._txt("synb0_output_dir_edit", ""),
             fa_threshold=fa_threshold,
             alps_method=self._combo("alps_method_combo", config.DEFAULT_ALPS_METHOD),
-            refine_roi_placement=self._combo("refine_roi_combo", config.DEFAULT_ROI_REFINEMENT),
+            adaptive_roi_placement=self._combo("adaptive_roi_combo", config.DEFAULT_ROI_METHOD),
             output_dir=self._txt("output_dir_edit", ""),
             staging_enabled=self._checked("staging_enabled_check", False),
             staging_dir_raw=self._txt("staging_dir_edit", ""),
@@ -1349,15 +1349,15 @@ class DTIALPSApplication(QMainWindow):
         alps_desc.setStyleSheet("color: gray;")
         params.addWidget(alps_desc, 2, 2, Qt.AlignLeft)
 
-        # ROI refinement
-        params.addWidget(QLabel("ROI Refinement:"), 3, 0, Qt.AlignLeft)
-        self.refine_roi_combo = QComboBox()
-        self.refine_roi_combo.addItems(config.ROI_REFINEMENT_OPTIONS)
-        self.refine_roi_combo.setCurrentText(config.DEFAULT_ROI_REFINEMENT)
-        params.addWidget(self.refine_roi_combo, 3, 1, Qt.AlignLeft)
-        refine_desc = QLabel("Refined: ±3 X, ±2 Y, ±2 Z voxels; ±1 Y/Z drift between proj/assoc")
-        refine_desc.setStyleSheet("color: gray;")
-        params.addWidget(refine_desc, 3, 2, Qt.AlignLeft)
+        # ROI method
+        params.addWidget(QLabel("ROI Method:"), 3, 0, Qt.AlignLeft)
+        self.adaptive_roi_combo = QComboBox()
+        self.adaptive_roi_combo.addItems(config.ROI_METHOD_OPTIONS)
+        self.adaptive_roi_combo.setCurrentText(config.DEFAULT_ROI_METHOD)
+        params.addWidget(self.adaptive_roi_combo, 3, 1, Qt.AlignLeft)
+        adaptive_desc = QLabel("Adaptive: ±3 X, ±2 Y, ±2 Z voxels; ±1 Y/Z drift between proj/assoc")
+        adaptive_desc.setStyleSheet("color: gray;")
+        params.addWidget(adaptive_desc, 3, 2, Qt.AlignLeft)
 
         layout.addWidget(param_group)
 
@@ -1368,7 +1368,7 @@ class DTIALPSApplication(QMainWindow):
                 "The ROI placement process (after registration) involves:\n\n"
                 "1. Transform ROI templates to native space using inverse warp\n"
                 "2. Find centroid of each transformed mask\n"
-                "3. Optionally refine placement using fiber orientation (V1)\n"
+                "3. Optionally adapt placement using fiber orientation (V1)\n"
                 "4. Create spherical ROIs at final centroid positions\n\n"
                 "ROI masks created:\n"
                 "  - Left/Right Projection (superior corona radiata)\n"
