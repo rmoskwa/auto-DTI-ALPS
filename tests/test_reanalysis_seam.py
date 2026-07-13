@@ -68,7 +68,7 @@ def _reanalyze(subject_dir, fake):
         subject_id="sub-01",
         subject_dir=subject_dir,
         roi_shape=ROIShape(shape_type="sphere", sphere_radius=3.0),
-        enable_refinement=False,
+        enable_adaptive=False,
         alps_method="ALPS-LAB",
         fa_threshold=0.2,
         runner=fake,

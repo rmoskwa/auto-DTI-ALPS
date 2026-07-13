@@ -7,7 +7,7 @@ cycle, and it carries **no GUI text** -- it speaks ROI *tokens*, never display
 names. This is the single home for the convention that the engine writes and
 the viewer/reports read:
 
-* the ROI-directory naming (``rois`` / ``rois_{token}`` / ``rois_{token}_refined``)
+* the ROI-directory naming (``rois`` / ``rois_{token}`` / ``rois_{token}_adaptive``)
   via :func:`roi_dir_name` / :func:`parse_roi_dir`,
 * the ALPS-results CSV naming (``alps_results.csv`` / ``alps_results_{token}.csv``)
   via :func:`alps_csv_name`, and
@@ -29,7 +29,7 @@ canonical ROI-name set is a recorded follow-up, mirroring how
 
 A **token** is the machine name of an ROI configuration as it appears on disk:
 ``rois`` (the default 3.0 mm sphere), ``squarev9``, ``squarev4``, ``sphere2p5``,
-``sphere3``, optionally suffixed ``_refined``. The default ``rois`` token maps to
+``sphere3``, optionally suffixed ``_adaptive``. The default ``rois`` token maps to
 the bare ``rois`` directory and ``alps_results.csv``; every other token gets the
 ``rois_{token}`` / ``alps_results_{token}.csv`` form.
 """
@@ -97,7 +97,7 @@ _BRAIN_MASK_TEMPLATE = "{subject}_brain_mask.nii.gz"
 
 def shape_token(shape_type: str, sphere_radius: float | None) -> str:
     """
-    Map an ROI geometry to its base on-disk token (before any refinement).
+    Map an ROI geometry to its base on-disk token (before adaptive placement).
 
     The single home for *geometry -> token*, including the **default collapse**:
     the default 3.0 mm sphere is the bare ``rois`` token, every other sphere is
@@ -123,33 +123,33 @@ def shape_token(shape_type: str, sphere_radius: float | None) -> str:
     return f"sphere{r_str}"
 
 
-def roi_dir_name(token: str, refined: bool = False) -> str:
+def roi_dir_name(token: str, adaptive: bool = False) -> str:
     """
     Build the on-disk ROI-directory name for ``token``.
 
-    ``refined`` is a convenience for writers that hold the base token and the
-    refinement flag separately; when set, ``_refined`` is appended to the token
-    first. The viewer passes whole tokens (with ``_refined`` already baked in)
-    and leaves ``refined`` at its default.
+    ``adaptive`` is a convenience for writers that hold the base token and the
+    adaptive-placement flag separately; when set, ``_adaptive`` is appended to
+    the token first. The viewer passes whole tokens (with ``_adaptive`` already
+    baked in) and leaves ``adaptive`` at its default.
 
-    The default token maps to the bare ``rois/`` directory; its refined variant
-    is ``rois_refined/`` (not ``rois_rois_refined/``). Every other token gets the
+    The default token maps to the bare ``rois/`` directory; its adaptive variant
+    is ``rois_adaptive/`` (not ``rois_rois_adaptive/``). Every other token gets the
     ``rois_{token}`` form.
 
     >>> roi_dir_name("rois")
     'rois'
-    >>> roi_dir_name("rois", refined=True)
-    'rois_refined'
+    >>> roi_dir_name("rois", adaptive=True)
+    'rois_adaptive'
     >>> roi_dir_name("squarev9")
     'rois_squarev9'
-    >>> roi_dir_name("squarev9", refined=True)
-    'rois_squarev9_refined'
+    >>> roi_dir_name("squarev9", adaptive=True)
+    'rois_squarev9_adaptive'
     """
-    if refined:
-        token = f"{token}_refined"
+    if adaptive:
+        token = f"{token}_adaptive"
     if token == DEFAULT_ROI_TOKEN:
         return DEFAULT_ROI_TOKEN
-    # The refined default ("rois_refined") is already a directory name — it
+    # The adaptive default ("rois_adaptive") is already a directory name — it
     # carries the ``rois`` base, so it must not gain a second ``rois_`` prefix.
     if token.startswith(_ROI_DIR_PREFIX):
         return token
@@ -162,43 +162,43 @@ def parse_roi_dir(name: str) -> str | None:
 
     The inverse of :func:`roi_dir_name` for the whole-token form:
     ``parse_roi_dir(roi_dir_name(token)) == token``. A returned token keeps any
-    ``_refined`` suffix. Replaces the scattered ``name[5:]`` strip.
+    ``_adaptive`` suffix. Replaces the scattered ``name[5:]`` strip.
 
     >>> parse_roi_dir("rois")
     'rois'
-    >>> parse_roi_dir("rois_refined")
-    'rois_refined'
-    >>> parse_roi_dir("rois_squarev9_refined")
-    'squarev9_refined'
+    >>> parse_roi_dir("rois_adaptive")
+    'rois_adaptive'
+    >>> parse_roi_dir("rois_squarev9_adaptive")
+    'squarev9_adaptive'
     >>> parse_roi_dir("registration") is None
     True
     """
     if name == DEFAULT_ROI_TOKEN:
         return DEFAULT_ROI_TOKEN
-    # The refined default keeps its ``rois`` base rather than stripping to a bare
-    # ``refined`` token (which would not round-trip and would mis-display).
-    if name == f"{DEFAULT_ROI_TOKEN}_refined":
+    # The adaptive default keeps its ``rois`` base rather than stripping to a bare
+    # ``adaptive`` token (which would not round-trip and would mis-display).
+    if name == f"{DEFAULT_ROI_TOKEN}_adaptive":
         return name
     if name.startswith(_ROI_DIR_PREFIX):
         return name[len(_ROI_DIR_PREFIX) :]
     return None
 
 
-def alps_csv_name(token: str, refined: bool = False) -> str:
+def alps_csv_name(token: str, adaptive: bool = False) -> str:
     """
     Build the ALPS-results CSV filename for ``token``.
 
-    ``refined`` behaves as in :func:`roi_dir_name`.
+    ``adaptive`` behaves as in :func:`roi_dir_name`.
 
     >>> alps_csv_name("rois")
     'alps_results.csv'
     >>> alps_csv_name("squarev9")
     'alps_results_squarev9.csv'
-    >>> alps_csv_name("squarev9", refined=True)
-    'alps_results_squarev9_refined.csv'
+    >>> alps_csv_name("squarev9", adaptive=True)
+    'alps_results_squarev9_adaptive.csv'
     """
-    if refined:
-        token = f"{token}_refined"
+    if adaptive:
+        token = f"{token}_adaptive"
     if token == DEFAULT_ROI_TOKEN:
         return "alps_results.csv"
     return f"alps_results_{token}.csv"

@@ -148,7 +148,7 @@ class BatchRunner:
             roi_shapes=list(batch_config.roi_shapes),
             fa_threshold=batch_config.fa_threshold,
             alps_method=batch_config.alps_method,
-            refine_roi_placement=batch_config.refine_roi_placement,
+            adaptive_roi_placement=batch_config.adaptive_roi_placement,
             # Output settings
             output_dir=subject_output_dir,
             output_prefix=subject_files.subject_id,

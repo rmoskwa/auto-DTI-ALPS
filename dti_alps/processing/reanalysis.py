@@ -8,7 +8,7 @@ the preprocessing and registration steps.
 Usage:
     python -m dti_alps --reanalyze /path/to/output --sphere 3.0
     python -m dti_alps --reanalyze /path/to/output --squarev9
-    python -m dti_alps --reanalyze /path/to/output --sphere 2.5 --refine
+    python -m dti_alps --reanalyze /path/to/output --sphere 2.5 --adaptive
 """
 
 import os
@@ -140,7 +140,7 @@ def reanalyze_subject(
     subject_id: str,
     subject_dir: Path,
     roi_shape: ROIShape,
-    enable_refinement: bool,
+    enable_adaptive: bool,
     alps_method: str,
     fa_threshold: float,
     log_callback: Callable[[str], None] | None = None,
@@ -157,8 +157,8 @@ def reanalyze_subject(
         Path to subject output directory
     roi_shape : ROIShape
         ROI shape configuration
-    enable_refinement : bool
-        Whether to enable ROI refinement
+    enable_adaptive : bool
+        Whether to enable adaptive ROI placement
     alps_method : str
         ALPS calculation method ("ALPS-LAB", "ALPS-PAS", or "Both")
     fa_threshold : float
@@ -215,7 +215,7 @@ def reanalyze_subject(
             result.error_message = "Tensor file not found"
             return result
 
-        # Find eigenvector files (for ALPS-PAS and refinement)
+        # Find eigenvector files (for ALPS-PAS and adaptive placement)
         v1_path = v2_path = v3_path = l2_path = l3_path = None
         for f in subject_dir.glob("*_V1.nii.gz"):
             v1_path = f
@@ -246,8 +246,8 @@ def reanalyze_subject(
         fa_data = nib.load(fa_path).get_fdata()
 
         # Create output directory for new ROIs
-        # Include _refined suffix if refinement is enabled
-        roi_suffix = f"{roi_shape.name}_refined" if enable_refinement else roi_shape.name
+        # Include _adaptive suffix if adaptive placement is enabled
+        roi_suffix = f"{roi_shape.name}_adaptive" if enable_adaptive else roi_shape.name
         roi_dir = subject_dir / results_layout.roi_dir_name(roi_suffix)
         roi_dir.mkdir(parents=True, exist_ok=True)
 
@@ -267,7 +267,7 @@ def reanalyze_subject(
             prefix=subject_id,
             shape_type=roi_shape.shape_type,
             sphere_radius=roi_shape.sphere_radius,
-            refine=enable_refinement,
+            adaptive=enable_adaptive,
             v1_path=str(v1_path) if v1_path else None,
             l2_path=str(l2_path) if l2_path else None,
             l3_path=str(l3_path) if l3_path else None,
@@ -332,7 +332,7 @@ def reanalyze_subject(
 def run_reanalysis(
     output_dir: str,
     roi_shape: ROIShape,
-    enable_refinement: bool = False,
+    enable_adaptive: bool = False,
     alps_method: str = "Both",
     fa_threshold: float = FA_THRESHOLD,
     log_callback: Callable[[str], None] | None = None,
@@ -347,8 +347,8 @@ def run_reanalysis(
         Path to the batch output directory
     roi_shape : ROIShape
         ROI shape configuration
-    enable_refinement : bool
-        Whether to enable ROI refinement
+    enable_adaptive : bool
+        Whether to enable adaptive ROI placement
     alps_method : str
         ALPS calculation method ("ALPS-LAB", "ALPS-PAS", or "Both")
     fa_threshold : float
@@ -377,7 +377,7 @@ def run_reanalysis(
 
     log(f"Found {len(subjects)} processed subjects")
     log(f"ROI shape: {roi_shape.name}")
-    log(f"Refinement: {'enabled' if enable_refinement else 'disabled'}")
+    log(f"Adaptive placement: {'enabled' if enable_adaptive else 'disabled'}")
     log(f"ALPS method: {alps_method}")
     log("")
 
@@ -389,7 +389,7 @@ def run_reanalysis(
             subject_id=subject_id,
             subject_dir=subject_dir,
             roi_shape=roi_shape,
-            enable_refinement=enable_refinement,
+            enable_adaptive=enable_adaptive,
             alps_method=alps_method,
             fa_threshold=fa_threshold,
             log_callback=log,
@@ -406,8 +406,8 @@ def run_reanalysis(
             log(f"    FAILED: {result.error_message}")
 
     # Write CSV results
-    # Include _refined suffix if refinement is enabled
-    roi_suffix = f"{roi_shape.name}_refined" if enable_refinement else roi_shape.name
+    # Include _adaptive suffix if adaptive placement is enabled
+    roi_suffix = f"{roi_shape.name}_adaptive" if enable_adaptive else roi_shape.name
     csv_filename = results_layout.alps_csv_name(roi_suffix)
     csv_path = os.path.join(output_dir, csv_filename)
 

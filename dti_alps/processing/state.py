@@ -147,8 +147,8 @@ class PipelineState:
     fa_threshold: float = FA_THRESHOLD
     # ALPS calculation method (ALPS-LAB or ALPS-PAS)
     alps_method: str = "Both"
-    # ROI refinement mode: "Refined", "Standard", or "Both"
-    refine_roi_placement: str = "Refined"
+    # ROI placement mode: "Adaptive", "Standard", or "Both"
+    adaptive_roi_placement: str = "Adaptive"
 
     # Output settings
     output_dir: str = ""
@@ -185,7 +185,7 @@ class PipelineState:
     # Keys: 'left_proj', 'left_assoc', 'right_proj', 'right_assoc'
     roi_mask_paths: dict[str, str] = field(default_factory=dict)
 
-    # All ROI results indexed by shape name (e.g., "rois_sphere3_refined")
+    # All ROI results indexed by shape name (e.g., "rois_sphere3_adaptive")
     # Each entry contains: {"roi_mask_paths": {...}, "roi_centers": {...}}
     all_roi_results: dict[str, dict] | None = None
 
@@ -193,7 +193,7 @@ class PipelineState:
     roi_centers: dict[str, tuple] | None = None
     alps_results: dict[str, float] | None = None
 
-    # Per-shape ALPS results indexed by shape name (e.g., "sphere3_refined")
+    # Per-shape ALPS results indexed by shape name (e.g., "sphere3_adaptive")
     # Each entry is a dict with ALPS calculation results for that shape
     alps_results_by_shape: dict[str, dict] | None = None
 
@@ -281,7 +281,7 @@ class BatchConfig:
     )
     fa_threshold: float = FA_THRESHOLD  # FA threshold for filtering CSF voxels
     alps_method: str = "Both"  # ALPS calculation method (ALPS-LAB, ALPS-PAS, or Both)
-    refine_roi_placement: str = "Refined"  # "Refined", "Standard", or "Both"
+    adaptive_roi_placement: str = "Adaptive"  # "Adaptive", "Standard", or "Both"
 
     # Output settings
     output_dir: str = ""
@@ -317,7 +317,7 @@ class SubjectResult:
     alps_pas_right: float | None = None
     alps_pas_bilateral: float | None = None
 
-    # Per-shape ALPS results indexed by shape name (e.g., "sphere3_refined")
+    # Per-shape ALPS results indexed by shape name (e.g., "sphere3_adaptive")
     # Each entry is a dict with: alps_lab_left, alps_lab_right, alps_lab_bilateral,
     # alps_pas_left, alps_pas_right, alps_pas_bilateral
     alps_results_by_shape: dict[str, dict] = field(default_factory=dict)

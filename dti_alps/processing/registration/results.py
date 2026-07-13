@@ -49,7 +49,7 @@ class ROIPlacementResult:
     error_message : str, optional
         Error description if placement failed
     all_roi_results : dict[str, dict]
-        All ROI results indexed by shape name (e.g., "sphere3_refined").
+        All ROI results indexed by shape name (e.g., "sphere3_adaptive").
         Each entry contains: {"roi_mask_paths": {...}, "roi_centers": {...}}
     """
 

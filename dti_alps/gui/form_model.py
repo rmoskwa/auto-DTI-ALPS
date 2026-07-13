@@ -118,7 +118,7 @@ class FormState:
     synb0_output_dir_raw: str = ""
     fa_threshold: float = FA_THRESHOLD
     alps_method: str = "Both"
-    refine_roi_placement: str = "Both"
+    adaptive_roi_placement: str = "Both"
     output_dir: str = ""
     staging_enabled: bool = False
     staging_dir_raw: str = ""
@@ -244,7 +244,7 @@ def build_batch_state(form_state: FormState, subjects: list[SubjectFiles]) -> Ba
         roi_shapes=_collect_roi_shapes(form_state.roi_shape_flags),
         fa_threshold=form_state.fa_threshold,
         alps_method=form_state.alps_method,
-        refine_roi_placement=form_state.refine_roi_placement,
+        adaptive_roi_placement=form_state.adaptive_roi_placement,
         output_dir=form_state.output_dir,
         output_config=collect_output_config(form_state.output_flags),
         staging_enabled=form_state.staging_enabled,

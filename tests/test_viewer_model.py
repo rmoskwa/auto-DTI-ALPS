@@ -447,9 +447,9 @@ class TestRoiDisplayName:
         assert roi_display_name("squarev9") == "Square 3x3"
         assert roi_display_name("squarev4") == "Square 2x2"
 
-    def test_refined_suffix(self):
-        assert roi_display_name("squarev9_refined") == "Square 3x3 (r)"
-        assert roi_display_name("rois_refined") == "Sphere 3.0mm (r)"
+    def test_adaptive_suffix(self):
+        assert roi_display_name("squarev9_adaptive") == "Square 3x3 (a)"
+        assert roi_display_name("rois_adaptive") == "Sphere 3.0mm (a)"
 
 
 # --------------------------------------------------------------------------- #

@@ -437,34 +437,34 @@ class FSLRegistration:
         if not roi_shapes:
             roi_shapes = [{"type": "sphere", "radius": 3.0}]
 
-        # Determine which refinement modes to run
-        refinement_setting = getattr(state, "refine_roi_placement", "Refined")
+        # Determine which placement modes to run
+        adaptive_setting = getattr(state, "adaptive_roi_placement", "Adaptive")
         # Support legacy bool values
-        if isinstance(refinement_setting, bool):
-            refinement_modes = [refinement_setting]
-        elif refinement_setting == "Both":
-            refinement_modes = [False, True]
+        if isinstance(adaptive_setting, bool):
+            adaptive_modes = [adaptive_setting]
+        elif adaptive_setting == "Both":
+            adaptive_modes = [False, True]
         else:
-            refinement_modes = [refinement_setting == "Refined"]
+            adaptive_modes = [adaptive_setting == "Adaptive"]
 
-        # Process each ROI shape × refinement mode
+        # Process each ROI shape × placement mode
         all_results = {}
-        for do_refinement in refinement_modes:
+        for do_adaptive in adaptive_modes:
             for shape_config in roi_shapes:
                 shape_type = shape_config.get("type", "sphere")
                 sphere_radius = shape_config.get("radius", 3.0) if shape_type == "sphere" else None
 
                 # The on-disk token (with the default-3mm-sphere -> `rois` collapse)
-                # is owned by results_layout; the _refined suffix is added here.
+                # is owned by results_layout; the _adaptive suffix is added here.
                 shape_name = results_layout.shape_token(shape_type, sphere_radius)
-                dir_name = results_layout.roi_dir_name(shape_name, refined=do_refinement)
+                dir_name = results_layout.roi_dir_name(shape_name, adaptive=do_adaptive)
 
                 roi_dir = Path(state.output_dir) / dir_name
                 roi_dir.mkdir(parents=True, exist_ok=True)
 
                 log(
                     f"Creating {shape_name} ROIs "
-                    f"(refinement: {'enabled' if do_refinement else 'disabled'})..."
+                    f"(adaptive: {'enabled' if do_adaptive else 'disabled'})..."
                 )
 
                 try:
@@ -479,7 +479,7 @@ class FSLRegistration:
                         prefix=state.output_prefix,
                         shape_type=shape_type,
                         sphere_radius=sphere_radius,
-                        refine=do_refinement,
+                        adaptive=do_adaptive,
                         v1_path=state.v1_path,
                         l2_path=getattr(state, "l2_path", None),
                         l3_path=getattr(state, "l3_path", None),
