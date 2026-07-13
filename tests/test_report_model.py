@@ -299,15 +299,22 @@ class TestWarnings:
         assert _warn(view, "s", "Fractional Anisotropy", "l_proj") is True
         assert _warn(view, "s", "Fractional Anisotropy", "l_assoc") is False
 
-    def test_radial_asymmetry_warns_above_18_and_none_never_warns(self):
+    def test_radial_asymmetry_warns_above_20_and_none_never_warns(self):
         high = ROIMetrics(
-            directional_alignment=0.9, angular_dispersion=5.0, fa_mean=0.5, radial_asymmetry=1.9
+            directional_alignment=0.9, angular_dispersion=5.0, fa_mean=0.5, radial_asymmetry=2.1
+        )
+        at = ROIMetrics(
+            directional_alignment=0.9, angular_dispersion=5.0, fa_mean=0.5, radial_asymmetry=2.0
         )
         lab_only = ROIMetrics(
             directional_alignment=0.9, angular_dispersion=5.0, fa_mean=0.5, radial_asymmetry=None
         )
-        view = build_quality_report_view("rois", [self._subject("s", l_proj=high, r_proj=lab_only)])
+        view = build_quality_report_view(
+            "rois", [self._subject("s", l_proj=high, l_assoc=at, r_proj=lab_only)]
+        )
         assert _warn(view, "s", "Radial Asymmetry (λ2/λ3)", "l_proj") is True
+        # Exactly at the ceiling is not a warning (strict >).
+        assert _warn(view, "s", "Radial Asymmetry (λ2/λ3)", "l_assoc") is False
         # A LAB-only (None) radial cell is never flagged.
         assert _warn(view, "s", "Radial Asymmetry (λ2/λ3)", "r_proj") is False
 
@@ -318,9 +325,9 @@ class TestWarnings:
 
     def test_warnings_flow_through_generate(self, tmp_path):
         # End-to-end from the compute leaf: the known fixture (V1=(0,0.6,0.8),
-        # FA=0.5, λ2/λ3=2.0) warns on assoc alignment (0.6<0.80) and on radial
-        # (2.0>1.8), but not on proj alignment (0.8 is the boundary), FA, or
-        # dispersion.
+        # FA=0.5, λ2/λ3=2.0) warns on assoc alignment (0.6<0.80) but not on proj
+        # alignment (0.8 is the boundary), radial (2.0 is exactly the ceiling),
+        # FA, or dispersion.
         _make_subject(tmp_path, "sub-01", ["rois"], with_l2l3=True)
         model = QualityReportModel()
         model.load_folder(tmp_path)
@@ -328,7 +335,8 @@ class TestWarnings:
 
         assert _warn(view, "sub-01", "Directional Alignment (V1)", "l_proj") is False
         assert _warn(view, "sub-01", "Directional Alignment (V1)", "l_assoc") is True
-        assert _warn(view, "sub-01", "Radial Asymmetry (λ2/λ3)", "l_proj") is True
+        # Radial 2.0 is exactly the ceiling -> not flagged (strict >).
+        assert _warn(view, "sub-01", "Radial Asymmetry (λ2/λ3)", "l_proj") is False
         assert _warn(view, "sub-01", "Fractional Anisotropy", "l_proj") is False
         assert _warn(view, "sub-01", "Angular Dispersion (V1)", "l_proj") is False
 

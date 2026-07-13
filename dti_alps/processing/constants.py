@@ -24,14 +24,15 @@ FA_THRESHOLD = 0.2  # Minimum FA value for ROI voxels (filters out CSF)
 # inspection when it lands on the wrong side of its cutoff. The comparison
 # direction differs per metric: directional alignment and FA warn when they fall
 # BELOW a floor, angular dispersion and radial asymmetry warn when they rise
-# ABOVE a ceiling. The radial ceiling reuses the crossing-fibre threshold from
-# ``roi_placement.calculate_roi_quality`` (Georgiopoulos et al. 2024); the FA
-# floor sits just above the voxel-level ``FA_THRESHOLD``; the alignment and
-# dispersion cutoffs are placement heuristics.
+# ABOVE a ceiling. The FA floor sits just above the voxel-level ``FA_THRESHOLD``;
+# the alignment, dispersion, and radial-asymmetry cutoffs are placement
+# heuristics. (The engine's own crossing-fibre penalty in
+# ``roi_placement.calculate_roi_quality`` uses a lower 1.8 ratio, Georgiopoulos
+# et al. 2024; the report flags only the more clearly-crossing ROIs.)
 QUALITY_WARN_DIRECTIONAL_ALIGNMENT_MIN = 0.80  # warn if mean |V1_target| < this
 QUALITY_WARN_ANGULAR_DISPERSION_MAX = 10.0  # degrees; warn if dispersion > this
 QUALITY_WARN_FA_MIN = 0.25  # warn if mean FA < this
-QUALITY_WARN_RADIAL_ASYMMETRY_MAX = 1.8  # λ2/λ3; warn if mean ratio > this
+QUALITY_WARN_RADIAL_ASYMMETRY_MAX = 2.0  # λ2/λ3; warn if mean ratio > this
 
 # Readout time validation range (seconds)
 READOUT_TIME_RANGE = (0.001, 1.0)
