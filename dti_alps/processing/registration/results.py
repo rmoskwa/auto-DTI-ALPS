@@ -18,14 +18,17 @@ def _templates_dir() -> Path:
     """
     Locate the shipped ``templates/`` directory in both source and frozen runs.
 
-    In a normal source checkout the templates live at the repo root, a sibling
-    of the ``dti_alps`` package (processing/registration -> dti_alps -> root).
-    In a PyInstaller bundle there is no source tree: the data files are
-    extracted under ``sys._MEIPASS`` and the spec places ``templates/`` there.
+    The templates are package data at ``dti_alps/templates/`` so they ship in
+    the wheel (``pip``/``pipx`` install) and in a source checkout alike; from
+    this module that is ``registration -> processing -> dti_alps -> templates``.
+    In a PyInstaller bundle the data files are extracted under ``sys._MEIPASS``
+    with the package layout mirrored, so the spec places them at
+    ``dti_alps/templates`` there too.
     """
     if getattr(sys, "frozen", False):
-        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)) / "templates"
-    return Path(__file__).parent.parent.parent.parent / "templates"
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        return base / "dti_alps" / "templates"
+    return Path(__file__).parent.parent.parent / "templates"
 
 
 @dataclass

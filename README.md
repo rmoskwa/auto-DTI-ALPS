@@ -1,6 +1,3 @@
->[!NOTE]
->This is currently a personal tool. While completely usable in its current state, the application will be updated and guidance docs will be created to allow outside users ease-of-use.
-
 # autoDTI-ALPS
 
 Automated DTI-ALPS (Diffusion Tensor Imaging Along the Perivascular Space) analysis tool. Uses template-based registration to place ROIs in projection and association fiber regions, then calculates the DTI-ALPS index from diffusion tensor imaging data.
@@ -61,26 +58,40 @@ Installation: https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/FslInstallation
 
 ## Installation
 
-### Download (recommended)
+Whichever route you choose, MRtrix3 and FSL are **not** bundled and must be
+installed separately and on your `PATH` (see
+[External Neuroimaging Software](#external-neuroimaging-software)).
 
-Grab the latest Linux **AppImage** from the [Releases page](https://github.com/rmoskwa/auto-DTI-ALPS/releases), make it executable, and run it — no Python install required:
+### Install with pipx (recommended)
+
+If you have Python 3.10+, [`pipx`](https://pipx.pypa.io/) installs the app into
+an isolated environment and puts the `dti-alps` command on your `PATH`:
+
+```bash
+pipx install dti-alps
+dti-alps            # launch the GUI
+```
+
+Update with `pipx upgrade dti-alps`. (Plain `pip install dti-alps` also works,
+ideally inside a virtualenv, and provides the same `dti-alps` command.)
+
+### Download the AppImage (no Python needed)
+
+For double-click file with no Python setup, grab the latest Linux **AppImage** from the [Releases page](https://github.com/rmoskwa/auto-DTI-ALPS/releases):
 
 ```bash
 chmod +x dti-alps-*-x86_64.AppImage
 ./dti-alps-0.1.0-x86_64.AppImage
 ```
 
-The AppImage bundles the app and its Python dependencies. It does **not** bundle
-MRtrix3 or FSL — those must still be installed and on your `PATH` (see
-[External Neuroimaging Software](#external-neuroimaging-software)).
-
-To update, download the newer AppImage and replace the old file.
+The AppImage bundles the app and its Python dependencies. To update, download
+the newer AppImage and replace the old file.
 
 > **Qt runtime note:** the GUI uses Qt 6, which needs `libxcb-cursor0` on the
 > host. If the app fails to start with an `xcb` platform-plugin error, install
 > it: `sudo apt install libxcb-cursor0` (Debian/Ubuntu).
 
-### From source
+### From source (development)
 
 ```bash
 pip install -e ".[gui]"
@@ -98,24 +109,3 @@ dti-alps --reanalyze /path --sphere 3  # Reanalyze with different ROI shapes
 
 When running the AppImage, substitute `./dti-alps-*.AppImage` for `dti-alps`;
 all CLI flags are forwarded (e.g. `./dti-alps-*.AppImage --viewer /path`).
-
-## Releasing (maintainers)
-
-Releases are built automatically by the [`Release` workflow](.github/workflows/release.yml)
-when a version tag is pushed:
-
-```bash
-# 1. Bump `version` in pyproject.toml, commit, and merge to main.
-# 2. Tag and push:
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-GitHub Actions then freezes the app with PyInstaller (`dti-alps.spec`), wraps it
-into an AppImage (`packaging/build-appimage.sh`), and publishes a GitHub Release
-with the `.AppImage` attached. To build one locally instead:
-
-```bash
-pip install -e ".[gui,build]"
-packaging/build-appimage.sh          # writes dist/dti-alps-<version>-x86_64.AppImage
-```
