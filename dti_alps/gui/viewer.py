@@ -709,8 +709,9 @@ class ResultsViewerPanel(QWidget):
     def _on_view_change(self):
         """Handle view type change."""
         self._update_slice_range()
-        # Reset to middle slice
-        self.current_slice = self.model.default_slice(self.current_view())
+        # Anchor on the Left Projection ROI centroid for the new view (falls back
+        # to the middle slice when that ROI is absent), keeping the ROI on screen.
+        self.current_slice = self.model.initial_slice(self.current_view())
         self._set_slider_value(self.current_slice)
         # Re-fit: axial/coronal/sagittal have very different in-plane dimensions,
         # so a zoom that fit the old view can spill the new one out of frame

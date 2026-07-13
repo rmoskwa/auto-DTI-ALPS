@@ -482,14 +482,14 @@ class ViewerModel:
 
     def default_slice(self, view: str) -> int:
         """The middle slice of ``view`` -- the fallback when there is no ROI to
-        anchor on (used on view-switch, PRD 0021 Decision 7)."""
+        anchor on."""
         return self.num_slices(view) // 2
 
     def initial_slice(self, view: str) -> int:
-        """The slice to show first on subject-load: the one containing the Left
-        Projection (``left_proj``) ROI's centroid, so the ROI is on screen at
-        once. Falls back to :meth:`default_slice` (the middle) when that ROI is
-        absent or empty for the current subject/ROI-type."""
+        """The slice to show first on subject-load and view-switch: the one
+        containing the Left Projection (``left_proj``) ROI's centroid, so the ROI
+        is on screen at once. Falls back to :meth:`default_slice` (the middle)
+        when that ROI is absent or empty for the current subject/ROI-type."""
         centroid = self._roi_centroid_slice("left_proj", view)
         return centroid if centroid is not None else self.default_slice(view)
 
