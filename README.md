@@ -12,10 +12,10 @@ Core dependencies (installed automatically):
 - [NumPy](https://numpy.org/)
 - [NiBabel](https://nipy.org/nibabel/)
 - [SciPy](https://scipy.org/)
+- [PySide6](https://doc.qt.io/qtforpython/) — the Qt toolkit for the GUI and results viewer
 
-Optional GUI dependencies (`pip install -e ".[gui]"`):
-- [Matplotlib](https://matplotlib.org/)
-- [Pillow](https://python-pillow.org/)
+The engine (`dti_alps.processing.*`) is Qt-free and imports PySide6 lazily, so
+headless CLI use (`--reanalyze`, `--report`) and library use never load Qt.
 
 ### External Neuroimaging Software
 
