@@ -298,33 +298,28 @@ class ResultsViewerPanel(QWidget):
         self.scene.addItem(self.pixmap_item)
 
         layout.addWidget(self.view, stretch=1)
-        self._create_legend(layout)
+        self._create_image_toggles(layout)
 
-    def _create_legend(self, layout: QVBoxLayout):
-        """Create ROI indicator legend (white swatch == ROI) + show-ROIs toggle."""
-        legend = QHBoxLayout()
-        swatch = QLabel()
-        swatch.setFixedSize(16, 16)
-        swatch.setStyleSheet("background-color: white; border: 1px solid gray;")
-        legend.addWidget(swatch)
-        legend.addWidget(QLabel("ROI regions"))
-        legend.addStretch(1)
+    def _create_image_toggles(self, layout: QVBoxLayout):
+        """Create the show-ROIs and brain-mask toggles below the image."""
+        toggles = QHBoxLayout()
+        toggles.addStretch(1)
 
         # Show-ROIs toggle lives in the panel body (no menu bar); it drives the
         # same show-ROIs state the render path consumes.
         self.show_rois_check = QCheckBox("Show ROIs")
         self.show_rois_check.setChecked(True)
         self.show_rois_check.toggled.connect(self._update_display)
-        legend.addWidget(self.show_rois_check)
+        toggles.addWidget(self.show_rois_check)
 
         # Brain-mask toggle: blackens out-of-brain voxels for a focused view.
         # Default on; disabled for a subject that has no brain mask on disk.
         self.brain_mask_check = QCheckBox("Brain mask")
         self.brain_mask_check.setChecked(True)
         self.brain_mask_check.toggled.connect(self._update_display)
-        legend.addWidget(self.brain_mask_check)
+        toggles.addWidget(self.brain_mask_check)
 
-        layout.addLayout(legend)
+        layout.addLayout(toggles)
 
     def _create_controls(self, parent_layout: QHBoxLayout):
         """Create slice navigation controls."""
