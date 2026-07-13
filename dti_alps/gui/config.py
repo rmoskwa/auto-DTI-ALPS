@@ -10,6 +10,7 @@ from dataclasses import dataclass
 # engine is the source of truth -- change a value in processing/constants.py,
 # not here. (noqa: these names are intentional re-exports, not dead imports.)
 from ..processing.constants import (  # noqa: F401
+    ADAPTIVE_SEARCH_RANGE,
     DEFAULT_PE_DIRECTION,
     DEFAULT_READOUT_TIME,
     DEFAULT_RPE_SCHEME,
@@ -19,6 +20,7 @@ from ..processing.constants import (  # noqa: F401
     TENSOR_DXX_INDEX,
     TENSOR_DYY_INDEX,
     TENSOR_DZZ_INDEX,
+    AdaptiveSearchConfig,
 )
 
 # Application info

@@ -26,7 +26,7 @@ from .alps_calculation import (
     load_pas_components,
     load_roi_masks,
 )
-from .constants import FA_THRESHOLD
+from .constants import FA_THRESHOLD, AdaptiveSearchConfig
 from .native_placement import place_rois_in_native
 from .registration.results import get_roi_template_paths
 from .tool_runner import SubprocessToolRunner, ToolRunner
@@ -143,6 +143,7 @@ def reanalyze_subject(
     enable_adaptive: bool,
     alps_method: str,
     fa_threshold: float,
+    search: AdaptiveSearchConfig | None = None,
     log_callback: Callable[[str], None] | None = None,
     runner: ToolRunner | None = None,
 ) -> ReanalysisResult:
@@ -163,6 +164,9 @@ def reanalyze_subject(
         ALPS calculation method ("ALPS-LAB", "ALPS-PAS", or "Both")
     fa_threshold : float
         FA threshold for filtering CSF voxels
+    search : AdaptiveSearchConfig | None
+        Adaptive search envelope forwarded to placement. ``None`` builds a fresh
+        default; inert when ``enable_adaptive`` is False (Standard runs no search).
     log_callback : callable, optional
         Callback for log messages
     runner : ToolRunner | None
@@ -268,6 +272,7 @@ def reanalyze_subject(
             shape_type=roi_shape.shape_type,
             sphere_radius=roi_shape.sphere_radius,
             adaptive=enable_adaptive,
+            search=search,
             v1_path=str(v1_path) if v1_path else None,
             l2_path=str(l2_path) if l2_path else None,
             l3_path=str(l3_path) if l3_path else None,
@@ -335,6 +340,7 @@ def run_reanalysis(
     enable_adaptive: bool = False,
     alps_method: str = "Both",
     fa_threshold: float = FA_THRESHOLD,
+    search: AdaptiveSearchConfig | None = None,
     log_callback: Callable[[str], None] | None = None,
     runner: ToolRunner | None = None,
 ) -> list[ReanalysisResult]:
@@ -353,6 +359,9 @@ def run_reanalysis(
         ALPS calculation method ("ALPS-LAB", "ALPS-PAS", or "Both")
     fa_threshold : float
         FA threshold for filtering CSF voxels
+    search : AdaptiveSearchConfig | None
+        Adaptive search envelope threaded into every subject. ``None`` defaults
+        downstream; inert when ``enable_adaptive`` is False.
     log_callback : callable, optional
         Callback for log messages
     runner : ToolRunner | None
@@ -392,6 +401,7 @@ def run_reanalysis(
             enable_adaptive=enable_adaptive,
             alps_method=alps_method,
             fa_threshold=fa_threshold,
+            search=search,
             log_callback=log,
             runner=runner,
         )

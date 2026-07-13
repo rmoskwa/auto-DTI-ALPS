@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -263,6 +264,7 @@ class DTIALPSApplication(QMainWindow):
 
         roi_shape_flags = {key: chk.isChecked() for key, chk in self.roi_shape_checks.items()}
         output_flags = {key: chk.isChecked() for key, chk in self.output_option_checks.items()}
+        search = {name: spin.value() for name, spin in self.adaptive_search_spins.items()}
         cli_options = {
             stage: {
                 name: OptionState(
@@ -288,6 +290,11 @@ class DTIALPSApplication(QMainWindow):
             fa_threshold=fa_threshold,
             alps_method=self._combo("alps_method_combo", config.DEFAULT_ALPS_METHOD),
             adaptive_roi_placement=self._combo("adaptive_roi_combo", config.DEFAULT_ROI_METHOD),
+            search_x=search["search_x"],
+            search_y=search["search_y"],
+            search_z=search["search_z"],
+            max_y_drift=search["max_y_drift"],
+            max_z_drift=search["max_z_drift"],
             output_dir=self._txt("output_dir_edit", ""),
             staging_enabled=self._checked("staging_enabled_check", False),
             staging_dir_raw=self._txt("staging_dir_edit", ""),
@@ -728,6 +735,17 @@ class DTIALPSApplication(QMainWindow):
             )
         self._rebuild_stage_buttons()
         self._update_run_button_state()
+
+    def _on_roi_method_change(self):
+        """Show the Adaptive Search Range group only for methods that use it.
+
+        The envelope steers the joint pair search, which runs only in Adaptive
+        and Both modes; Standard placement ignores it, so the group is hidden
+        there to avoid implying it has an effect. Mirrors the established
+        ``_on_synb0_toggle`` / ``_on_rpe_combo_change`` visibility idiom.
+        """
+        method = self.adaptive_roi_combo.currentText()
+        self.adaptive_search_group.setVisible(method in {"Adaptive", "Both"})
 
     def _add_subject_folder(self):
         """Add a folder and discover all DWI runs within it."""
@@ -1354,12 +1372,39 @@ class DTIALPSApplication(QMainWindow):
         self.adaptive_roi_combo = QComboBox()
         self.adaptive_roi_combo.addItems(config.ROI_METHOD_OPTIONS)
         self.adaptive_roi_combo.setCurrentText(config.DEFAULT_ROI_METHOD)
+        self.adaptive_roi_combo.currentTextChanged.connect(self._on_roi_method_change)
         params.addWidget(self.adaptive_roi_combo, 3, 1, Qt.AlignLeft)
-        adaptive_desc = QLabel("Adaptive: ±3 X, ±2 Y, ±2 Z voxels; ±1 Y/Z drift between proj/assoc")
-        adaptive_desc.setStyleSheet("color: gray;")
-        params.addWidget(adaptive_desc, 3, 2, Qt.AlignLeft)
 
         layout.addWidget(param_group)
+
+        # Adaptive search envelope — five bounded spin boxes seeded from the
+        # AdaptiveSearchConfig defaults (PRD 0023). Visible only for the methods
+        # that actually run the adaptive search (Adaptive / Both). Replaces the
+        # old static description label, which advertised a wrong ±2 Y value.
+        low, high = config.ADAPTIVE_SEARCH_RANGE
+        defaults = config.AdaptiveSearchConfig()
+        self.adaptive_search_group = QGroupBox("Adaptive Search Range")
+        search_grid = QGridLayout(self.adaptive_search_group)
+        self.adaptive_search_spins: dict[str, QSpinBox] = {}
+        search_fields = [
+            ("search_x", "Search X (±voxels):", defaults.search_x),
+            ("search_y", "Search Y (±voxels):", defaults.search_y),
+            ("search_z", "Search Z (±voxels):", defaults.search_z),
+            ("max_y_drift", "Assoc Y Drift (±):", defaults.max_y_drift),
+            ("max_z_drift", "Assoc Z Drift (±):", defaults.max_z_drift),
+        ]
+        for row, (field_name, label, default) in enumerate(search_fields):
+            search_grid.addWidget(QLabel(label), row, 0, Qt.AlignLeft)
+            spin = QSpinBox()
+            spin.setRange(low, high)
+            spin.setSingleStep(1)
+            spin.setValue(default)
+            search_grid.addWidget(spin, row, 1, Qt.AlignLeft)
+            self.adaptive_search_spins[field_name] = spin
+        search_grid.setColumnStretch(2, 1)
+        layout.addWidget(self.adaptive_search_group)
+        # Sync initial visibility to the default ROI method (Both -> visible).
+        self._on_roi_method_change()
 
         info_group = QGroupBox("ROI Placement Process")
         info_layout = QVBoxLayout(info_group)

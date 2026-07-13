@@ -480,6 +480,7 @@ class FSLRegistration:
                         shape_type=shape_type,
                         sphere_radius=sphere_radius,
                         adaptive=do_adaptive,
+                        search=getattr(state, "adaptive_search", None),
                         v1_path=state.v1_path,
                         l2_path=getattr(state, "l2_path", None),
                         l3_path=getattr(state, "l3_path", None),

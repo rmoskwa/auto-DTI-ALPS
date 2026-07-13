@@ -20,6 +20,7 @@ from dti_alps.gui.form_model import (
     compute_blockers,
     compute_readiness,
 )
+from dti_alps.processing.constants import AdaptiveSearchConfig
 from dti_alps.processing.discovery import SubjectFiles
 from dti_alps.processing.state import BatchState, OutputConfig
 from dti_alps.processing.validators import is_readout_valid
@@ -123,6 +124,25 @@ class TestBuildBatchState:
             {"type": "sphere", "radius": 3.0},
             {"type": "squarev9"},
         ]
+
+    def test_adaptive_search_maps_five_ints_to_envelope(self):
+        """The five FormState scalars assemble into BatchConfig.adaptive_search."""
+        form = FormState(
+            search_x=4,
+            search_y=2,
+            search_z=1,
+            max_y_drift=3,
+            max_z_drift=2,
+        )
+        cfg = build_batch_state(form, []).config
+        assert cfg.adaptive_search == AdaptiveSearchConfig(
+            search_x=4, search_y=2, search_z=1, max_y_drift=3, max_z_drift=2
+        )
+
+    def test_adaptive_search_unset_form_yields_defaults(self):
+        """An untouched form reproduces the historical 3 / 1 / 2 / 1 / 1 envelope."""
+        cfg = build_batch_state(FormState(), []).config
+        assert cfg.adaptive_search == AdaptiveSearchConfig()
 
     def test_cli_options_rules(self):
         """Disabled skipped, flag->True, value passthrough, int coerced, junk skipped."""

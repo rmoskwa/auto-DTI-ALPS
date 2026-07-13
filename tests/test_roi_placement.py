@@ -19,6 +19,7 @@ import math
 import numpy as np
 import pytest
 
+from dti_alps.processing.constants import ADAPTIVE_SEARCH_RANGE, AdaptiveSearchConfig
 from dti_alps.processing.roi_placement import (
     adaptive_roi_pair_placement,
     calculate_roi_quality,
@@ -356,3 +357,111 @@ class TestAdaptiveRoiPairPlacement:
         assert rp == (4, 4, 4)
         assert ra == (2, 4, 4)
         assert combined == -1.0
+
+
+class TestAdaptiveSearchConfig:
+    """The Adaptive search envelope type -- defaults and the 1-4 invariant."""
+
+    def test_defaults_are_the_historical_values(self):
+        c = AdaptiveSearchConfig()
+        assert (c.search_x, c.search_y, c.search_z, c.max_y_drift, c.max_z_drift) == (
+            3,
+            1,
+            2,
+            1,
+            1,
+        )
+
+    def test_range_constant_is_one_to_four(self):
+        assert ADAPTIVE_SEARCH_RANGE == (1, 4)
+
+    def test_in_range_values_construct(self):
+        # Both bounds are inclusive.
+        AdaptiveSearchConfig(search_x=1, search_y=4, search_z=1, max_y_drift=4, max_z_drift=1)
+
+    @pytest.mark.parametrize(
+        "field", ["search_x", "search_y", "search_z", "max_y_drift", "max_z_drift"]
+    )
+    @pytest.mark.parametrize("bad", [0, 5])
+    def test_out_of_range_field_raises(self, field, bad):
+        with pytest.raises(ValueError):
+            AdaptiveSearchConfig(**{field: bad})
+
+
+class TestEnvelopeSteersSearch:
+    """The five knobs are not inert: widening/narrowing changes the outcome.
+
+    Same single-voxel-mask trick as ``TestAdaptiveRoiPairPlacement`` (sub-voxel
+    radius) so reachability is clean all-or-nothing on every axis.
+    """
+
+    SHAPE = (12, 12, 12)
+    VOX = (1.0, 1.0, 1.0)
+    R = 0.5
+
+    def _good(self, v1, fa, coord, component, fa_val=1.0):
+        vec = [0.0, 0.0, 0.0]
+        vec[component] = 1.0
+        v1[coord] = vec
+        fa[coord] = fa_val
+
+    def _fields(self):
+        return np.zeros(self.SHAPE + (3,)), np.zeros(self.SHAPE)
+
+    def test_widened_x_reaches_optimum_the_narrow_window_cannot(self):
+        v1, fa = self._fields()
+        # Proj optimum sits 4 voxels away in X; assoc optimum at its centroid.
+        self._good(v1, fa, (8, 6, 6), 2, 1.0)  # proj, Z-dominant
+        self._good(v1, fa, (10, 6, 6), 1, 1.0)  # assoc, Y-dominant, no move
+        proj_c, assoc_c = (4, 6, 6), (10, 6, 6)
+
+        # search_x=3 cannot reach dx=+4 -> proj stays, no scoring pair.
+        rp_narrow, _, _, _, combined_narrow = adaptive_roi_pair_placement(
+            proj_c, assoc_c, v1, fa, self.SHAPE, self.VOX, radius_mm=self.R, search_x=3
+        )
+        assert rp_narrow == (4, 6, 6)
+        assert combined_narrow == -1.0
+
+        # search_x=4 reaches it -> proj adapts, real combined score.
+        rp_wide, _, _, _, combined_wide = adaptive_roi_pair_placement(
+            proj_c, assoc_c, v1, fa, self.SHAPE, self.VOX, radius_mm=self.R, search_x=4
+        )
+        assert rp_wide == (8, 6, 6)
+        assert combined_wide > 0
+
+    def test_tighter_z_drift_excludes_a_pair_the_looser_one_admits(self):
+        v1, fa = self._fields()
+        # Proj optimum at its centroid; the only assoc optimum is 2 voxels away
+        # in Z, so it is admissible only when max_z_drift allows a 2-voxel drift.
+        self._good(v1, fa, (4, 6, 6), 2, 1.0)  # proj at z=6
+        self._good(v1, fa, (8, 6, 8), 1, 1.0)  # assoc at z=8 -> z-drift 2
+        proj_c, assoc_c = (4, 6, 6), (8, 6, 6)
+
+        # Looser drift admits the z=8 assoc.
+        _, ra_loose, _, _, combined_loose = adaptive_roi_pair_placement(
+            proj_c,
+            assoc_c,
+            v1,
+            fa,
+            self.SHAPE,
+            self.VOX,
+            radius_mm=self.R,
+            search_z=2,
+            max_z_drift=2,
+        )
+        assert ra_loose == (8, 6, 8)
+        assert combined_loose > 0
+
+        # Tighter drift (=1) excludes it -> no valid scoring pair -> originals.
+        _, _, _, _, combined_tight = adaptive_roi_pair_placement(
+            proj_c,
+            assoc_c,
+            v1,
+            fa,
+            self.SHAPE,
+            self.VOX,
+            radius_mm=self.R,
+            search_z=2,
+            max_z_drift=1,
+        )
+        assert combined_tight == -1.0

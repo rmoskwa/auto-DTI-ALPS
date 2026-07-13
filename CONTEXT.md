@@ -308,13 +308,19 @@ is its own module, **native placement** (below) — no longer copied into each c
   direction · FA`, then a **crossing-fiber penalty** `sqrt(1.8/ratio)` applied
   *only* when mean λ2/λ3 (over λ3>0 voxels) exceeds **1.8** (Georgiopoulos et al.
   2024); no L2/L3, or no above-threshold ratio → no penalty.
-- **Joint pair-refinement** — `refine_roi_pair_placement` searches a
-  **±3 X / ±1 Y / ±2 Z** window around both template centroids and returns the
-  (proj, assoc) pair maximizing the **geometric mean** of their scores, subject to
-  the **Y/Z-drift pairing constraint** (`|Δy| ≤ 1`, `|Δz| ≤ 1`) that keeps both
-  ROIs on the same X-direction pathway. A degenerate neighbourhood (all out of
-  bounds, or every candidate scoring ≤ 0) keeps the original centroids and returns
-  score `−1`.
+- **Joint pair-refinement** — `adaptive_roi_pair_placement` searches a window
+  around both template centroids and returns the (proj, assoc) pair maximizing the
+  **geometric mean** of their scores, subject to the **Y/Z-drift pairing
+  constraint** that keeps both ROIs on the same X-direction pathway. A degenerate
+  neighbourhood (all out of bounds, or every candidate scoring ≤ 0) keeps the
+  original centroids and returns score `−1`.
+- **Adaptive search envelope** (`AdaptiveSearchConfig`, in `constants.py`) — the
+  five-integer tuning of the joint pair-refinement, all user-settable ±1–4: the
+  **search window** `search_x / search_y / search_z` (how far each ROI may
+  independently move from its template centroid) and the **drift constraint**
+  `max_y_drift / max_z_drift` (how far the association ROI may diverge from the
+  projection ROI). Default `3 / 1 / 2 / 1 / 1` (the historical hard-coded values).
+  Meaningful only for the Adaptive method; the Standard method ignores it.
 
 ## Native ROI placement (the IO shell)
 
