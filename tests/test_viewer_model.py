@@ -753,3 +753,45 @@ class TestDefaultWindow:
         model = self._model_with_fa(tmp_path, np.zeros((4, 4, 4), dtype=float))
         model.select_subject("sub-01")
         assert model.default_window() == (0.5, 1.0)
+
+
+class TestInitialSlice:
+    """The load-time slice anchors on the Left Projection ROI centroid, falling
+    back to the middle slice when that ROI is absent or empty."""
+
+    def _model_with_left_proj(self, tmp_path, left_proj: np.ndarray) -> ViewerModel:
+        shape = left_proj.shape
+        sub = tmp_path / "sub-01"
+        sub.mkdir()
+        _save_nii(sub / "sub-01_FA.nii.gz", np.zeros(shape))
+        _save_nii(sub / "sub-01_V1.nii.gz", np.zeros((*shape, 3)))
+        roi_dir = sub / roi_dir_name("rois")
+        roi_dir.mkdir()
+        for roi_name in ROI_NAMES:
+            arr = left_proj if roi_name == "left_proj" else np.zeros(shape)
+            _save_nii(roi_dir / f"sub-01_{roi_name}.nii.gz", arr)
+        _write_csv(
+            tmp_path / "alps_results.csv", _LAB_HEADER, [["sub-01", "1", "1", "1", "ok", ""]]
+        )
+        model = ViewerModel()
+        model.load_session(tmp_path)
+        model.select_subject("sub-01")
+        return model
+
+    def test_anchors_on_left_proj_centroid_per_view(self, tmp_path):
+        # left_proj occupies voxels whose mean is (x=6, y=4, z=2) in a 10^3 grid.
+        # sagittal reads axis 0 -> 6; coronal axis 1 -> 4; axial axis 2 -> 2.
+        lp = np.zeros((10, 10, 10), dtype=float)
+        lp[5, 3, 1] = 1.0
+        lp[7, 5, 3] = 1.0  # mean of {5,7}=6, {3,5}=4, {1,3}=2
+        model = self._model_with_left_proj(tmp_path, lp)
+
+        assert model.initial_slice("sagittal") == 6
+        assert model.initial_slice("coronal") == 4
+        assert model.initial_slice("axial") == 2
+
+    def test_falls_back_to_middle_when_left_proj_empty(self, tmp_path):
+        model = self._model_with_left_proj(tmp_path, np.zeros((10, 10, 10), dtype=float))
+        # No left_proj voxels -> the middle slice for each view.
+        assert model.initial_slice("axial") == model.default_slice("axial") == 5
+        assert model.initial_slice("coronal") == model.default_slice("coronal") == 5

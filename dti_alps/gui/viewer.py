@@ -569,10 +569,11 @@ class ResultsViewerPanel(QWidget):
         # subject; window settings are not carried across subjects, Decision 3).
         self.wl_center, self.wl_width = self.model.default_window()
 
-        # Reset slice to middle
+        # Start on the slice holding the Left Projection ROI centroid so the ROI
+        # is visible immediately (falls back to the middle slice when absent).
         if self.model.current_shape:
             self._update_slice_range()
-            self.current_slice = self.model.default_slice(self.current_view())
+            self.current_slice = self.model.initial_slice(self.current_view())
             self._set_slider_value(self.current_slice)
 
         # Auto-fit image to viewport, then draw.

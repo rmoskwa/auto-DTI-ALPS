@@ -481,8 +481,30 @@ class ViewerModel:
         return shape[0]  # sagittal
 
     def default_slice(self, view: str) -> int:
-        """The slice to show first in ``view`` -- the middle one."""
+        """The middle slice of ``view`` -- the fallback when there is no ROI to
+        anchor on (used on view-switch, PRD 0021 Decision 7)."""
         return self.num_slices(view) // 2
+
+    def initial_slice(self, view: str) -> int:
+        """The slice to show first on subject-load: the one containing the Left
+        Projection (``left_proj``) ROI's centroid, so the ROI is on screen at
+        once. Falls back to :meth:`default_slice` (the middle) when that ROI is
+        absent or empty for the current subject/ROI-type."""
+        centroid = self._roi_centroid_slice("left_proj", view)
+        return centroid if centroid is not None else self.default_slice(view)
+
+    def _roi_centroid_slice(self, roi_name: str, view: str) -> int | None:
+        """The view-axis slice index of ``roi_name``'s centroid, or ``None`` when
+        the ROI is not loaded or has no voxels. Clamped into the slice range."""
+        roi = self._roi_data.get(roi_name)
+        if roi is None:
+            return None
+        axis = {"sagittal": 0, "coronal": 1, "axial": 2}[view]
+        indices = np.nonzero(roi > 0)[axis]
+        if indices.size == 0:
+            return None
+        centroid = int(round(float(np.mean(indices))))
+        return max(0, min(self.num_slices(view) - 1, centroid))
 
     def default_window(self) -> tuple[float, float]:
         """The volume-derived default window ``(center, width)`` for the current
