@@ -303,7 +303,6 @@ class ResultsViewerPanel(QWidget):
     def _create_image_toggles(self, layout: QVBoxLayout):
         """Create the show-ROIs and brain-mask toggles below the image."""
         toggles = QHBoxLayout()
-        toggles.addStretch(1)
 
         # Show-ROIs toggle lives in the panel body (no menu bar); it drives the
         # same show-ROIs state the render path consumes.
@@ -318,6 +317,9 @@ class ResultsViewerPanel(QWidget):
         self.brain_mask_check.setChecked(True)
         self.brain_mask_check.toggled.connect(self._update_display)
         toggles.addWidget(self.brain_mask_check)
+
+        # Trailing stretch left-justifies the toggles.
+        toggles.addStretch(1)
 
         layout.addLayout(toggles)
 
