@@ -276,12 +276,11 @@ class ResultsViewerPanel(QWidget):
 
         # Subject list
         self.subject_tree = QTreeWidget()
-        self.subject_tree.setColumnCount(2)
-        self.subject_tree.setHeaderLabels(["Subject ID", "Status"])
+        self.subject_tree.setColumnCount(1)
+        self.subject_tree.setHeaderLabels(["Subject ID"])
         self.subject_tree.setRootIsDecorated(False)
         self.subject_tree.setSelectionMode(QTreeWidget.SingleSelection)
         self.subject_tree.setColumnWidth(0, 180)
-        self.subject_tree.setColumnWidth(1, 70)
         self.subject_tree.itemSelectionChanged.connect(self._on_subject_select)
         layout.addWidget(self.subject_tree)
 
@@ -512,8 +511,7 @@ class ResultsViewerPanel(QWidget):
         self.subject_tree.blockSignals(True)
         self.subject_tree.clear()
         for record in session.subjects:
-            status = record.status if record.status else "unknown"
-            QTreeWidgetItem(self.subject_tree, [record.subject_id, status])
+            QTreeWidgetItem(self.subject_tree, [record.subject_id])
         self.subject_tree.blockSignals(False)
 
         if not session.subjects:
