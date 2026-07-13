@@ -17,11 +17,25 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+
+      # Guard against a tag/version mismatch: the build takes its version from
+      # pyproject.toml, not the tag, so tagging v0.1.2 without bumping the
+      # version silently rebuilds the old release and PyPI rejects it with a
+      # confusing "file already exists". Fail early with an actionable message.
+      - name: Verify tag matches package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(sed -nE 's/^version = "(.*)"/\1/p' pyproject.toml | head -1)"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' does not match pyproject version '${version}'. Bump the version first (e.g. scripts/bump-version.sh) so the tag and package agree."
+            exit 1
+          fi
+          echo "Tag and package version agree: ${version}"
 
       - name: Build sdist and wheel
         run: |
@@ -33,7 +47,7 @@ jobs:
           python -m pip install --upgrade twine
           twine check dist/*
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -46,7 +60,7 @@ jobs:
     permissions:
       id-token: write # required for OIDC trusted publishing
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: dist
           path: dist/
