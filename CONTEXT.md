@@ -214,6 +214,29 @@ Owned by `processing/messages.py`.
     from its own `is_readout_valid(auto, raw)` predicate — deliberately **not**
     `resolve_readout_time` (which coerces bad manual input to a default and so would
     mis-report validity for both the auto and the unparseable-manual cases).
+  - **compute_blockers(form_state, subjects) -> list[Blocker]** — the wording side of
+    the same decision: one **Blocker** (display `text` + a semantic nav `target`) per
+    *outstanding* requirement, in nav-flow order, empty exactly when
+    `compute_readiness(...).can_run`. This is the readiness strip's **only** phrasing
+    home — the adapter renders and routes but supplies no text. The two subject
+    conditions collapse to one adaptive row (no subjects → "No subjects added"; some
+    invalid → "N subject(s) … invalid"); the synB0 row appears only in synB0 mode.
+    - **Blocker target** — a semantic page id (`NAV_DATA_INPUT="data"`,
+      `NAV_SYNB0="synb0"`, `NAV_OUTPUT_SETUP="output_setup"`), the on-disk page ids the
+      adapter already registers, so the model names *where to send the user* without
+      importing a widget or a nav method; the adapter maps each to its `_show_*` call.
+
+## The readiness strip (GUI adapter)
+
+- **Readiness strip** — the always-visible band under the Run/Cancel toolbar (outside
+  the content stack, so it survives navigation) that replaces the silently-disabled
+  Run button with a guided setup checklist. Three states: **blocked** — the
+  outstanding [[compute_blockers|Blocker]] rows as neutral amber `○` to-do items,
+  each a link that jumps to the page that fixes it; **ready** — a green
+  "✓ Ready to run N subjects" line (the Run button is now enabled); **running** — a
+  muted "▶ Running — see Console" line. Rebuilt each `_update_run_button_state` from
+  the tk-free model; the adapter owns only colour, marker, and link markup. Tone is
+  deliberately never red — a blank first launch is a checklist, not an error list.
 
 ## Science terms (brief)
 
