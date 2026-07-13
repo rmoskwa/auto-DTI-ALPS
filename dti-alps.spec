@@ -10,9 +10,9 @@ FSL) are NOT bundled -- they must be installed separately and on PATH.
 
 import glob
 
-# Ship the JHU ROI templates (repo-root templates/*.nii.gz). The test_shapes/
-# fixtures live in a subdir and are intentionally excluded.
-datas = [(path, "templates") for path in glob.glob("templates/*.nii.gz")]
+# Ship the JHU ROI templates (package data at dti_alps/templates/*.nii.gz),
+# mirroring the package layout so _templates_dir() finds them under _MEIPASS.
+datas = [(path, "dti_alps/templates") for path in glob.glob("dti_alps/templates/*.nii.gz")]
 
 a = Analysis(
     ["packaging/dti_alps_entry.py"],

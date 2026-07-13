@@ -48,6 +48,7 @@ from dti_alps.processing.b0_extraction import (
     create_brain_mask_from_dwi,
     validate_b0_exists,
 )
+from dti_alps.processing.registration import get_roi_template_paths
 from dti_alps.processing.roi_placement import create_sphere_mask, find_mask_centroid
 
 
@@ -366,13 +367,12 @@ def register_fa_to_template(
     import nibabel as nib
     import numpy as np
 
-    project_root = Path(__file__).parent.parent
-    roi_templates = {
-        "left_proj": project_root / "templates" / "JHU-labels-left_proj.nii.gz",
-        "left_assoc": project_root / "templates" / "JHU-labels-left_assoc.nii.gz",
-        "right_proj": project_root / "templates" / "JHU-labels-right_proj.nii.gz",
-        "right_assoc": project_root / "templates" / "JHU-labels-right_assoc.nii.gz",
-    }
+    # Resolve the shipped JHU ROI templates via the package helper (single
+    # source of truth for their location -- see results._templates_dir).
+    roi_templates = get_roi_template_paths()
+    if roi_templates is None:
+        print("ERROR: ROI template files not found in the package")
+        return None
 
     # Load reference image for shape and voxel size
     ref_img = nib.load(str(subject_fa))

@@ -50,6 +50,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["dti_alps*"]
 
+# Ship the JHU ROI template masks as package data so they are present after a
+# pip/pipx install. The test_shapes/ scratch dir is intentionally not matched.
+[tool.setuptools.package-data]
+dti_alps = ["templates/*.nii.gz"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
