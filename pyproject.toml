@@ -33,6 +33,9 @@ dev = [
     "pre-commit",
     "ruff",
 ]
+build = [
+    "pyinstaller",
+]
 
 [project.scripts]
 dti-alps = "dti_alps.__main__:main"

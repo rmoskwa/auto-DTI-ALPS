@@ -61,6 +61,27 @@ Installation: https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/FslInstallation
 
 ## Installation
 
+### Download (recommended)
+
+Grab the latest Linux **AppImage** from the [Releases page](https://github.com/rmoskwa/auto-DTI-ALPS/releases), make it executable, and run it — no Python install required:
+
+```bash
+chmod +x dti-alps-*-x86_64.AppImage
+./dti-alps-0.1.0-x86_64.AppImage
+```
+
+The AppImage bundles the app and its Python dependencies. It does **not** bundle
+MRtrix3 or FSL — those must still be installed and on your `PATH` (see
+[External Neuroimaging Software](#external-neuroimaging-software)).
+
+To update, download the newer AppImage and replace the old file.
+
+> **Qt runtime note:** the GUI uses Qt 6, which needs `libxcb-cursor0` on the
+> host. If the app fails to start with an `xcb` platform-plugin error, install
+> it: `sudo apt install libxcb-cursor0` (Debian/Ubuntu).
+
+### From source
+
 ```bash
 pip install -e ".[gui]"
 ```
@@ -73,4 +94,28 @@ dti-alps --viewer           # Launch Results Viewer
 dti-alps --viewer /path     # Launch viewer with specific output folder
 dti-alps --report /path     # Generate quality reports
 dti-alps --reanalyze /path --sphere 3  # Reanalyze with different ROI shapes
+```
+
+When running the AppImage, substitute `./dti-alps-*.AppImage` for `dti-alps`;
+all CLI flags are forwarded (e.g. `./dti-alps-*.AppImage --viewer /path`).
+
+## Releasing (maintainers)
+
+Releases are built automatically by the [`Release` workflow](.github/workflows/release.yml)
+when a version tag is pushed:
+
+```bash
+# 1. Bump `version` in pyproject.toml, commit, and merge to main.
+# 2. Tag and push:
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+GitHub Actions then freezes the app with PyInstaller (`dti-alps.spec`), wraps it
+into an AppImage (`packaging/build-appimage.sh`), and publishes a GitHub Release
+with the `.AppImage` attached. To build one locally instead:
+
+```bash
+pip install -e ".[gui,build]"
+packaging/build-appimage.sh          # writes dist/dti-alps-<version>-x86_64.AppImage
 ```

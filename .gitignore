@@ -16,3 +16,7 @@ architecture-review-20260619-130927.html
 
 # Real subject-data volumes — keep local, never publish (sidecars stay committable)
 fixtures/**/*.nii.gz
+
+# PyInstaller / AppImage build output
+build/
+dist/

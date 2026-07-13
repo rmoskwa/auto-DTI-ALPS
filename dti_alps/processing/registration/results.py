@@ -7,10 +7,25 @@ The registration step's result contract (`RegistrationResult`,
 None of these is FSL-specific.
 """
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..results_layout import ROI_NAMES
+
+
+def _templates_dir() -> Path:
+    """
+    Locate the shipped ``templates/`` directory in both source and frozen runs.
+
+    In a normal source checkout the templates live at the repo root, a sibling
+    of the ``dti_alps`` package (processing/registration -> dti_alps -> root).
+    In a PyInstaller bundle there is no source tree: the data files are
+    extracted under ``sys._MEIPASS`` and the spec places ``templates/`` there.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)) / "templates"
+    return Path(__file__).parent.parent.parent.parent / "templates"
 
 
 @dataclass
@@ -75,9 +90,8 @@ def get_roi_template_paths() -> dict[str, Path] | None:
         Dictionary mapping ROI names to template paths, or None if any missing.
         Keys: 'left_proj', 'left_assoc', 'right_proj', 'right_assoc'
     """
-    # Look relative to this module (processing/registration -> dti_alps -> templates)
-    module_dir = Path(__file__).parent.parent.parent.parent
-    templates_dir = module_dir / "templates"
+    # Resolve templates/ for both source checkouts and frozen (PyInstaller) runs.
+    templates_dir = _templates_dir()
 
     # Keyed by the canonical ROI-mask names; the on-disk template files follow
     # the JHU-labels-{name}.nii.gz convention.

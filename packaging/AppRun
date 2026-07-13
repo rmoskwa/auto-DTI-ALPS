@@ -1,0 +1,5 @@
+#!/bin/sh
+# AppImage entry point: launch the bundled PyInstaller executable, forwarding
+# all CLI args (so --viewer / --report / --reanalyze work from the AppImage).
+HERE="$(dirname "$(readlink -f "${0}")")"
+exec "${HERE}/usr/bin/dti-alps" "$@"

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=DTI-ALPS
+GenericName=DTI-ALPS Analysis
+Comment=Automatic DTI-ALPS ROI detection and analysis
+Exec=dti-alps
+Icon=dti-alps
+Terminal=false
+Categories=Science;MedicalSoftware;
+Keywords=DTI;ALPS;neuroimaging;MRI;diffusion;

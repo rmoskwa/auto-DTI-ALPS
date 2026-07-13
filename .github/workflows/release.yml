@@ -1,0 +1,40 @@
+name: Release
+
+# Cut a release by pushing a version tag:
+#   git tag v0.1.0 && git push origin v0.1.0
+# This builds the Linux AppImage and attaches it to a GitHub Release.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # required to create the Release and upload assets
+
+jobs:
+  appimage:
+    # Build on the oldest supported runner for the widest glibc compatibility:
+    # an AppImage built against newer glibc will not start on older distros.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags, so `git describe` in the build script works
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install app + build/gui extras
+        run: pip install -e ".[gui,build]"
+
+      - name: Build AppImage
+        run: packaging/build-appimage.sh "${GITHUB_REF_NAME}"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.AppImage
+          generate_release_notes: true
+          fail_on_unmatched_files: true
