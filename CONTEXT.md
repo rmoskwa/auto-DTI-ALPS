@@ -192,6 +192,17 @@ Owned by `processing/messages.py`.
     grouped header** (a band per metric group spanning its four ROI columns) — the
     on-disk twin of the CLI CSV's two header rows. The Radial-Asymmetry group is empty
     for a LAB-only run (no L2/L3), exactly as the CLI CSV leaves it.
+    - **Quality warnings** — each row also carries a parallel `warnings` tuple: a cell
+      is flagged when its metric lands outside a **quality threshold**, so ROIs needing
+      manual inspection stand out. The direction differs per metric — **directional
+      alignment** (< 0.80) and **FA** (< 0.25) warn when *low*; **angular dispersion**
+      (> 10°) and **radial asymmetry** (> 1.8, PAS/Both only, `None` never warns) warn
+      when *high*. The thresholds are engine constants (`processing/constants.py`,
+      `QUALITY_WARN_*`; the radial ceiling reuses `calculate_roi_quality`'s Georgiopoulos
+      2024 value), so the app and any future CLI flag the same cells; the adapter owns
+      only the highlight colour (offending cell soft-red, a flagged subject amber via
+      `row.has_warning`). Computed from the raw metric floats in `build_quality_report_view`,
+      never re-parsed from the formatted strings.
   - **Report worker** (`processing/report_worker.py`) — a `threading.Thread` in the
     engine (Qt-free) that runs the subset compute and pushes its **own** small typed
     message set (report *progress* / *complete* / *error* / *cancelled*) onto a

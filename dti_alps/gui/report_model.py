@@ -25,9 +25,16 @@ builds the view from them, keeping the ``gui -> processing`` arrow one-way.
 """
 
 from dataclasses import dataclass
+from operator import gt, lt
 from pathlib import Path
 
 from ..processing import report
+from ..processing.constants import (
+    QUALITY_WARN_ANGULAR_DISPERSION_MAX,
+    QUALITY_WARN_DIRECTIONAL_ALIGNMENT_MIN,
+    QUALITY_WARN_FA_MIN,
+    QUALITY_WARN_RADIAL_ASYMMETRY_MAX,
+)
 from ..processing.report import SubjectReportData, write_report_csv
 from .viewer_model import roi_display_name
 
@@ -46,24 +53,58 @@ _METRIC_GROUPS: tuple[tuple[str, str], ...] = (
 # doubles as the getattr target for its subject row.
 _ROI_COLUMNS: tuple[str, ...] = ("l_proj", "l_assoc", "r_proj", "r_assoc")
 
+# Per-metric warning rule: ``(comparison, threshold)`` keyed by ``ROIMetrics``
+# attribute. ``lt``/``gt`` encode the direction -- alignment and FA warn when
+# they fall below a floor, dispersion and radial asymmetry when they rise above a
+# ceiling. The thresholds are the engine's (``processing/constants.py``), so the
+# app and any future CLI flag the same cells. A ``None`` value (e.g. radial
+# asymmetry under a LAB-only run) never warns.
+_WARN_RULES = {
+    "directional_alignment": (lt, QUALITY_WARN_DIRECTIONAL_ALIGNMENT_MIN),
+    "angular_dispersion": (gt, QUALITY_WARN_ANGULAR_DISPERSION_MAX),
+    "fa_mean": (lt, QUALITY_WARN_FA_MIN),
+    "radial_asymmetry": (gt, QUALITY_WARN_RADIAL_ASYMMETRY_MAX),
+}
+
 
 def _fmt(value: float | None) -> str:
     """Format a metric cell exactly as ``write_report_csv`` does: ``.6f`` or blank."""
     return f"{value:.6f}" if value is not None else ""
 
 
+def _is_warning(attr: str, value: float | None) -> bool:
+    """Whether ``value`` for metric ``attr`` is outside its quality threshold.
+
+    ``None`` (a metric that was not computed) never warns, so a LAB-only run's
+    blank Radial-Asymmetry cells are never flagged.
+    """
+    if value is None:
+        return False
+    compare, threshold = _WARN_RULES[attr]
+    return compare(value, threshold)
+
+
 @dataclass(frozen=True)
 class QualityReportRow:
-    """One subject's row: its id and the flattened, pre-formatted cells.
+    """One subject's row: its id, the flattened cells, and per-cell warning flags.
 
     ``cells`` is group-major, ROI-minor: for four groups over four ROI columns it
     holds sixteen strings, ``cells[g * 4 + r]`` being group ``g`` / ROI ``r``.
     Under a LAB-only run the Radial-Asymmetry group's four cells are blank
-    strings, exactly as the CLI CSV leaves them.
+    strings, exactly as the CLI CSV leaves them. ``warnings`` is the parallel
+    tuple of booleans: ``warnings[i]`` is ``True`` when ``cells[i]`` is outside
+    its quality threshold and should be highlighted for manual inspection.
+    ``has_warning`` is ``True`` when any cell warns (the adapter highlights the
+    subject too).
     """
 
     subject_id: str
     cells: tuple[str, ...]
+    warnings: tuple[bool, ...]
+
+    @property
+    def has_warning(self) -> bool:
+        return any(self.warnings)
 
 
 @dataclass(frozen=True)
@@ -124,11 +165,20 @@ def build_quality_report_view(
     rows: list[QualityReportRow] = []
     for data in subjects_data:
         cells: list[str] = []
+        warnings: list[bool] = []
         for _label, attr in _METRIC_GROUPS:
             for roi_key in _ROI_COLUMNS:
                 metrics = getattr(data, roi_key)
-                cells.append(_fmt(getattr(metrics, attr)))
-        rows.append(QualityReportRow(subject_id=data.subject_id, cells=tuple(cells)))
+                value = getattr(metrics, attr)
+                cells.append(_fmt(value))
+                warnings.append(_is_warning(attr, value))
+        rows.append(
+            QualityReportRow(
+                subject_id=data.subject_id,
+                cells=tuple(cells),
+                warnings=tuple(warnings),
+            )
+        )
 
     return QualityReportView(
         shape_token=shape_token,

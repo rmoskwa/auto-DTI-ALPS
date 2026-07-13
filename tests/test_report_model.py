@@ -25,6 +25,7 @@ from dti_alps.gui.report_model import (
     build_quality_report_view,
 )
 from dti_alps.processing import report
+from dti_alps.processing.report import ROIMetrics, SubjectReportData
 from dti_alps.processing.results_layout import roi_dir_name
 
 _ROI_NAMES = ("left_proj", "left_assoc", "right_proj", "right_assoc")
@@ -88,6 +89,14 @@ def _cell(view: QualityReportView, subject_id: str, group: str, roi: str) -> str
     r = view.roi_columns.index(roi)
     row = next(row for row in view.rows if row.subject_id == subject_id)
     return row.cells[g * len(view.roi_columns) + r]
+
+
+def _warn(view: QualityReportView, subject_id: str, group: str, roi: str) -> bool:
+    """The warning flag for one (subject, metric group, ROI column)."""
+    g = view.metric_groups.index(group)
+    r = view.roi_columns.index(roi)
+    row = next(row for row in view.rows if row.subject_id == subject_id)
+    return row.warnings[g * len(view.roi_columns) + r]
 
 
 # --------------------------------------------------------------------------- #
@@ -244,6 +253,84 @@ class TestGenerate:
         model.load_folder(tmp_path)
         model.generate("rois", ["sub-01"])
         assert list(tmp_path.glob("quality_report_*.csv")) == []
+
+
+# --------------------------------------------------------------------------- #
+# Quality warnings: per-cell threshold flags (direction differs per metric)
+# --------------------------------------------------------------------------- #
+class TestWarnings:
+    def _good(self):
+        """An ROI whose every metric is comfortably inside its threshold."""
+        return ROIMetrics(
+            directional_alignment=0.90,
+            angular_dispersion=5.0,
+            fa_mean=0.50,
+            radial_asymmetry=1.2,
+        )
+
+    def _subject(self, sid, **overrides):
+        rois = {key: self._good() for key in _ROI_COLUMNS}
+        rois.update(overrides)
+        return SubjectReportData(subject_id=sid, **rois)
+
+    def test_all_good_has_no_warnings(self):
+        view = build_quality_report_view("rois", [self._subject("s")])
+        assert view.rows[0].has_warning is False
+        assert not any(view.rows[0].warnings)
+
+    def test_directional_alignment_warns_below_080(self):
+        below = ROIMetrics(directional_alignment=0.79, angular_dispersion=5.0, fa_mean=0.5)
+        at = ROIMetrics(directional_alignment=0.80, angular_dispersion=5.0, fa_mean=0.5)
+        view = build_quality_report_view("rois", [self._subject("s", l_assoc=below, r_proj=at)])
+        assert _warn(view, "s", "Directional Alignment (V1)", "l_assoc") is True
+        # Exactly at the floor is not a warning (strict <).
+        assert _warn(view, "s", "Directional Alignment (V1)", "r_proj") is False
+
+    def test_angular_dispersion_warns_above_10(self):
+        above = ROIMetrics(directional_alignment=0.9, angular_dispersion=10.1, fa_mean=0.5)
+        at = ROIMetrics(directional_alignment=0.9, angular_dispersion=10.0, fa_mean=0.5)
+        view = build_quality_report_view("rois", [self._subject("s", l_proj=above, r_assoc=at)])
+        assert _warn(view, "s", "Angular Dispersion (V1)", "l_proj") is True
+        assert _warn(view, "s", "Angular Dispersion (V1)", "r_assoc") is False
+
+    def test_fa_warns_below_025(self):
+        low = ROIMetrics(directional_alignment=0.9, angular_dispersion=5.0, fa_mean=0.24)
+        view = build_quality_report_view("rois", [self._subject("s", l_proj=low)])
+        assert _warn(view, "s", "Fractional Anisotropy", "l_proj") is True
+        assert _warn(view, "s", "Fractional Anisotropy", "l_assoc") is False
+
+    def test_radial_asymmetry_warns_above_18_and_none_never_warns(self):
+        high = ROIMetrics(
+            directional_alignment=0.9, angular_dispersion=5.0, fa_mean=0.5, radial_asymmetry=1.9
+        )
+        lab_only = ROIMetrics(
+            directional_alignment=0.9, angular_dispersion=5.0, fa_mean=0.5, radial_asymmetry=None
+        )
+        view = build_quality_report_view("rois", [self._subject("s", l_proj=high, r_proj=lab_only)])
+        assert _warn(view, "s", "Radial Asymmetry (λ2/λ3)", "l_proj") is True
+        # A LAB-only (None) radial cell is never flagged.
+        assert _warn(view, "s", "Radial Asymmetry (λ2/λ3)", "r_proj") is False
+
+    def test_has_warning_true_when_any_cell_warns(self):
+        bad = ROIMetrics(directional_alignment=0.5, angular_dispersion=5.0, fa_mean=0.5)
+        view = build_quality_report_view("rois", [self._subject("s", l_assoc=bad)])
+        assert view.rows[0].has_warning is True
+
+    def test_warnings_flow_through_generate(self, tmp_path):
+        # End-to-end from the compute leaf: the known fixture (V1=(0,0.6,0.8),
+        # FA=0.5, λ2/λ3=2.0) warns on assoc alignment (0.6<0.80) and on radial
+        # (2.0>1.8), but not on proj alignment (0.8 is the boundary), FA, or
+        # dispersion.
+        _make_subject(tmp_path, "sub-01", ["rois"], with_l2l3=True)
+        model = QualityReportModel()
+        model.load_folder(tmp_path)
+        view = model.generate("rois", ["sub-01"])
+
+        assert _warn(view, "sub-01", "Directional Alignment (V1)", "l_proj") is False
+        assert _warn(view, "sub-01", "Directional Alignment (V1)", "l_assoc") is True
+        assert _warn(view, "sub-01", "Radial Asymmetry (λ2/λ3)", "l_proj") is True
+        assert _warn(view, "sub-01", "Fractional Anisotropy", "l_proj") is False
+        assert _warn(view, "sub-01", "Angular Dispersion (V1)", "l_proj") is False
 
 
 # --------------------------------------------------------------------------- #

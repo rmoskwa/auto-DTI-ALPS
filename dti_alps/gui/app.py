@@ -125,6 +125,15 @@ _ROW_TAG_COLORS = {
     "failed": config.COLORS["error"],
 }
 
+# Quality-report warning highlight (PRD 0022 follow-up). An ROI metric outside its
+# quality threshold gets a soft-red cell with bold dark-red text; a subject with
+# any warning gets an amber id cell, so rows needing manual inspection stand out
+# at a glance. The thresholds/direction live in the engine (report_model); the
+# adapter owns only the colour.
+_QR_WARN_CELL_BG = "#ffd6d6"
+_QR_WARN_CELL_FG = "#8a1f1f"
+_QR_WARN_SUBJECT_BG = "#ffe9c7"
+
 
 def _qt_name_filter(filetypes: list | None) -> str:
     """Translate Tk ``filetypes`` tuples to a Qt name-filter string.
@@ -1532,7 +1541,8 @@ class DTIALPSApplication(QMainWindow):
         info = QLabel(
             "Review ROI placement quality metrics for a processed output folder. "
             "Pick an ROI shape, choose the subjects, and Generate — this reads the "
-            "results and writes nothing until you Save."
+            "results and writes nothing until you Save. Cells outside the quality "
+            "thresholds are highlighted for manual inspection."
         )
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -1848,13 +1858,28 @@ class DTIALPSApplication(QMainWindow):
                 table.setItem(1, first_col + r, sub)
                 table.setColumnWidth(first_col + r, 85)
 
-        # Data rows: subject id + the flattened formatted cells.
+        # Data rows: subject id + the flattened formatted cells, with the
+        # model's per-cell warning flags painted for at-a-glance QC.
+        from PySide6.QtGui import QBrush, QColor
+
+        warn_cell_bg = QBrush(QColor(_QR_WARN_CELL_BG))
+        warn_cell_fg = QBrush(QColor(_QR_WARN_CELL_FG))
+        warn_subject_bg = QBrush(QColor(_QR_WARN_SUBJECT_BG))
         for i, row in enumerate(view.rows):
             table_row = 2 + i
-            table.setItem(table_row, 0, QTableWidgetItem(row.subject_id))
+            sid_item = QTableWidgetItem(row.subject_id)
+            if row.has_warning:
+                sid_item.setBackground(warn_subject_bg)
+            table.setItem(table_row, 0, sid_item)
             for k, cell in enumerate(row.cells):
                 item = QTableWidgetItem(cell)
                 item.setTextAlignment(Qt.AlignCenter)
+                if row.warnings[k]:
+                    item.setBackground(warn_cell_bg)
+                    item.setForeground(warn_cell_fg)
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
                 table.setItem(table_row, 1 + k, item)
 
     def _qr_save_csv(self):
