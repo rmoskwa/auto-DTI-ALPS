@@ -42,10 +42,28 @@ Quality Report Generation:
 import argparse
 import sys
 
-from .processing.constants import ROI_SPHERE_RADIUS_RANGE
+from .processing.constants import ADAPTIVE_SEARCH_RANGE, ROI_SPHERE_RADIUS_RANGE
 
 # Sphere radius validation bounds, read from the engine's single source of truth.
 SPHERE_RADIUS_MIN, SPHERE_RADIUS_MAX = ROI_SPHERE_RADIUS_RANGE
+
+# Adaptive search envelope bounds, from the same single source of truth the GUI
+# and the AdaptiveSearchConfig guard use, so the three cannot drift apart.
+SEARCH_MIN, SEARCH_MAX = ADAPTIVE_SEARCH_RANGE
+
+
+def _validate_search_value(value: str) -> int:
+    """Validate an adaptive-search flag is an int within the allowed range."""
+    try:
+        parsed = int(value)
+    except ValueError as err:
+        raise argparse.ArgumentTypeError(f"invalid int value: '{value}'") from err
+
+    if parsed < SEARCH_MIN or parsed > SEARCH_MAX:
+        raise argparse.ArgumentTypeError(
+            f"must be between {SEARCH_MIN} and {SEARCH_MAX}, got {parsed}"
+        )
+    return parsed
 
 
 def _validate_sphere_radii(value: str) -> list[float]:
@@ -69,7 +87,9 @@ def _validate_sphere_radii(value: str) -> list[float]:
 
 def _parse_reanalysis_args() -> argparse.Namespace:
     """Parse command line arguments for reanalysis mode."""
-    from .processing.constants import FA_THRESHOLD
+    from .processing.constants import FA_THRESHOLD, AdaptiveSearchConfig
+
+    search_defaults = AdaptiveSearchConfig()
 
     parser = argparse.ArgumentParser(
         description="DTI-ALPS ROI Reanalysis",
@@ -134,6 +154,46 @@ Examples:
         help="Enable adaptive ROI placement based on fiber orientation",
     )
 
+    # Adaptive search envelope. Each is validated to the shared 1-4 range and
+    # defaults to the historical value; all are inert without --adaptive
+    # (Standard placement runs no search).
+    search_help_suffix = f"(±voxels, {SEARCH_MIN}-{SEARCH_MAX}, only with --adaptive)"
+    parser.add_argument(
+        "--search-x",
+        type=_validate_search_value,
+        default=search_defaults.search_x,
+        metavar="N",
+        help=f"Adaptive search window in X {search_help_suffix}",
+    )
+    parser.add_argument(
+        "--search-y",
+        type=_validate_search_value,
+        default=search_defaults.search_y,
+        metavar="N",
+        help=f"Adaptive search window in Y {search_help_suffix}",
+    )
+    parser.add_argument(
+        "--search-z",
+        type=_validate_search_value,
+        default=search_defaults.search_z,
+        metavar="N",
+        help=f"Adaptive search window in Z {search_help_suffix}",
+    )
+    parser.add_argument(
+        "--max-y-drift",
+        type=_validate_search_value,
+        default=search_defaults.max_y_drift,
+        metavar="N",
+        help=f"Max association-ROI Y drift from projection ROI {search_help_suffix}",
+    )
+    parser.add_argument(
+        "--max-z-drift",
+        type=_validate_search_value,
+        default=search_defaults.max_z_drift,
+        metavar="N",
+        help=f"Max association-ROI Z drift from projection ROI {search_help_suffix}",
+    )
+
     parser.add_argument(
         "--method",
         choices=["ALPS-LAB", "ALPS-PAS", "Both"],
@@ -156,7 +216,19 @@ def _run_reanalysis() -> None:
     """Run ROI reanalysis from command line arguments."""
     args = _parse_reanalysis_args()
 
+    from .processing.constants import AdaptiveSearchConfig
     from .processing.reanalysis import ROIShape, run_reanalysis
+
+    # Assemble the envelope from the (validated, defaulted) flags. The 1-4 guard
+    # already fired during parse; this construction cannot raise. Inert unless
+    # --adaptive is set.
+    search = AdaptiveSearchConfig(
+        search_x=args.search_x,
+        search_y=args.search_y,
+        search_z=args.search_z,
+        max_y_drift=args.max_y_drift,
+        max_z_drift=args.max_z_drift,
+    )
 
     # Build list of ROI shapes from all specified flags
     roi_shapes: list[ROIShape] = []
@@ -187,6 +259,7 @@ def _run_reanalysis() -> None:
             enable_adaptive=args.adaptive,
             alps_method=args.method,
             fa_threshold=args.fa_threshold,
+            search=search,
         )
 
 

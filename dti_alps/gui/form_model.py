@@ -26,6 +26,7 @@ from ..processing.constants import (
     DEFAULT_READOUT_TIME,
     DEFAULT_RPE_SCHEME,
     FA_THRESHOLD,
+    AdaptiveSearchConfig,
 )
 from ..processing.discovery import SubjectFiles
 from ..processing.state import BatchConfig, BatchState, OutputConfig
@@ -119,6 +120,15 @@ class FormState:
     fa_threshold: float = FA_THRESHOLD
     alps_method: str = "Both"
     adaptive_roi_placement: str = "Both"
+    # Adaptive search envelope, as five raw widget scalars. Assembled into an
+    # AdaptiveSearchConfig (where the 1-4 guard fires) in build_batch_state.
+    # Defaults track the AdaptiveSearchConfig defaults so an untouched form
+    # reproduces today's placement.
+    search_x: int = AdaptiveSearchConfig().search_x
+    search_y: int = AdaptiveSearchConfig().search_y
+    search_z: int = AdaptiveSearchConfig().search_z
+    max_y_drift: int = AdaptiveSearchConfig().max_y_drift
+    max_z_drift: int = AdaptiveSearchConfig().max_z_drift
     output_dir: str = ""
     staging_enabled: bool = False
     staging_dir_raw: str = ""
@@ -245,6 +255,13 @@ def build_batch_state(form_state: FormState, subjects: list[SubjectFiles]) -> Ba
         fa_threshold=form_state.fa_threshold,
         alps_method=form_state.alps_method,
         adaptive_roi_placement=form_state.adaptive_roi_placement,
+        adaptive_search=AdaptiveSearchConfig(
+            search_x=form_state.search_x,
+            search_y=form_state.search_y,
+            search_z=form_state.search_z,
+            max_y_drift=form_state.max_y_drift,
+            max_z_drift=form_state.max_z_drift,
+        ),
         output_dir=form_state.output_dir,
         output_config=collect_output_config(form_state.output_flags),
         staging_enabled=form_state.staging_enabled,

@@ -15,6 +15,7 @@ from .constants import (
     DEFAULT_READOUT_TIME,
     DEFAULT_RPE_SCHEME,
     FA_THRESHOLD,
+    AdaptiveSearchConfig,
 )
 
 if TYPE_CHECKING:
@@ -149,6 +150,8 @@ class PipelineState:
     alps_method: str = "Both"
     # ROI placement mode: "Adaptive", "Standard", or "Both"
     adaptive_roi_placement: str = "Adaptive"
+    # Adaptive search envelope (per-run tuning of the joint pair search)
+    adaptive_search: AdaptiveSearchConfig = field(default_factory=AdaptiveSearchConfig)
 
     # Output settings
     output_dir: str = ""
@@ -282,6 +285,8 @@ class BatchConfig:
     fa_threshold: float = FA_THRESHOLD  # FA threshold for filtering CSF voxels
     alps_method: str = "Both"  # ALPS calculation method (ALPS-LAB, ALPS-PAS, or Both)
     adaptive_roi_placement: str = "Adaptive"  # "Adaptive", "Standard", or "Both"
+    # Adaptive search envelope (per-run tuning of the joint pair search)
+    adaptive_search: AdaptiveSearchConfig = field(default_factory=AdaptiveSearchConfig)
 
     # Output settings
     output_dir: str = ""

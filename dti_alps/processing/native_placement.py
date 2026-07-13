@@ -25,6 +25,7 @@ import nibabel as nib
 import numpy as np
 
 from . import results_layout
+from .constants import AdaptiveSearchConfig
 from .roi_placement import (
     adaptive_roi_pair_placement,
     calculate_roi_quality,
@@ -59,6 +60,7 @@ def place_rois_in_native(
     shape_type: str,
     sphere_radius: float | None,
     adaptive: bool,
+    search: AdaptiveSearchConfig | None = None,
     v1_path: str | None = None,
     l2_path: str | None = None,
     l3_path: str | None = None,
@@ -93,6 +95,10 @@ def place_rois_in_native(
         Sphere radius in mm (only for the sphere shape).
     adaptive : bool
         Whether to jointly adapt each projection/association pair.
+    search : AdaptiveSearchConfig or None
+        The five-integer search envelope for the joint pair search. ``None``
+        builds a fresh default (``3 / 1 / 2 / 1 / 1``). Ignored when
+        ``adaptive`` is False (Standard placement runs no search).
     v1_path, l2_path, l3_path : str or None
         Eigenvector / eigenvalue paths, loaded only when the shape or adaptive placement
         needs them.
@@ -110,6 +116,10 @@ def place_rois_in_native(
     ROIPlacementError
         On a failed template transform or a transformed ROI with no voxels.
     """
+    # The search envelope is only consulted for adaptive placement; default it
+    # here so callers that never adapt need not build one.
+    search = search or AdaptiveSearchConfig()
+
     # Load reference image for shape, affine/header, FA data, and voxel size.
     ref_img = nib.load(fa_path)
     ref_shape = ref_img.shape[:3]
@@ -128,8 +138,14 @@ def place_rois_in_native(
     needs_v1_data = adaptive or shape_type == "squarev4"
     if needs_v1_data:
         if adaptive:
-            log("  Adaptive ROI placement enabled (±3 X, ±1 Y, ±2 Z voxels)")
-            log("  Association ROIs constrained to ±1 Y, ±1 Z voxels from projection ROI")
+            log(
+                f"  Adaptive ROI placement enabled "
+                f"(±{search.search_x} X, ±{search.search_y} Y, ±{search.search_z} Z voxels)"
+            )
+            log(
+                f"  Association ROIs constrained to ±{search.max_y_drift} Y, "
+                f"±{search.max_z_drift} Z voxels from projection ROI"
+            )
         if shape_type == "squarev4":
             log("  Square 2x2: V1-optimized configuration selection enabled")
         # Load V1 data for fiber orientation analysis
@@ -238,11 +254,11 @@ def place_rois_in_native(
                 ref_shape,
                 voxel_size,
                 radius_mm=sphere_radius or 3.0,
-                search_x=3,
-                search_y=1,
-                search_z=2,
-                max_y_drift=1,
-                max_z_drift=1,
+                search_x=search.search_x,
+                search_y=search.search_y,
+                search_z=search.search_z,
+                max_y_drift=search.max_y_drift,
+                max_z_drift=search.max_z_drift,
                 shape_type=shape_type,
                 l2_data=l2_data,
                 l3_data=l3_data,

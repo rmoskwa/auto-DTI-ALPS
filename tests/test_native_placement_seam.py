@@ -21,6 +21,8 @@ import nibabel as nib
 import numpy as np
 import pytest
 
+from dti_alps.processing import native_placement
+from dti_alps.processing.constants import AdaptiveSearchConfig
 from dti_alps.processing.native_placement import ROIPlacementError, place_rois_in_native
 from tests.fakes import FakeToolRunner
 
@@ -96,6 +98,73 @@ def test_place_rois_full_body_uses_cache_and_writes_masks(tmp_path):
         assert Path(path).exists()
     # Cache-if-exists means applywarp never crossed the seam.
     assert not any(c and c[0].endswith("applywarp") for c in fake.calls)
+
+
+# --- Envelope reaches the pure search leaf ----------------------------------
+
+
+def _seed_cache(kwargs):
+    """Pre-seed the four transformed templates so applywarp is skipped."""
+    for name in ROI_NAMES:
+        nib.save(
+            nib.Nifti1Image(_blob(), np.eye(4)),
+            str(kwargs["reg_dir"] / f"sub-01_{name}_transformed.nii.gz"),
+        )
+
+
+def test_custom_envelope_reaches_pair_placement(tmp_path, monkeypatch):
+    kwargs = _seed_common(tmp_path)
+    _seed_cache(kwargs)
+
+    captured: list[dict] = []
+
+    def spy(*args, **kw):
+        captured.append(kw)
+        # Return a valid 5-tuple so the body proceeds to mask creation.
+        return args[0], args[1], 1.0, 1.0, 1.0
+
+    monkeypatch.setattr(native_placement, "adaptive_roi_pair_placement", spy)
+
+    envelope = AdaptiveSearchConfig(
+        search_x=4, search_y=2, search_z=3, max_y_drift=2, max_z_drift=4
+    )
+    place_rois_in_native(
+        runner=FakeToolRunner(), applywarp_cmd=APPLYWARP, adaptive=True, search=envelope, **kwargs
+    )
+
+    # One call per side (left, right); every call carries the custom envelope.
+    assert captured, "expected the adaptive pair search to run"
+    for kw in captured:
+        assert kw["search_x"] == 4
+        assert kw["search_y"] == 2
+        assert kw["search_z"] == 3
+        assert kw["max_y_drift"] == 2
+        assert kw["max_z_drift"] == 4
+
+
+def test_search_defaults_to_historical_envelope_when_omitted(tmp_path, monkeypatch):
+    kwargs = _seed_common(tmp_path)
+    _seed_cache(kwargs)
+
+    captured: list[dict] = []
+
+    def spy(*args, **kw):
+        captured.append(kw)
+        return args[0], args[1], 1.0, 1.0, 1.0
+
+    monkeypatch.setattr(native_placement, "adaptive_roi_pair_placement", spy)
+
+    # No `search=` -> the shell builds a fresh default (3 / 1 / 2 / 1 / 1).
+    place_rois_in_native(runner=FakeToolRunner(), applywarp_cmd=APPLYWARP, adaptive=True, **kwargs)
+
+    default = AdaptiveSearchConfig()
+    assert captured
+    kw = captured[0]
+    assert kw["search_x"] == default.search_x
+    assert kw["search_y"] == default.search_y
+    assert kw["search_z"] == default.search_z
+    assert kw["max_y_drift"] == default.max_y_drift
+    assert kw["max_z_drift"] == default.max_z_drift
 
 
 # --- Seam path: applywarp argv + failure mapping ----------------------------
