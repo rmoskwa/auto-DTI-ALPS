@@ -292,6 +292,13 @@ def build_tensor2metric_alps_pas_cmds(state: "PipelineState") -> list[list[str]]
     rather than raw tensor diagonal components (Dxx, Dyy, Dzz). L1 is also extracted
     for completeness.
 
+    ``tensor2metric``'s ``-num`` selects the eigenvalue/eigenvector index for every
+    output flag in the same invocation, so the eigenvalue and eigenvector that share
+    an index are emitted from one command instead of two. This collapses the former
+    five invocations (each re-reading the tensor) into three -- one tensor read per
+    index -- while producing byte-identical output files at the same paths. L1 keeps
+    its own command because no L1 eigenvector is needed here.
+
     Parameters
     ----------
     state : PipelineState
@@ -300,19 +307,17 @@ def build_tensor2metric_alps_pas_cmds(state: "PipelineState") -> list[list[str]]
     Returns
     -------
     list of list of str
-        List of commands to execute (L1, L2, L3, V2, V3 extraction)
+        List of commands to execute (L1; L2+V2; L3+V3).
     """
     return [
-        # Extract first eigenvalue (L1)
+        # First eigenvalue (L1) -- no matching eigenvector needed.
         ["tensor2metric", state.tensor_path, "-value", state.l1_path, "-num", "1"],
-        # Extract second eigenvalue (L2)
-        ["tensor2metric", state.tensor_path, "-value", state.l2_path, "-num", "2"],
-        # Extract third eigenvalue (L3)
-        ["tensor2metric", state.tensor_path, "-value", state.l3_path, "-num", "3"],
-        # Extract second eigenvector (V2) without modulation
+        # Second eigenvalue (L2) and eigenvector (V2, unmodulated) share -num 2.
         [
             "tensor2metric",
             state.tensor_path,
+            "-value",
+            state.l2_path,
             "-vector",
             state.v2_path,
             "-num",
@@ -320,10 +325,12 @@ def build_tensor2metric_alps_pas_cmds(state: "PipelineState") -> list[list[str]]
             "-modulate",
             "none",
         ],
-        # Extract third eigenvector (V3) without modulation
+        # Third eigenvalue (L3) and eigenvector (V3, unmodulated) share -num 3.
         [
             "tensor2metric",
             state.tensor_path,
+            "-value",
+            state.l3_path,
             "-vector",
             state.v3_path,
             "-num",

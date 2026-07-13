@@ -11,7 +11,7 @@ ALPS formula reads:
 - quality scoring -- calculate_roi_quality (fiber purity, direction strength,
   FA, and the lambda2/lambda3 > 1.8 crossing-fiber penalty, Georgiopoulos et
   al. 2024);
-- placement search -- find_mask_centroid and the joint refine_roi_pair_placement
+- placement search -- find_mask_centroid and the joint adaptive_roi_pair_placement
   that maximizes paired fiber purity within a Y/Z-drift constraint.
 
 The functions are pure (arrays in -> masks/tuples out); the IO shells that load
@@ -329,7 +329,7 @@ def calculate_roi_quality(
     return purity, mean_direction_strength, mean_fa, combined_score
 
 
-def refine_roi_pair_placement(
+def adaptive_roi_pair_placement(
     proj_centroid: tuple[int, int, int],
     assoc_centroid: tuple[int, int, int],
     v1_data: np.ndarray,
@@ -347,7 +347,7 @@ def refine_roi_pair_placement(
     l3_data: np.ndarray | None = None,
 ) -> tuple[tuple[int, int, int], tuple[int, int, int], float, float, float]:
     """
-    Jointly refine projection and association ROI placement as a pair.
+    Jointly adapt projection and association ROI placement as a pair.
 
     Instead of optimizing projection ROI first and then constraining association ROI
     to it, this function searches all valid (proj, assoc) pairs simultaneously and

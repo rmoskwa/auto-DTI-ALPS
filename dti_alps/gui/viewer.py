@@ -11,21 +11,32 @@ zoom, and image placement; the session logic, the ALPS/CSV parsing, and the DEC
 rendering math live in the model and the engine leaf, reused here
 byte-for-byte from the Tkinter viewer.
 
-The one deliberate behavior change from the Tk viewer: the image
-pane is a ``QGraphicsView`` that shows real scrollbars when a slice is zoomed
-past the viewport, instead of silently clipping and centering it. Everything
-else mirrors the Tk viewer's phrasing, layout, and control semantics. The mouse
-wheel still changes the *slice* (not the zoom), via :class:`_ImageView`.
+The viewer content is :class:`ResultsViewerPanel`, a host-agnostic ``QWidget``
+shared by two hosts: the standalone :class:`ResultsViewer` window wraps one as
+its central widget, and the main app embeds one as a resident page. All controls
+(load, view, slice, zoom, show-ROIs) live in the panel body — there is no menu
+bar — so both hosts get every capability from the one implementation.
+
+The image pane is a ``QGraphicsView`` (:class:`_ImageView`) with the standard
+PACS mouse conventions (PRD 0021): left-drag = window/level, right-drag = zoom,
+middle-drag = pan, and the wheel still changes the *slice*. Zoom is driven by a
+geometric 10%-800% slider and right-drag sharing one center-anchored scalar; a
+"Reset view" button re-fits the zoom and restores the default window. The
+``AsNeeded`` scrollbars remain as a pan fallback for users without a middle
+button. The window/level pixel math lives in the pure ``render_dec_slice``; this
+adapter owns only the transient cursor state (slice, zoom, window/level).
 """
 
+import math
 import sys
 
 import numpy as np
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QImage, QPixmap, QTransform
+from PySide6.QtGui import QColor, QImage, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QGraphicsPixmapItem,
@@ -49,6 +60,38 @@ from PySide6.QtWidgets import (
 from .user_config import UserConfig, get_user_config
 from .viewer_model import LoadError, ViewerModel
 
+# Geometric zoom band (Decision 5): the slider and right-drag drive one
+# center-anchored zoom scalar spanning 10%-800%, mapped so equal slider steps
+# are equal zoom *ratios*. Fit values are clamped into this band.
+_ZOOM_MIN = 0.10
+_ZOOM_MAX = 8.0
+_ZOOM_SLIDER_MAX = 1000  # integer slider resolution over the geometric span
+
+# Mouse drag sensitivities (Decision 1/8). Window/level is in abstract FA units
+# (FA is bounded ~[0, 1]); zoom drag is geometric (each pixel multiplies zoom by
+# a constant ratio). Tuned by manual smoke.
+_WL_LEVEL_PER_PIXEL = 0.004  # vertical left-drag -> window center (brightness)
+_WL_WIDTH_PER_PIXEL = 0.004  # horizontal left-drag -> window width (contrast)
+_WL_MIN_WIDTH = 1e-3  # adapter clamp so a drag never reaches a zero-width window
+_ZOOM_DRAG_PER_PIXEL = 0.01  # vertical right-drag -> geometric zoom exponent
+
+
+def _clamp_zoom(zoom: float) -> float:
+    """Clamp a zoom scalar into the 10%-800% band."""
+    return min(_ZOOM_MAX, max(_ZOOM_MIN, zoom))
+
+
+def _zoom_to_slider_pos(zoom: float) -> int:
+    """Map a zoom scalar to its integer slider position (geometric)."""
+    frac = math.log(_clamp_zoom(zoom) / _ZOOM_MIN) / math.log(_ZOOM_MAX / _ZOOM_MIN)
+    return int(round(frac * _ZOOM_SLIDER_MAX))
+
+
+def _slider_pos_to_zoom(pos: int) -> float:
+    """Map an integer slider position back to a zoom scalar (geometric)."""
+    frac = pos / _ZOOM_SLIDER_MAX
+    return _ZOOM_MIN * (_ZOOM_MAX / _ZOOM_MIN) ** frac
+
 
 def _bold(widget: QLabel) -> QLabel:
     """Make a label's font bold in place and return it (for inline use)."""
@@ -68,16 +111,31 @@ def _clear_layout(layout) -> None:
 
 
 class _ImageView(QGraphicsView):
-    """A ``QGraphicsView`` whose mouse wheel scrolls slices rather than the view.
+    """A ``QGraphicsView`` implementing the PACS mouse conventions (Decision 1).
 
-    Overriding ``wheelEvent`` keeps the established interaction (wheel == change
-    slice) from the Tk viewer; real scrollbars (dragged, or keyboard) reach the
-    edges of a zoomed-in slice.
+    The raw mouse mechanics live here; the semantic state (window/level, zoom)
+    is owned by the panel and mutated through callbacks, keeping this a thin
+    interaction shell:
+
+    * **wheel** changes the slice (``on_wheel``, unchanged from PRD 0010);
+    * **left-drag** adjusts window/level -- horizontal delta = width, vertical
+      delta = level -- via ``on_window_level(dx, dy)``;
+    * **right-drag** zooms -- vertical delta, up = in -- via ``on_zoom(dy)``;
+    * **middle-drag** pans, handled here by translating this view's own
+      scrollbars (the left button is taken by window/level, so ``ScrollHandDrag``
+      is unavailable).
+
+    The ``AsNeeded`` scrollbars from PRD 0010 remain as a pan fallback for users
+    without a middle button (Decision 6).
     """
 
-    def __init__(self, on_wheel):
+    def __init__(self, on_wheel, on_window_level, on_zoom):
         super().__init__()
         self._on_wheel = on_wheel
+        self._on_window_level = on_window_level
+        self._on_zoom = on_zoom
+        self._drag_button = Qt.NoButton
+        self._last_pos = None
 
     def wheelEvent(self, event):  # noqa: N802 (Qt override name)
         dy = event.angleDelta().y()
@@ -85,36 +143,72 @@ class _ImageView(QGraphicsView):
             self._on_wheel(1 if dy > 0 else -1)
         event.accept()
 
+    def mousePressEvent(self, event):  # noqa: N802 (Qt override name)
+        if event.button() in (Qt.LeftButton, Qt.RightButton, Qt.MiddleButton):
+            self._drag_button = event.button()
+            self._last_pos = event.position()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
-class ResultsViewer(QMainWindow):
+    def mouseMoveEvent(self, event):  # noqa: N802 (Qt override name)
+        if self._drag_button == Qt.NoButton or self._last_pos is None:
+            super().mouseMoveEvent(event)
+            return
+        pos = event.position()
+        dx = pos.x() - self._last_pos.x()
+        dy = pos.y() - self._last_pos.y()
+        self._last_pos = pos
+
+        if self._drag_button == Qt.LeftButton:
+            self._on_window_level(dx, dy)
+        elif self._drag_button == Qt.RightButton:
+            self._on_zoom(dy)
+        elif self._drag_button == Qt.MiddleButton:
+            # Pan by translating the scrollbars (the same mechanism the fallback
+            # scrollbars drive), moving the content with the cursor.
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - int(dx))
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - int(dy))
+        event.accept()
+
+    def mouseReleaseEvent(self, event):  # noqa: N802 (Qt override name)
+        if event.button() == self._drag_button:
+            self._drag_button = Qt.NoButton
+            self._last_pos = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class ResultsViewerPanel(QWidget):
     """
-    Viewer for DTI-ALPS processing results.
+    Host-agnostic viewer surface for DTI-ALPS processing results.
 
-    Displays FA-modulated RGB DEC images with ROI overlays and ALPS metrics.
+    A self-sufficient ``QWidget`` (no menu bar) holding the subject list, DEC
+    image pane and legend, navigation/zoom controls, the "Show ROIs" toggle, and
+    the ALPS metrics panel. It is the adapter for the unchanged
+    :class:`ViewerModel` and is shared by both hosts: the standalone
+    :class:`ResultsViewer` window and the main app's docked "Results Viewing"
+    page. Loading is on demand via :meth:`load_folder` (or the panel's own "Load
+    Folder..." button).
     """
 
-    def __init__(self, output_folder: str | None = None, parent=None):
-        """
-        Initialize the results viewer.
-
-        Args:
-            output_folder: Path to output folder to load immediately (optional)
-            parent: Parent Qt widget (optional)
-        """
+    def __init__(self, parent=None):
         super().__init__(parent)
-
-        self.setWindowTitle("DTI-ALPS Results Viewer")
-        self.resize(1400, 900)
-        self.setMinimumSize(1000, 700)
 
         # The tk-free session model owns the loaded session, the per-ROI-type
         # CSV cache, the current selection, and the current subject's arrays.
         self.model = ViewerModel()
 
-        # View cursor (adapter-owned, transient): the current slice and zoom.
-        # The current view / show-ROIs live in their widgets below.
+        # View cursor (adapter-owned, transient): the current slice, zoom, and
+        # window/level. The current view / show-ROIs live in their widgets
+        # below. Window/level is the twin of slice and zoom (Decision 8): it is
+        # transient view-cursor state, never held in the model. Seeded from
+        # ``model.default_window()`` at subject-select.
         self.current_slice = 0
         self.zoom_level = 1.0
+        self.wl_center = 0.5
+        self.wl_width = 1.0
 
         # ALPS method the metrics labels are currently laid out for.
         self.alps_method = "ALPS-LAB"
@@ -125,47 +219,19 @@ class ResultsViewer(QMainWindow):
         # Subject ids present in the tree (defensive guard for selection).
         self._known_ids: set[str] = set()
 
-        # Build UI
-        self._create_menu()
         self._create_layout()
 
-        # Load output folder if provided (after the window is realized).
-        if output_folder:
-            QTimer.singleShot(100, lambda: self._load_output_folder(output_folder))
+    def load_folder(self, folder_path: str):
+        """Load a results folder into the panel (the public external entry point).
 
-    def _create_menu(self):
-        """Create menu bar."""
-        menubar = self.menuBar()
-
-        # File menu
-        file_menu = menubar.addMenu("File")
-        load_action = QAction("Load Results Folder...", self)
-        load_action.triggered.connect(self._browse_folder)
-        file_menu.addAction(load_action)
-        file_menu.addSeparator()
-        close_action = QAction("Close", self)
-        close_action.triggered.connect(self.close)
-        file_menu.addAction(close_action)
-
-        # View menu
-        view_menu = menubar.addMenu("View")
-        for view in ("axial", "coronal", "sagittal"):
-            action = QAction(f"{view.capitalize()} View", self)
-            action.triggered.connect(lambda _checked=False, v=view: self._set_view(v))
-            view_menu.addAction(action)
-        view_menu.addSeparator()
-
-        self.show_rois_action = QAction("Show ROI Overlays", self)
-        self.show_rois_action.setCheckable(True)
-        self.show_rois_action.setChecked(True)
-        self.show_rois_action.triggered.connect(self._update_display)
-        view_menu.addAction(self.show_rois_action)
+        Both hosts call this: the standalone wrapper on construction when given a
+        folder, and the main app when a "View Results" button is clicked.
+        """
+        self._load_output_folder(folder_path)
 
     def _create_layout(self):
         """Create main layout."""
-        central = QWidget()
-        self.setCentralWidget(central)
-        main_layout = QHBoxLayout(central)
+        main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(5, 5, 5, 5)
 
         # Left panel - Subject list
@@ -210,19 +276,18 @@ class ResultsViewer(QMainWindow):
 
         # Subject list
         self.subject_tree = QTreeWidget()
-        self.subject_tree.setColumnCount(2)
-        self.subject_tree.setHeaderLabels(["Subject ID", "Status"])
+        self.subject_tree.setColumnCount(1)
+        self.subject_tree.setHeaderLabels(["Subject ID"])
         self.subject_tree.setRootIsDecorated(False)
         self.subject_tree.setSelectionMode(QTreeWidget.SingleSelection)
         self.subject_tree.setColumnWidth(0, 180)
-        self.subject_tree.setColumnWidth(1, 70)
         self.subject_tree.itemSelectionChanged.connect(self._on_subject_select)
         layout.addWidget(self.subject_tree)
 
     def _create_image_pane(self, layout: QVBoxLayout):
         """Create the QGraphicsView image display + legend."""
         self.scene = QGraphicsScene(self)
-        self.view = _ImageView(self._on_wheel)
+        self.view = _ImageView(self._on_wheel, self._on_window_level_drag, self._on_zoom_drag)
         self.view.setScene(self.scene)
         self.view.setBackgroundBrush(QColor("black"))
         self.view.setAlignment(Qt.AlignCenter)
@@ -233,18 +298,30 @@ class ResultsViewer(QMainWindow):
         self.scene.addItem(self.pixmap_item)
 
         layout.addWidget(self.view, stretch=1)
-        self._create_legend(layout)
+        self._create_image_toggles(layout)
 
-    def _create_legend(self, layout: QVBoxLayout):
-        """Create ROI indicator legend (white swatch == ROI)."""
-        legend = QHBoxLayout()
-        swatch = QLabel()
-        swatch.setFixedSize(16, 16)
-        swatch.setStyleSheet("background-color: white; border: 1px solid gray;")
-        legend.addWidget(swatch)
-        legend.addWidget(QLabel("ROI regions"))
-        legend.addStretch(1)
-        layout.addLayout(legend)
+    def _create_image_toggles(self, layout: QVBoxLayout):
+        """Create the show-ROIs and brain-mask toggles below the image."""
+        toggles = QHBoxLayout()
+
+        # Show-ROIs toggle lives in the panel body (no menu bar); it drives the
+        # same show-ROIs state the render path consumes.
+        self.show_rois_check = QCheckBox("Show ROIs")
+        self.show_rois_check.setChecked(True)
+        self.show_rois_check.toggled.connect(self._update_display)
+        toggles.addWidget(self.show_rois_check)
+
+        # Brain-mask toggle: blackens out-of-brain voxels for a focused view.
+        # Default on; disabled for a subject that has no brain mask on disk.
+        self.brain_mask_check = QCheckBox("Brain mask")
+        self.brain_mask_check.setChecked(True)
+        self.brain_mask_check.toggled.connect(self._update_display)
+        toggles.addWidget(self.brain_mask_check)
+
+        # Trailing stretch left-justifies the toggles.
+        toggles.addStretch(1)
+
+        layout.addLayout(toggles)
 
     def _create_controls(self, parent_layout: QHBoxLayout):
         """Create slice navigation controls."""
@@ -289,23 +366,21 @@ class ResultsViewer(QMainWindow):
         slice_row.addWidget(self.slice_label)
         layout.addLayout(slice_row)
 
-        # Zoom controls
+        # Zoom controls: a geometric 10%-800% slider (the visible zoom
+        # affordance, Decision 5) + a zoom-% label, and a "Reset view" button
+        # that re-fits the zoom and restores the default window (Decision 4).
         zoom_row = QHBoxLayout()
         zoom_row.addWidget(QLabel("Zoom:"))
-        zoom_out = QPushButton("-")
-        zoom_out.setFixedWidth(30)
-        zoom_out.clicked.connect(self._zoom_out)
-        zoom_row.addWidget(zoom_out)
+        self.zoom_slider = QSlider(Qt.Horizontal)
+        self.zoom_slider.setRange(0, _ZOOM_SLIDER_MAX)
+        self.zoom_slider.setMinimumWidth(150)
+        self.zoom_slider.valueChanged.connect(self._on_zoom_slider)
+        zoom_row.addWidget(self.zoom_slider)
         self.zoom_label = QLabel("100%")
         zoom_row.addWidget(self.zoom_label)
-        zoom_in = QPushButton("+")
-        zoom_in.setFixedWidth(30)
-        zoom_in.clicked.connect(self._zoom_in)
-        zoom_row.addWidget(zoom_in)
-        zoom_fit = QPushButton("Fit")
-        zoom_fit.setFixedWidth(40)
-        zoom_fit.clicked.connect(self._zoom_fit)
-        zoom_row.addWidget(zoom_fit)
+        reset_view = QPushButton("Reset view")
+        reset_view.clicked.connect(self._reset_view)
+        zoom_row.addWidget(reset_view)
         zoom_row.addStretch(1)
         layout.addLayout(zoom_row)
 
@@ -433,8 +508,7 @@ class ResultsViewer(QMainWindow):
         self.subject_tree.blockSignals(True)
         self.subject_tree.clear()
         for record in session.subjects:
-            status = record.status if record.status else "unknown"
-            QTreeWidgetItem(self.subject_tree, [record.subject_id, status])
+            QTreeWidgetItem(self.subject_tree, [record.subject_id])
         self.subject_tree.blockSignals(False)
 
         if not session.subjects:
@@ -483,10 +557,18 @@ class ResultsViewer(QMainWindow):
             QMessageBox.warning(self, "Warning", f"Could not load images for subject: {subject_id}")
             return
 
-        # Reset slice to middle
+        # Honest UI: only offer the brain-mask toggle when this subject has one.
+        self.brain_mask_check.setEnabled(self.model.has_brain_mask)
+
+        # Seed the window/level from the new subject's FA volume (stable, per
+        # subject; window settings are not carried across subjects, Decision 3).
+        self.wl_center, self.wl_width = self.model.default_window()
+
+        # Start on the slice holding the Left Projection ROI centroid so the ROI
+        # is visible immediately (falls back to the middle slice when absent).
         if self.model.current_shape:
             self._update_slice_range()
-            self.current_slice = self.model.default_slice(self.current_view())
+            self.current_slice = self.model.initial_slice(self.current_view())
             self._set_slider_value(self.current_slice)
 
         # Auto-fit image to viewport, then draw.
@@ -564,7 +646,12 @@ class ResultsViewer(QMainWindow):
 
         # The model returns a finished, oriented RGB picture for this view/slice.
         image = self.model.render_slice(
-            self.current_view(), self.current_slice, self.show_rois_action.isChecked()
+            self.current_view(),
+            self.current_slice,
+            self.show_rois_check.isChecked(),
+            self.brain_mask_check.isChecked(),
+            self.wl_center,
+            self.wl_width,
         )
         if image is None:
             return
@@ -617,9 +704,14 @@ class ResultsViewer(QMainWindow):
     def _on_view_change(self):
         """Handle view type change."""
         self._update_slice_range()
-        # Reset to middle slice
-        self.current_slice = self.model.default_slice(self.current_view())
+        # Anchor on the Left Projection ROI centroid for the new view (falls back
+        # to the middle slice when that ROI is absent), keeping the ROI on screen.
+        self.current_slice = self.model.initial_slice(self.current_view())
         self._set_slider_value(self.current_slice)
+        # Re-fit: axial/coronal/sagittal have very different in-plane dimensions,
+        # so a zoom that fit the old view can spill the new one out of frame
+        # (Decision 7). Window is unchanged (same subject/volume).
+        self._zoom_fit()
         self._update_display()
 
     def _on_slice_change(self, value):
@@ -637,13 +729,26 @@ class ResultsViewer(QMainWindow):
                 self._set_slider_value(self.current_slice)
                 self._update_display()
 
-    def _set_view(self, view: str):
-        """Set the current view type (from the View menu)."""
-        button = self.view_buttons[view]
-        if button.isChecked():
-            self._on_view_change()
-        else:
-            button.setChecked(True)  # fires toggled -> _on_view_change
+    def _on_window_level_drag(self, dx: float, dy: float):
+        """Left-drag: horizontal delta widens/narrows the window (contrast),
+        vertical delta shifts the level/center (brightness).
+
+        Moving up (``dy`` negative) lowers the center, mapping more of the FA
+        range bright -- i.e. up brightens. Width is clamped to a small positive
+        minimum so a drag never produces a zero-width window (Decision 8).
+        """
+        if self.model.current_shape is None:
+            return
+        self.wl_center += dy * _WL_LEVEL_PER_PIXEL
+        self.wl_width = max(_WL_MIN_WIDTH, self.wl_width + dx * _WL_WIDTH_PER_PIXEL)
+        self._update_display()
+
+    def _on_zoom_drag(self, dy: float):
+        """Right-drag: vertical delta zooms geometrically (up = in, down = out),
+        center-anchored, syncing the slider thumb via :meth:`_set_zoom`."""
+        if self.model.current_shape is None:
+            return
+        self._set_zoom(self.zoom_level * math.exp(-dy * _ZOOM_DRAG_PER_PIXEL))
 
     def current_view(self) -> str:
         """The currently selected orthogonal view."""
@@ -653,22 +758,43 @@ class ResultsViewer(QMainWindow):
         return "axial"
 
     def _apply_zoom(self):
-        """Apply the current zoom level as the view transform + update the label."""
+        """Apply the current zoom as the view transform + update the % label.
+
+        Does not move the slider thumb; callers that changed the zoom other than
+        via the slider call :meth:`_sync_zoom_slider` to keep the two in sync.
+        """
         self.view.setTransform(QTransform().scale(self.zoom_level, self.zoom_level))
-        self.zoom_label.setText(f"{int(self.zoom_level * 100)}%")
+        self.zoom_label.setText(f"{int(round(self.zoom_level * 100))}%")
 
-    def _zoom_in(self):
-        """Increase zoom level."""
-        self.zoom_level = min(5.0, self.zoom_level * 1.25)
+    def _sync_zoom_slider(self):
+        """Move the zoom slider thumb to match ``zoom_level`` without recursing."""
+        self.zoom_slider.blockSignals(True)
+        self.zoom_slider.setValue(_zoom_to_slider_pos(self.zoom_level))
+        self.zoom_slider.blockSignals(False)
+
+    def _set_zoom(self, zoom: float):
+        """Set a clamped zoom, apply the transform, and sync the slider thumb.
+
+        The one entry point for zoom changes that originate outside the slider
+        (fit and right-drag), keeping the slider and the zoom scalar in lockstep.
+        """
+        self.zoom_level = _clamp_zoom(zoom)
+        self._apply_zoom()
+        self._sync_zoom_slider()
+
+    def _on_zoom_slider(self, value: int):
+        """Handle the zoom slider moving: drive the shared zoom scalar."""
+        self.zoom_level = _slider_pos_to_zoom(value)
         self._apply_zoom()
 
-    def _zoom_out(self):
-        """Decrease zoom level."""
-        self.zoom_level = max(0.25, self.zoom_level / 1.25)
-        self._apply_zoom()
+    def _reset_view(self):
+        """Re-fit the zoom to the viewport and restore the default window."""
+        self._zoom_fit()
+        self.wl_center, self.wl_width = self.model.default_window()
+        self._update_display()
 
     def _zoom_fit(self):
-        """Fit image to viewport."""
+        """Fit image to viewport (best-effort), clamped into the zoom band."""
         shape = self.model.current_shape
         if shape is None:
             return
@@ -687,8 +813,41 @@ class ResultsViewer(QMainWindow):
         if img_w > 0 and img_h > 0:
             zoom_w = canvas_w / img_w
             zoom_h = canvas_h / img_h
-            self.zoom_level = min(zoom_w, zoom_h) * 0.9
-            self._apply_zoom()
+            self._set_zoom(min(zoom_w, zoom_h) * 0.9)
+
+
+class ResultsViewer(QMainWindow):
+    """
+    Standalone window host for :class:`ResultsViewerPanel`.
+
+    A thin wrapper: it instantiates a panel as the central widget, sets the
+    window title/size, and forwards an optional initial folder. It has no menu
+    bar — every control lives in the panel body, and the OS window chrome closes
+    the window.
+    """
+
+    def __init__(self, output_folder: str | None = None, parent=None):
+        """
+        Initialize the standalone results viewer window.
+
+        Args:
+            output_folder: Path to output folder to load immediately (optional)
+            parent: Parent Qt widget (optional)
+        """
+        super().__init__(parent)
+
+        self.setWindowTitle("DTI-ALPS Results Viewer")
+        self.resize(1400, 900)
+        self.setMinimumSize(1000, 700)
+
+        self.panel = ResultsViewerPanel(self)
+        self.setCentralWidget(self.panel)
+
+        # Load output folder if provided. Defer so the window is realized first:
+        # the panel's initial fit reads the viewport size, meaningful only once
+        # the window is shown (fit-timing guard).
+        if output_folder:
+            QTimer.singleShot(100, lambda: self.panel.load_folder(output_folder))
 
 
 def launch_viewer(output_folder: str | None = None):

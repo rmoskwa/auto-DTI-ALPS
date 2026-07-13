@@ -6,20 +6,32 @@ This script registers a subject's FA image to the JHU-ICBM-FA-1mm template,
 transforms pre-defined ROI templates to subject space, finds the centroid of
 each transformed region, and creates spherical ROIs at those locations.
 
+Brain extraction mirrors the production pipeline: a brain mask is created from
+the preprocessed DWI with MRtrix3's dwi2mask and applied to the FA with fslmaths,
+rather than skull-stripping the FA directly with BET2. This keeps the e2e smoke
+on the same masking path as dti_alps.processing.registration.fsl.
+
 Usage:
-    python test_registration.py <subject_fa_path> [--output-dir <dir>] [--sphere-radius <mm>]
+    python test_registration.py <subject_fa_path> --dwi <dwi> --bvecs <bvecs> \
+        --bvals <bvals> [--output-dir <dir>] [--sphere-radius <mm>]
 
 Example:
-    python test_registration.py subject_FA.nii.gz
+    python test_registration.py subject_FA.nii.gz \
+        --dwi subject_dwi.nii.gz --bvecs subject.bvec --bvals subject.bval
 
     # With custom sphere radius:
-    python test_registration.py subject_FA.nii.gz --sphere-radius 3.0
+    python test_registration.py subject_FA.nii.gz \
+        --dwi subject_dwi.nii.gz --bvecs subject.bvec --bvals subject.bval \
+        --sphere-radius 3.0
 
     # With V1 image transformation to JHU space:
-    python test_registration.py subject_FA.nii.gz --v1 subject_V1.nii.gz
+    python test_registration.py subject_FA.nii.gz \
+        --dwi subject_dwi.nii.gz --bvecs subject.bvec --bvals subject.bval \
+        --v1 subject_V1.nii.gz
 
 Required Environment:
     - FSL must be installed and FSLDIR set (or sourced via /etc/fsl/fsl.sh)
+    - MRtrix3 must be installed and dwi2mask available on PATH
     - JHU-ICBM-FA-1mm.nii.gz must exist in $FSLDIR/data/atlases/JHU/
     - ROI templates must exist in templates/ directory
 """
@@ -31,6 +43,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from dti_alps.processing.b0_extraction import (
+    apply_mask_to_image,
+    create_brain_mask_from_dwi,
+    validate_b0_exists,
+)
 from dti_alps.processing.roi_placement import create_sphere_mask, find_mask_centroid
 
 
@@ -55,26 +72,37 @@ def get_fsldir() -> str | None:
 
 
 def check_fsl_available() -> tuple[bool, str]:
-    """Check if FSL tools are available."""
+    """Check if FSL and MRtrix3 tools are available.
+
+    Mirrors dti_alps.processing.registration.fsl.check_available: FSL commands
+    are looked up in the FSL bin dir (falling back to PATH), while dwi2mask is
+    an MRtrix3 command checked on PATH only.
+    """
     fsldir = get_fsldir()
     if not fsldir:
         return False, "FSLDIR not set and FSL not found in common locations"
 
-    required_tools = ["bet2", "flirt", "fnirt", "invwarp", "applywarp"]
+    required_fsl_tools = ["flirt", "fnirt", "invwarp", "applywarp", "fslmaths"]
+    required_mrtrix_tools = ["dwi2mask"]
     bin_dir = os.path.join(fsldir, "bin")
     if not os.path.isdir(bin_dir):
         bin_dir = os.path.join(fsldir, "share", "fsl", "bin")
 
     missing = []
-    for tool in required_tools:
+    for tool in required_fsl_tools:
         tool_path = os.path.join(bin_dir, tool)
         if not os.path.isfile(tool_path):
             # Also check if it's in PATH
             if shutil.which(tool) is None:
                 missing.append(tool)
 
+    # MRtrix3 tools are only ever on PATH, never in the FSL bin dir.
+    for tool in required_mrtrix_tools:
+        if shutil.which(tool) is None:
+            missing.append(tool)
+
     if missing:
-        return False, f"Missing FSL tools: {', '.join(missing)}"
+        return False, f"Missing tools: {', '.join(missing)}"
 
     return True, fsldir
 
@@ -155,6 +183,9 @@ def run_command(cmd: list[str], description: str) -> bool:
 
 def register_fa_to_template(
     subject_fa: Path,
+    subject_dwi: Path,
+    subject_bvecs: Path,
+    subject_bvals: Path,
     output_dir: Path,
     jhu_fa_template: Path,
     fsl_bin: Path,
@@ -166,7 +197,8 @@ def register_fa_to_template(
 
     Steps:
     1. Fix NaN values in FA image
-    2. Skull stripping with BET2
+    2. Brain extraction: dwi2mask on the DWI, then apply the mask to the FA
+       (matches the production pipeline; no BET2 on the FA)
     3. Linear registration (FLIRT) - subject FA to JHU template
     4. Non-linear registration (FNIRT) - refine with warping
     5. Inverse warp (INVWARP) - create template-to-subject transform
@@ -175,6 +207,9 @@ def register_fa_to_template(
 
     Args:
         subject_fa: Path to subject's FA image
+        subject_dwi: Path to subject's preprocessed 4D DWI (for dwi2mask)
+        subject_bvecs: Path to bvecs matching the DWI
+        subject_bvals: Path to bvals matching the DWI
         output_dir: Directory for output files
         jhu_fa_template: Path to JHU-ICBM-FA-1mm.nii.gz
         fsl_bin: Path to FSL bin directory
@@ -196,17 +231,38 @@ def register_fa_to_template(
         print("ERROR: Failed to prepare FA image")
         return None
 
-    # Step 2: Skull stripping with BET2
+    # Step 2: Brain extraction, matching the production pipeline
+    # (dti_alps.processing.registration.fsl.register): build a brain mask from
+    # the DWI with MRtrix3 dwi2mask, then apply it to the FA with fslmaths.
     fa_brain = output_dir / f"{prefix}_FA_brain.nii.gz"
-    bet_cmd = [
-        str(fsl_bin / "bet2"),
-        str(fa_fixed),
-        str(fa_brain),
-        "-f",
-        "0.3",  # Fractional intensity threshold (lower = larger brain)
-    ]
+    brain_mask = output_dir / f"{prefix}_brain_mask.nii.gz"
 
-    if not run_command(bet_cmd, "Step 2: Skull Stripping (BET2)"):
+    print("\nStep 2: Brain extraction (dwi2mask + apply to FA)...")
+    is_valid, message, _ = validate_b0_exists(str(subject_bvals))
+    if not is_valid:
+        print(f"ERROR: B0 validation failed: {message}")
+        return None
+    print(f"  {message}")
+
+    mask_ok, mask_msg = create_brain_mask_from_dwi(
+        dwi_path=str(subject_dwi),
+        bvecs_path=str(subject_bvecs),
+        bvals_path=str(subject_bvals),
+        output_mask_path=str(brain_mask),
+        log=lambda line: print(line),
+    )
+    if not mask_ok:
+        print(f"ERROR: Brain mask creation failed: {mask_msg}")
+        return None
+
+    apply_ok, apply_msg = apply_mask_to_image(
+        input_path=str(fa_fixed),
+        mask_path=str(brain_mask),
+        output_path=str(fa_brain),
+        log=lambda line: print(line),
+    )
+    if not apply_ok:
+        print(f"ERROR: Failed to apply brain mask to FA: {apply_msg}")
         return None
 
     if not fa_brain.exists():
@@ -220,6 +276,7 @@ def register_fa_to_template(
 
     outputs = {
         "fa_nonan": fa_fixed,
+        "brain_mask": brain_mask,
         "fa_brain": fa_brain,
         "affine_mat": output_dir / f"{prefix}_subject2jhu_affine.mat",
         "registered_fa": output_dir / f"{prefix}_FA_to_JHU.nii.gz",
@@ -471,6 +528,24 @@ def main():
         help="Path to subject's FA image (e.g., subject_FA.nii.gz)",
     )
     parser.add_argument(
+        "--dwi",
+        type=str,
+        required=True,
+        help="Path to subject's preprocessed 4D DWI (for dwi2mask brain extraction)",
+    )
+    parser.add_argument(
+        "--bvecs",
+        type=str,
+        required=True,
+        help="Path to bvecs matching the DWI",
+    )
+    parser.add_argument(
+        "--bvals",
+        type=str,
+        required=True,
+        help="Path to bvals matching the DWI",
+    )
+    parser.add_argument(
         "--output-dir",
         type=str,
         default=None,
@@ -496,6 +571,19 @@ def main():
     if not subject_fa.exists():
         print(f"ERROR: Subject FA not found: {subject_fa}")
         sys.exit(1)
+
+    # Validate DWI + gradient inputs (needed for dwi2mask brain extraction)
+    subject_dwi = Path(args.dwi).resolve()
+    subject_bvecs = Path(args.bvecs).resolve()
+    subject_bvals = Path(args.bvals).resolve()
+    for label, path in (
+        ("DWI", subject_dwi),
+        ("bvecs", subject_bvecs),
+        ("bvals", subject_bvals),
+    ):
+        if not path.exists():
+            print(f"ERROR: Subject {label} not found: {path}")
+            sys.exit(1)
 
     # Set output directory
     if args.output_dir:
@@ -548,6 +636,9 @@ def main():
 
     outputs = register_fa_to_template(
         subject_fa=subject_fa,
+        subject_dwi=subject_dwi,
+        subject_bvecs=subject_bvecs,
+        subject_bvals=subject_bvals,
         output_dir=output_dir,
         jhu_fa_template=jhu_fa_template,
         fsl_bin=fsl_bin,

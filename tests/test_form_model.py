@@ -9,12 +9,18 @@ mirroring ``test_result_model.py`` for the output side.
 """
 
 from dti_alps.gui.form_model import (
+    NAV_DATA_INPUT,
+    NAV_OUTPUT_SETUP,
+    NAV_SYNB0,
+    Blocker,
     FormState,
     OptionState,
     Readiness,
     build_batch_state,
+    compute_blockers,
     compute_readiness,
 )
+from dti_alps.processing.constants import AdaptiveSearchConfig
 from dti_alps.processing.discovery import SubjectFiles
 from dti_alps.processing.state import BatchState, OutputConfig
 from dti_alps.processing.validators import is_readout_valid
@@ -56,7 +62,7 @@ class TestBuildBatchState:
             rpe_scheme="all",
             fa_threshold=0.3,
             alps_method="ALPS-LAB",
-            refine_roi_placement="Standard",
+            adaptive_roi_placement="Standard",
             output_dir="/out",
             staging_enabled=True,
             staging_dir_raw="/scratch",
@@ -76,7 +82,7 @@ class TestBuildBatchState:
         assert cfg.rpe_scheme == "all"
         assert cfg.fa_threshold == 0.3
         assert cfg.alps_method == "ALPS-LAB"
-        assert cfg.refine_roi_placement == "Standard"
+        assert cfg.adaptive_roi_placement == "Standard"
         assert cfg.output_dir == "/out"
         assert cfg.staging_enabled is True
         assert cfg.staging_dir == "/scratch"
@@ -118,6 +124,25 @@ class TestBuildBatchState:
             {"type": "sphere", "radius": 3.0},
             {"type": "squarev9"},
         ]
+
+    def test_adaptive_search_maps_five_ints_to_envelope(self):
+        """The five FormState scalars assemble into BatchConfig.adaptive_search."""
+        form = FormState(
+            search_x=4,
+            search_y=2,
+            search_z=1,
+            max_y_drift=3,
+            max_z_drift=2,
+        )
+        cfg = build_batch_state(form, []).config
+        assert cfg.adaptive_search == AdaptiveSearchConfig(
+            search_x=4, search_y=2, search_z=1, max_y_drift=3, max_z_drift=2
+        )
+
+    def test_adaptive_search_unset_form_yields_defaults(self):
+        """An untouched form reproduces the historical 3 / 1 / 2 / 1 / 1 envelope."""
+        cfg = build_batch_state(FormState(), []).config
+        assert cfg.adaptive_search == AdaptiveSearchConfig()
 
     def test_cli_options_rules(self):
         """Disabled skipped, flag->True, value passthrough, int coerced, junk skipped."""
@@ -259,6 +284,72 @@ class TestComputeReadiness:
         r = compute_readiness(form, [_valid_subject()])
         assert r.synb0_dir_valid is True
         assert r.can_run is True
+
+
+class TestComputeBlockers:
+    """compute_blockers() turns unmet conditions into ordered to-do rows."""
+
+    def _ready_form(self) -> FormState:
+        return FormState(output_dir="/out", readout_auto=True)
+
+    def test_ready_form_has_no_blockers(self):
+        assert compute_blockers(self._ready_form(), [_valid_subject()]) == []
+
+    def test_no_subjects_yields_single_add_row(self):
+        """Zero subjects -> the 'add' row only; the validity row is suppressed."""
+        blockers = compute_blockers(self._ready_form(), [])
+        assert blockers == [Blocker("No subjects added", NAV_DATA_INPUT)]
+
+    def test_some_invalid_subjects_pluralised(self):
+        subjects = [_valid_subject(), _invalid_subject("bad-1"), _invalid_subject("bad-2")]
+        blockers = compute_blockers(self._ready_form(), subjects)
+        assert blockers == [Blocker("2 subjects are invalid", NAV_DATA_INPUT)]
+
+    def test_single_invalid_subject_singular(self):
+        blockers = compute_blockers(self._ready_form(), [_valid_subject(), _invalid_subject()])
+        assert blockers == [Blocker("1 subject is invalid", NAV_DATA_INPUT)]
+
+    def test_invalid_readout_row(self):
+        form = FormState(output_dir="/out", readout_auto=False, readout_raw="junk")
+        blockers = compute_blockers(form, [_valid_subject()])
+        assert Blocker("Readout time is invalid", NAV_DATA_INPUT) in blockers
+
+    def test_missing_output_dir_row(self):
+        form = FormState(output_dir="", readout_auto=True)
+        blockers = compute_blockers(form, [_valid_subject()])
+        assert blockers == [Blocker("Output folder not set", NAV_OUTPUT_SETUP)]
+
+    def test_synb0_dir_row_only_in_synb0_mode(self):
+        form = FormState(output_dir="/out", use_synb0=True, synb0_output_dir_raw="")
+        blockers = compute_blockers(form, [_valid_subject()])
+        assert blockers == [Blocker("synB0 output folder not set", NAV_SYNB0)]
+
+    def test_non_synb0_mode_omits_synb0_row(self):
+        form = FormState(output_dir="/out", use_synb0=False, synb0_output_dir_raw="")
+        assert compute_blockers(form, [_valid_subject()]) == []
+
+    def test_rows_ordered_by_nav_flow(self):
+        """Data Input rows, then synB0, then Output Setup."""
+        form = FormState(
+            output_dir="",
+            readout_auto=False,
+            readout_raw="junk",
+            use_synb0=True,
+            synb0_output_dir_raw="",
+        )
+        blockers = compute_blockers(form, [])
+        assert blockers == [
+            Blocker("No subjects added", NAV_DATA_INPUT),
+            Blocker("Readout time is invalid", NAV_DATA_INPUT),
+            Blocker("synB0 output folder not set", NAV_SYNB0),
+            Blocker("Output folder not set", NAV_OUTPUT_SETUP),
+        ]
+
+    def test_blocker_empty_iff_readiness_can_run(self):
+        """The strip empties exactly when the Run button would enable."""
+        form = FormState(output_dir="/out", readout_auto=True)
+        subjects = [_valid_subject()]
+        assert (compute_blockers(form, subjects) == []) is compute_readiness(form, subjects).can_run
 
 
 class TestReadoutValidityInversionGuard:

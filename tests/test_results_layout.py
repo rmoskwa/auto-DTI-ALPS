@@ -16,6 +16,7 @@ import csv
 import pytest
 
 from dti_alps.processing.results_layout import (
+    DEFAULT_ROI_TOKEN,
     METHOD_BOTH,
     METHOD_LAB,
     METHOD_PAS,
@@ -24,12 +25,14 @@ from dti_alps.processing.results_layout import (
     AlpsTable,
     alps_columns,
     alps_csv_name,
+    alps_csv_names,
     detect_method,
     parse_roi_dir,
     read_alps_csv,
     roi_dir_name,
     roi_mask_glob,
     roi_mask_name,
+    shape_token,
     write_alps_csv,
 )
 
@@ -49,7 +52,15 @@ class TestNamingRoundTrip:
 
     @pytest.mark.parametrize(
         "token",
-        ["rois", "squarev9", "squarev4", "sphere2p5", "sphere3", "squarev9_refined"],
+        [
+            "rois",
+            "rois_adaptive",
+            "squarev9",
+            "squarev4",
+            "sphere2p5",
+            "sphere3",
+            "squarev9_adaptive",
+        ],
     )
     def test_dir_round_trips_for_whole_tokens(self, token):
         assert parse_roi_dir(roi_dir_name(token)) == token
@@ -58,13 +69,37 @@ class TestNamingRoundTrip:
         assert roi_dir_name("rois") == "rois"
         assert parse_roi_dir("rois") == "rois"
 
+    def test_adaptive_default_is_rois_adaptive_not_double_prefixed(self):
+        # The default's adaptive variant is `rois_adaptive/`, NOT `rois_rois_adaptive/`.
+        assert roi_dir_name("rois", adaptive=True) == "rois_adaptive"
+        assert parse_roi_dir("rois_adaptive") == "rois_adaptive"
+        assert alps_csv_name("rois", adaptive=True) == "alps_results_rois_adaptive.csv"
+
     def test_non_default_token_gets_the_rois_prefix(self):
         assert roi_dir_name("squarev9") == "rois_squarev9"
         assert parse_roi_dir("rois_squarev9") == "squarev9"
 
-    def test_refined_flag_appends_suffix(self):
-        assert roi_dir_name("squarev9", refined=True) == "rois_squarev9_refined"
-        assert alps_csv_name("squarev9", refined=True) == "alps_results_squarev9_refined.csv"
+    def test_adaptive_flag_appends_suffix(self):
+        assert roi_dir_name("squarev9", adaptive=True) == "rois_squarev9_adaptive"
+        assert alps_csv_name("squarev9", adaptive=True) == "alps_results_squarev9_adaptive.csv"
+
+
+class TestShapeToken:
+    """geometry -> token, the single home including the default-3mm collapse."""
+
+    def test_default_sphere_collapses_to_the_bare_rois_token(self):
+        assert shape_token("sphere", 3.0) == DEFAULT_ROI_TOKEN
+
+    @pytest.mark.parametrize(
+        ("radius", "expected"),
+        [(2.0, "sphere2"), (2.5, "sphere2p5"), (3.5, "sphere3p5"), (4.0, "sphere4")],
+    )
+    def test_non_default_sphere_gets_explicit_token(self, radius, expected):
+        assert shape_token("sphere", radius) == expected
+
+    def test_squares_pass_through_by_type(self):
+        assert shape_token("squarev9", None) == "squarev9"
+        assert shape_token("squarev4", None) == "squarev4"
 
     def test_parse_rejects_non_roi_dirs(self):
         assert parse_roi_dir("registration") is None
@@ -74,6 +109,31 @@ class TestNamingRoundTrip:
         assert alps_csv_name("rois") == "alps_results.csv"
         assert alps_csv_name("squarev9") == "alps_results_squarev9.csv"
         assert alps_csv_name("sphere2p5") == "alps_results_sphere2p5.csv"
+
+
+class TestCsvNames:
+    """alps_csv_names — the single enumerator of the written-CSV set."""
+
+    def test_empty_tokens_yield_the_single_default_name(self):
+        assert alps_csv_names([]) == ["alps_results.csv"]
+        assert alps_csv_names(set()) == ["alps_results.csv"]
+
+    def test_single_non_default_token_yields_its_suffixed_name(self):
+        assert alps_csv_names(["squarev9"]) == ["alps_results_squarev9.csv"]
+
+    def test_multiple_tokens_yield_the_ordered_suffixed_set(self):
+        assert alps_csv_names(["squarev9", "sphere2p5"]) == [
+            "alps_results_sphere2p5.csv",
+            "alps_results_squarev9.csv",
+        ]
+
+    def test_ordering_is_stable_sorted_regardless_of_input_order(self):
+        tokens = {"squarev9", "rois", "sphere2p5"}
+        assert alps_csv_names(tokens) == [
+            "alps_results.csv",
+            "alps_results_sphere2p5.csv",
+            "alps_results_squarev9.csv",
+        ]
 
 
 class TestDetectMethod:

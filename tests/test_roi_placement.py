@@ -3,7 +3,7 @@ Pure unit tests for the DTI-ALPS ROI-placement science.
 
 These exercise the placement *science* at the pure-function seam in
 ``dti_alps.processing.roi_placement`` -- the mask creators, the quality score,
-and the joint pair-refinement all take pre-built NumPy arrays and return
+and the joint pair-adaptation all take pre-built NumPy arrays and return
 masks/tuples, so no FSL, MRtrix3, or sample ``.nii.gz`` files are needed.
 Expected values are computed *by hand* from the placement rules (corner
 selection, purity, the crossing-fiber penalty, the drift constraint), making
@@ -19,13 +19,14 @@ import math
 import numpy as np
 import pytest
 
+from dti_alps.processing.constants import ADAPTIVE_SEARCH_RANGE, AdaptiveSearchConfig
 from dti_alps.processing.roi_placement import (
+    adaptive_roi_pair_placement,
     calculate_roi_quality,
     create_sphere_mask,
     create_square_v4_mask,
     create_square_v9_mask,
     find_mask_centroid,
-    refine_roi_pair_placement,
 )
 
 
@@ -264,8 +265,8 @@ class TestCalculateRoiQuality:
         assert out == (0.0, 0.0, 0.0, 0.0)
 
 
-class TestRefineRoiPairPlacement:
-    """refine_roi_pair_placement -- joint search, drift constraint, geometric mean.
+class TestAdaptiveRoiPairPlacement:
+    """adaptive_roi_pair_placement -- joint search, drift constraint, geometric mean.
 
     Uses sphere shape with a sub-voxel radius (0.5mm in 1mm voxels) so each mask
     is a SINGLE voxel: a position scores > 0 only when centred exactly on a
@@ -286,8 +287,8 @@ class TestRefineRoiPairPlacement:
     def _empty_fields(self):
         return np.zeros(self.SHAPE + (3,)), np.zeros(self.SHAPE)
 
-    def _refine(self, proj_c, assoc_c, v1, fa):
-        return refine_roi_pair_placement(
+    def _adaptive(self, proj_c, assoc_c, v1, fa):
+        return adaptive_roi_pair_placement(
             proj_c, assoc_c, v1, fa, self.SHAPE, self.VOX, radius_mm=self.R
         )
 
@@ -296,7 +297,7 @@ class TestRefineRoiPairPlacement:
         self._good_voxel(v1, fa, (2, 4, 4), 2, fa_val=1.0)  # proj, Z-dominant, score 1.0
         self._good_voxel(v1, fa, (6, 4, 4), 1, fa_val=0.5)  # assoc, Y-dominant, score 0.5
         # Starts offset in Z so the search must move to the optimum.
-        rp, ra, pp, ap, combined = self._refine((2, 4, 3), (6, 4, 5), v1, fa)
+        rp, ra, pp, ap, combined = self._adaptive((2, 4, 3), (6, 4, 5), v1, fa)
         assert rp == (2, 4, 4)
         assert ra == (6, 4, 4)
         assert pp == 1.0 and ap == 1.0
@@ -307,7 +308,7 @@ class TestRefineRoiPairPlacement:
         self._good_voxel(v1, fa, (2, 4, 4), 2, fa_val=1.0)  # only proj position, z=4
         self._good_voxel(v1, fa, (6, 4, 4), 1, fa_val=0.5)  # assoc near: drift ok, score 0.5
         self._good_voxel(v1, fa, (6, 4, 6), 1, fa_val=1.0)  # assoc far: higher score, z-drift 2
-        rp, ra, _, _, combined = self._refine((2, 4, 4), (6, 4, 5), v1, fa)
+        rp, ra, _, _, combined = self._adaptive((2, 4, 4), (6, 4, 5), v1, fa)
         assert rp == (2, 4, 4)
         # The higher-scoring (6,4,6) violates |dz|<=1 against the proj ROI, so the
         # constraint-satisfying (6,4,4) wins despite its lower individual score.
@@ -319,7 +320,7 @@ class TestRefineRoiPairPlacement:
         v1, fa = self._empty_fields()
         self._good_voxel(v1, fa, (4, 4, 4), 2, fa_val=1.0)  # proj at z=4
         self._good_voxel(v1, fa, (2, 4, 4), 1, fa_val=1.0)  # assoc, drift ok
-        rp, ra, _, _, _ = self._refine((4, 4, 2), (2, 4, 4), v1, fa)
+        rp, ra, _, _, _ = self._adaptive((4, 4, 2), (2, 4, 4), v1, fa)
         assert rp == (4, 4, 4)  # dz=+2 reached
         assert ra == (2, 4, 4)
 
@@ -328,7 +329,7 @@ class TestRefineRoiPairPlacement:
         # finds nothing scoring > 0 and keeps the originals with score -1.
         v1, fa = self._empty_fields()
         self._good_voxel(v1, fa, (4, 4, 4), 2, fa_val=1.0)  # 3 voxels from start z
-        rp, ra, _, _, combined = self._refine((4, 4, 1), (2, 4, 4), v1, fa)
+        rp, ra, _, _, combined = self._adaptive((4, 4, 1), (2, 4, 4), v1, fa)
         assert rp == (4, 4, 1)  # unchanged -> z=4 not reachable from z=1
         assert combined == -1.0
 
@@ -336,7 +337,7 @@ class TestRefineRoiPairPlacement:
         # +-2 Y is outside the (narrower) Y window -> optimum unreachable.
         v1, fa = self._empty_fields()
         self._good_voxel(v1, fa, (4, 4, 4), 2, fa_val=1.0)  # 2 voxels from start y
-        rp, _, _, _, combined = self._refine((4, 2, 4), (2, 4, 4), v1, fa)
+        rp, _, _, _, combined = self._adaptive((4, 2, 4), (2, 4, 4), v1, fa)
         assert rp == (4, 2, 4)  # unchanged -> y=4 not reachable from y=2
         assert combined == -1.0
 
@@ -344,7 +345,7 @@ class TestRefineRoiPairPlacement:
         # Every search position is out of bounds -> conservative fallback: keep
         # the original centroids, score -1.
         v1, fa = self._empty_fields()
-        rp, ra, _, _, combined = self._refine((100, 100, 100), (4, 4, 4), v1, fa)
+        rp, ra, _, _, combined = self._adaptive((100, 100, 100), (4, 4, 4), v1, fa)
         assert rp == (100, 100, 100)
         assert combined == -1.0
 
@@ -352,7 +353,115 @@ class TestRefineRoiPairPlacement:
         # No voxel scores > 0 anywhere (empty fields) -> same conservative
         # fallback as the all-OOB case.
         v1, fa = self._empty_fields()
-        rp, ra, _, _, combined = self._refine((4, 4, 4), (2, 4, 4), v1, fa)
+        rp, ra, _, _, combined = self._adaptive((4, 4, 4), (2, 4, 4), v1, fa)
         assert rp == (4, 4, 4)
         assert ra == (2, 4, 4)
         assert combined == -1.0
+
+
+class TestAdaptiveSearchConfig:
+    """The Adaptive search envelope type -- defaults and the 1-4 invariant."""
+
+    def test_defaults_are_the_historical_values(self):
+        c = AdaptiveSearchConfig()
+        assert (c.search_x, c.search_y, c.search_z, c.max_y_drift, c.max_z_drift) == (
+            3,
+            1,
+            2,
+            1,
+            1,
+        )
+
+    def test_range_constant_is_one_to_four(self):
+        assert ADAPTIVE_SEARCH_RANGE == (1, 4)
+
+    def test_in_range_values_construct(self):
+        # Both bounds are inclusive.
+        AdaptiveSearchConfig(search_x=1, search_y=4, search_z=1, max_y_drift=4, max_z_drift=1)
+
+    @pytest.mark.parametrize(
+        "field", ["search_x", "search_y", "search_z", "max_y_drift", "max_z_drift"]
+    )
+    @pytest.mark.parametrize("bad", [0, 5])
+    def test_out_of_range_field_raises(self, field, bad):
+        with pytest.raises(ValueError):
+            AdaptiveSearchConfig(**{field: bad})
+
+
+class TestEnvelopeSteersSearch:
+    """The five knobs are not inert: widening/narrowing changes the outcome.
+
+    Same single-voxel-mask trick as ``TestAdaptiveRoiPairPlacement`` (sub-voxel
+    radius) so reachability is clean all-or-nothing on every axis.
+    """
+
+    SHAPE = (12, 12, 12)
+    VOX = (1.0, 1.0, 1.0)
+    R = 0.5
+
+    def _good(self, v1, fa, coord, component, fa_val=1.0):
+        vec = [0.0, 0.0, 0.0]
+        vec[component] = 1.0
+        v1[coord] = vec
+        fa[coord] = fa_val
+
+    def _fields(self):
+        return np.zeros(self.SHAPE + (3,)), np.zeros(self.SHAPE)
+
+    def test_widened_x_reaches_optimum_the_narrow_window_cannot(self):
+        v1, fa = self._fields()
+        # Proj optimum sits 4 voxels away in X; assoc optimum at its centroid.
+        self._good(v1, fa, (8, 6, 6), 2, 1.0)  # proj, Z-dominant
+        self._good(v1, fa, (10, 6, 6), 1, 1.0)  # assoc, Y-dominant, no move
+        proj_c, assoc_c = (4, 6, 6), (10, 6, 6)
+
+        # search_x=3 cannot reach dx=+4 -> proj stays, no scoring pair.
+        rp_narrow, _, _, _, combined_narrow = adaptive_roi_pair_placement(
+            proj_c, assoc_c, v1, fa, self.SHAPE, self.VOX, radius_mm=self.R, search_x=3
+        )
+        assert rp_narrow == (4, 6, 6)
+        assert combined_narrow == -1.0
+
+        # search_x=4 reaches it -> proj adapts, real combined score.
+        rp_wide, _, _, _, combined_wide = adaptive_roi_pair_placement(
+            proj_c, assoc_c, v1, fa, self.SHAPE, self.VOX, radius_mm=self.R, search_x=4
+        )
+        assert rp_wide == (8, 6, 6)
+        assert combined_wide > 0
+
+    def test_tighter_z_drift_excludes_a_pair_the_looser_one_admits(self):
+        v1, fa = self._fields()
+        # Proj optimum at its centroid; the only assoc optimum is 2 voxels away
+        # in Z, so it is admissible only when max_z_drift allows a 2-voxel drift.
+        self._good(v1, fa, (4, 6, 6), 2, 1.0)  # proj at z=6
+        self._good(v1, fa, (8, 6, 8), 1, 1.0)  # assoc at z=8 -> z-drift 2
+        proj_c, assoc_c = (4, 6, 6), (8, 6, 6)
+
+        # Looser drift admits the z=8 assoc.
+        _, ra_loose, _, _, combined_loose = adaptive_roi_pair_placement(
+            proj_c,
+            assoc_c,
+            v1,
+            fa,
+            self.SHAPE,
+            self.VOX,
+            radius_mm=self.R,
+            search_z=2,
+            max_z_drift=2,
+        )
+        assert ra_loose == (8, 6, 8)
+        assert combined_loose > 0
+
+        # Tighter drift (=1) excludes it -> no valid scoring pair -> originals.
+        _, _, _, _, combined_tight = adaptive_roi_pair_placement(
+            proj_c,
+            assoc_c,
+            v1,
+            fa,
+            self.SHAPE,
+            self.VOX,
+            radius_mm=self.R,
+            search_z=2,
+            max_z_drift=1,
+        )
+        assert combined_tight == -1.0

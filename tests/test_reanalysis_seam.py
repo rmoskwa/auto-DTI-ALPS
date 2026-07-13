@@ -19,8 +19,11 @@ the seam lives.
 
 import nibabel as nib
 import numpy as np
+import pytest
 
+import dti_alps.__main__ as cli
 from dti_alps.processing import reanalysis
+from dti_alps.processing.constants import AdaptiveSearchConfig
 from dti_alps.processing.reanalysis import (
     ReanalysisResult,
     ROIShape,
@@ -68,7 +71,7 @@ def _reanalyze(subject_dir, fake):
         subject_id="sub-01",
         subject_dir=subject_dir,
         roi_shape=ROIShape(shape_type="sphere", sphere_radius=3.0),
-        enable_refinement=False,
+        enable_adaptive=False,
         alps_method="ALPS-LAB",
         fa_threshold=0.2,
         runner=fake,
@@ -166,3 +169,79 @@ def test_run_reanalysis_without_runner_defaults_to_real(tmp_path, monkeypatch):
     )
 
     assert isinstance(captured["runner"], SubprocessToolRunner)
+
+
+# --- CLI flags: parse, validation, defaults ---------------------------------
+
+
+def _parse(monkeypatch, extra_args):
+    argv = ["prog", "--reanalyze", "/out", "--sphere", "3"] + extra_args
+    monkeypatch.setattr(cli.sys, "argv", argv)
+    return cli._parse_reanalysis_args()
+
+
+def test_envelope_flags_parse_to_ints(monkeypatch):
+    args = _parse(
+        monkeypatch,
+        [
+            "--search-x",
+            "4",
+            "--search-y",
+            "2",
+            "--search-z",
+            "3",
+            "--max-y-drift",
+            "2",
+            "--max-z-drift",
+            "4",
+        ],
+    )
+    assert (args.search_x, args.search_y, args.search_z) == (4, 2, 3)
+    assert (args.max_y_drift, args.max_z_drift) == (2, 4)
+
+
+def test_envelope_flags_default_to_historical_values(monkeypatch):
+    args = _parse(monkeypatch, [])
+    default = AdaptiveSearchConfig()
+    assert args.search_x == default.search_x
+    assert args.search_y == default.search_y
+    assert args.search_z == default.search_z
+    assert args.max_y_drift == default.max_y_drift
+    assert args.max_z_drift == default.max_z_drift
+
+
+@pytest.mark.parametrize("flag", ["--search-x", "--search-z", "--max-y-drift"])
+@pytest.mark.parametrize("bad", ["0", "5"])
+def test_out_of_range_envelope_flag_rejected(monkeypatch, flag, bad):
+    with pytest.raises(SystemExit):
+        _parse(monkeypatch, [flag, bad])
+
+
+# --- The assembled envelope reaches placement -------------------------------
+
+
+def test_reanalyze_subject_forwards_search_to_placement(tmp_path, monkeypatch):
+    subject_dir = _subject(tmp_path)
+    _patch_gates(monkeypatch, tmp_path)
+
+    captured: dict[str, object] = {}
+
+    def spy(*args, **kwargs):
+        captured["search"] = kwargs.get("search")
+        return {}, {}
+
+    monkeypatch.setattr(reanalysis, "place_rois_in_native", spy)
+
+    envelope = AdaptiveSearchConfig(search_x=4, max_z_drift=3)
+    reanalyze_subject(
+        subject_id="sub-01",
+        subject_dir=subject_dir,
+        roi_shape=ROIShape(shape_type="sphere", sphere_radius=3.0),
+        enable_adaptive=True,
+        alps_method="ALPS-LAB",
+        fa_threshold=0.2,
+        search=envelope,
+        runner=FakeToolRunner(),
+    )
+
+    assert captured["search"] is envelope

@@ -12,20 +12,23 @@ ROI Reanalysis (post-processing with different ROI shapes):
     python -m dti_alps --reanalyze /path/to/output --sphere 3.0
     python -m dti_alps --reanalyze /path/to/output --squarev9
     python -m dti_alps --reanalyze /path/to/output --squarev4
-    python -m dti_alps --reanalyze /path/to/output --sphere 2.5 --refine
+    python -m dti_alps --reanalyze /path/to/output --sphere 2.5 --adaptive
     python -m dti_alps --reanalyze /path/to/output --sphere 2,3,4
     python -m dti_alps --reanalyze /path/to/output --sphere 3 --squarev4
 
 Output naming:
-    Without --refine: rois_{shape}/ and alps_results_{shape}.csv
-    With --refine:    rois_{shape}_refined/ and alps_results_{shape}_refined.csv
+    Without --adaptive: rois_{shape}/ and alps_results_{shape}.csv
+    With --adaptive:    rois_{shape}_adaptive/ and alps_results_{shape}_adaptive.csv
+    The default 3 mm sphere collapses to the bare rois/ and alps_results.csv.
 
     Examples:
+        --sphere 3          -> rois/, alps_results.csv
+        --sphere 3 --adaptive -> rois_adaptive/, alps_results_rois_adaptive.csv
         --squarev9          -> rois_squarev9/, alps_results_squarev9.csv
-        --squarev9 --refine -> rois_squarev9_refined/, alps_results_squarev9_refined.csv
+        --squarev9 --adaptive -> rois_squarev9_adaptive/, alps_results_squarev9_adaptive.csv
         --squarev4          -> rois_squarev4/, alps_results_squarev4.csv
         --sphere 2.5        -> rois_sphere2p5/, alps_results_sphere2p5.csv
-        --sphere 2.5 --refine -> rois_sphere2p5_refined/, alps_results_sphere2p5_refined.csv
+        --sphere 2.5 --adaptive -> rois_sphere2p5_adaptive/, alps_results_sphere2p5_adaptive.csv
 
 Quality Report Generation:
     python -m dti_alps --report /path/to/output
@@ -39,9 +42,28 @@ Quality Report Generation:
 import argparse
 import sys
 
-# Sphere radius range (must match config.ROI_SPHERE_RADIUS_RANGE)
-SPHERE_RADIUS_MIN = 1.0
-SPHERE_RADIUS_MAX = 4.0
+from .processing.constants import ADAPTIVE_SEARCH_RANGE, ROI_SPHERE_RADIUS_RANGE
+
+# Sphere radius validation bounds, read from the engine's single source of truth.
+SPHERE_RADIUS_MIN, SPHERE_RADIUS_MAX = ROI_SPHERE_RADIUS_RANGE
+
+# Adaptive search envelope bounds, from the same single source of truth the GUI
+# and the AdaptiveSearchConfig guard use, so the three cannot drift apart.
+SEARCH_MIN, SEARCH_MAX = ADAPTIVE_SEARCH_RANGE
+
+
+def _validate_search_value(value: str) -> int:
+    """Validate an adaptive-search flag is an int within the allowed range."""
+    try:
+        parsed = int(value)
+    except ValueError as err:
+        raise argparse.ArgumentTypeError(f"invalid int value: '{value}'") from err
+
+    if parsed < SEARCH_MIN or parsed > SEARCH_MAX:
+        raise argparse.ArgumentTypeError(
+            f"must be between {SEARCH_MIN} and {SEARCH_MAX}, got {parsed}"
+        )
+    return parsed
 
 
 def _validate_sphere_radii(value: str) -> list[float]:
@@ -65,7 +87,9 @@ def _validate_sphere_radii(value: str) -> list[float]:
 
 def _parse_reanalysis_args() -> argparse.Namespace:
     """Parse command line arguments for reanalysis mode."""
-    from .processing.constants import FA_THRESHOLD
+    from .processing.constants import FA_THRESHOLD, AdaptiveSearchConfig
+
+    search_defaults = AdaptiveSearchConfig()
 
     parser = argparse.ArgumentParser(
         description="DTI-ALPS ROI Reanalysis",
@@ -81,8 +105,8 @@ Examples:
   %(prog)s --reanalyze /path/to/output --squarev4
       Reanalyze with 2x2 voxel square ROIs (4 voxels, V1-optimized)
 
-  %(prog)s --reanalyze /path/to/output --sphere 2.5 --refine
-      Reanalyze with 2.5mm spheres and ROI refinement enabled
+  %(prog)s --reanalyze /path/to/output --sphere 2.5 --adaptive
+      Reanalyze with 2.5mm spheres and adaptive ROI placement enabled
 
   %(prog)s --reanalyze /path/to/output --sphere 2,3,4
       Reanalyze with 2mm, 3mm, and 4mm spheres in one run
@@ -90,8 +114,8 @@ Examples:
   %(prog)s --reanalyze /path/to/output --sphere 3 --squarev4
       Reanalyze with both 3mm sphere and 2x2 square ROIs
 
-  %(prog)s --reanalyze /path/to/output --squarev9 --refine --method ALPS-LAB
-      Reanalyze with square ROIs, refinement, and only ALPS-LAB calculation
+  %(prog)s --reanalyze /path/to/output --squarev9 --adaptive --method ALPS-LAB
+      Reanalyze with square ROIs, adaptive placement, and only ALPS-LAB calculation
         """,
     )
 
@@ -125,9 +149,49 @@ Examples:
     )
 
     parser.add_argument(
-        "--refine",
+        "--adaptive",
         action="store_true",
-        help="Enable ROI refinement based on fiber orientation",
+        help="Enable adaptive ROI placement based on fiber orientation",
+    )
+
+    # Adaptive search envelope. Each is validated to the shared 1-4 range and
+    # defaults to the historical value; all are inert without --adaptive
+    # (Standard placement runs no search).
+    search_help_suffix = f"(±voxels, {SEARCH_MIN}-{SEARCH_MAX}, only with --adaptive)"
+    parser.add_argument(
+        "--search-x",
+        type=_validate_search_value,
+        default=search_defaults.search_x,
+        metavar="N",
+        help=f"Adaptive search window in X {search_help_suffix}",
+    )
+    parser.add_argument(
+        "--search-y",
+        type=_validate_search_value,
+        default=search_defaults.search_y,
+        metavar="N",
+        help=f"Adaptive search window in Y {search_help_suffix}",
+    )
+    parser.add_argument(
+        "--search-z",
+        type=_validate_search_value,
+        default=search_defaults.search_z,
+        metavar="N",
+        help=f"Adaptive search window in Z {search_help_suffix}",
+    )
+    parser.add_argument(
+        "--max-y-drift",
+        type=_validate_search_value,
+        default=search_defaults.max_y_drift,
+        metavar="N",
+        help=f"Max association-ROI Y drift from projection ROI {search_help_suffix}",
+    )
+    parser.add_argument(
+        "--max-z-drift",
+        type=_validate_search_value,
+        default=search_defaults.max_z_drift,
+        metavar="N",
+        help=f"Max association-ROI Z drift from projection ROI {search_help_suffix}",
     )
 
     parser.add_argument(
@@ -152,7 +216,19 @@ def _run_reanalysis() -> None:
     """Run ROI reanalysis from command line arguments."""
     args = _parse_reanalysis_args()
 
+    from .processing.constants import AdaptiveSearchConfig
     from .processing.reanalysis import ROIShape, run_reanalysis
+
+    # Assemble the envelope from the (validated, defaulted) flags. The 1-4 guard
+    # already fired during parse; this construction cannot raise. Inert unless
+    # --adaptive is set.
+    search = AdaptiveSearchConfig(
+        search_x=args.search_x,
+        search_y=args.search_y,
+        search_z=args.search_z,
+        max_y_drift=args.max_y_drift,
+        max_z_drift=args.max_z_drift,
+    )
 
     # Build list of ROI shapes from all specified flags
     roi_shapes: list[ROIShape] = []
@@ -180,9 +256,10 @@ def _run_reanalysis() -> None:
         run_reanalysis(
             output_dir=args.reanalyze,
             roi_shape=roi_shape,
-            enable_refinement=args.refine,
+            enable_adaptive=args.adaptive,
             alps_method=args.method,
             fa_threshold=args.fa_threshold,
+            search=search,
         )
 
 
@@ -226,7 +303,13 @@ def main():
         print("\nFor reanalysis options, use: python -m dti_alps --reanalyze --help")
         return
 
-    # Default: Launch GUI
+    # GUI mode: launched explicitly with --gui, or as the default with no args.
+    # Reject anything else rather than silently launching the GUI.
+    if len(sys.argv) >= 2 and sys.argv[1] != "--gui":
+        print(f"ERROR: unknown option '{sys.argv[1]}'")
+        print(__doc__)
+        sys.exit(2)
+
     from .gui import main as gui_main
 
     gui_main()

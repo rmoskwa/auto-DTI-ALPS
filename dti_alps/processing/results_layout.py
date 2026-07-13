@@ -7,7 +7,7 @@ cycle, and it carries **no GUI text** -- it speaks ROI *tokens*, never display
 names. This is the single home for the convention that the engine writes and
 the viewer/reports read:
 
-* the ROI-directory naming (``rois`` / ``rois_{token}`` / ``rois_{token}_refined``)
+* the ROI-directory naming (``rois`` / ``rois_{token}`` / ``rois_{token}_adaptive``)
   via :func:`roi_dir_name` / :func:`parse_roi_dir`,
 * the ALPS-results CSV naming (``alps_results.csv`` / ``alps_results_{token}.csv``)
   via :func:`alps_csv_name`, and
@@ -29,7 +29,7 @@ canonical ROI-name set is a recorded follow-up, mirroring how
 
 A **token** is the machine name of an ROI configuration as it appears on disk:
 ``rois`` (the default 3.0 mm sphere), ``squarev9``, ``squarev4``, ``sphere2p5``,
-``sphere3``, optionally suffixed ``_refined``. The default ``rois`` token maps to
+``sphere3``, optionally suffixed ``_adaptive``. The default ``rois`` token maps to
 the bare ``rois`` directory and ``alps_results.csv``; every other token gets the
 ``rois_{token}`` / ``alps_results_{token}.csv`` form.
 """
@@ -67,6 +67,10 @@ COL_LEGACY_COMBINED = "Combined ALPS"
 DEFAULT_ROI_TOKEN = "rois"
 _ROI_DIR_PREFIX = "rois_"
 
+# The default sphere radius (mm). A sphere of this radius is *the* default ROI
+# and collapses to the bare ``rois`` token (see :func:`shape_token`).
+DEFAULT_SPHERE_RADIUS = 3.0
+
 # --- ROI-mask identity ------------------------------------------------------
 # The four canonical ROI-mask names (projection/association x left/right). The
 # single home for the set: the registration backend builds its template-path
@@ -79,27 +83,76 @@ ROI_NAMES = ("left_proj", "right_proj", "left_assoc", "right_assoc")
 # backend writes and the glob the viewer uses to find it cannot drift.
 _ROI_MASK_TEMPLATE = "{subject}_{roi_name}.nii.gz"
 
+# --- Registration outputs ---------------------------------------------------
+# The subdirectory the registration backend writes its artifacts into (brain
+# mask, skull-stripped FA, transforms). The one home for the directory name.
+REGISTRATION_DIR = "registration"
 
-def roi_dir_name(token: str, refined: bool = False) -> str:
+# The brain-mask filename pattern (``dwi2mask`` output, native grid), shared by
+# the producer (:func:`brain_mask_name`) and the consumer (:func:`brain_mask_glob`)
+# so the name the backend writes and the glob the viewer uses to find it cannot
+# drift. Lives in :data:`REGISTRATION_DIR`.
+_BRAIN_MASK_TEMPLATE = "{subject}_brain_mask.nii.gz"
+
+
+def shape_token(shape_type: str, sphere_radius: float | None) -> str:
+    """
+    Map an ROI geometry to its base on-disk token (before adaptive placement).
+
+    The single home for *geometry -> token*, including the **default collapse**:
+    the default 3.0 mm sphere is the bare ``rois`` token, every other sphere is
+    ``sphere{radius}`` (``2.5 -> sphere2p5``, ``2.0 -> sphere2``), and squares
+    pass through by type. Writers call this instead of hand-formatting the token,
+    so the default 3.0 mm sphere cannot bypass the collapse and land in
+    ``rois_sphere3/`` (the bug this replaced).
+
+    >>> shape_token("sphere", 3.0)
+    'rois'
+    >>> shape_token("sphere", 2.5)
+    'sphere2p5'
+    >>> shape_token("sphere", 2.0)
+    'sphere2'
+    >>> shape_token("squarev9", None)
+    'squarev9'
+    """
+    if shape_type != "sphere":
+        return shape_type  # squarev9, squarev4
+    if sphere_radius == DEFAULT_SPHERE_RADIUS:
+        return DEFAULT_ROI_TOKEN
+    r_str = str(sphere_radius).replace(".", "p").rstrip("0").rstrip("p")
+    return f"sphere{r_str}"
+
+
+def roi_dir_name(token: str, adaptive: bool = False) -> str:
     """
     Build the on-disk ROI-directory name for ``token``.
 
-    ``refined`` is a convenience for writers that hold the base token and the
-    refinement flag separately; when set, ``_refined`` is appended to the token
-    first. The viewer passes whole tokens (with ``_refined`` already baked in)
-    and leaves ``refined`` at its default.
+    ``adaptive`` is a convenience for writers that hold the base token and the
+    adaptive-placement flag separately; when set, ``_adaptive`` is appended to
+    the token first. The viewer passes whole tokens (with ``_adaptive`` already
+    baked in) and leaves ``adaptive`` at its default.
+
+    The default token maps to the bare ``rois/`` directory; its adaptive variant
+    is ``rois_adaptive/`` (not ``rois_rois_adaptive/``). Every other token gets the
+    ``rois_{token}`` form.
 
     >>> roi_dir_name("rois")
     'rois'
+    >>> roi_dir_name("rois", adaptive=True)
+    'rois_adaptive'
     >>> roi_dir_name("squarev9")
     'rois_squarev9'
-    >>> roi_dir_name("squarev9", refined=True)
-    'rois_squarev9_refined'
+    >>> roi_dir_name("squarev9", adaptive=True)
+    'rois_squarev9_adaptive'
     """
-    if refined:
-        token = f"{token}_refined"
+    if adaptive:
+        token = f"{token}_adaptive"
     if token == DEFAULT_ROI_TOKEN:
         return DEFAULT_ROI_TOKEN
+    # The adaptive default ("rois_adaptive") is already a directory name — it
+    # carries the ``rois`` base, so it must not gain a second ``rois_`` prefix.
+    if token.startswith(_ROI_DIR_PREFIX):
+        return token
     return f"{_ROI_DIR_PREFIX}{token}"
 
 
@@ -109,40 +162,71 @@ def parse_roi_dir(name: str) -> str | None:
 
     The inverse of :func:`roi_dir_name` for the whole-token form:
     ``parse_roi_dir(roi_dir_name(token)) == token``. A returned token keeps any
-    ``_refined`` suffix. Replaces the scattered ``name[5:]`` strip.
+    ``_adaptive`` suffix. Replaces the scattered ``name[5:]`` strip.
 
     >>> parse_roi_dir("rois")
     'rois'
-    >>> parse_roi_dir("rois_squarev9_refined")
-    'squarev9_refined'
+    >>> parse_roi_dir("rois_adaptive")
+    'rois_adaptive'
+    >>> parse_roi_dir("rois_squarev9_adaptive")
+    'squarev9_adaptive'
     >>> parse_roi_dir("registration") is None
     True
     """
     if name == DEFAULT_ROI_TOKEN:
         return DEFAULT_ROI_TOKEN
+    # The adaptive default keeps its ``rois`` base rather than stripping to a bare
+    # ``adaptive`` token (which would not round-trip and would mis-display).
+    if name == f"{DEFAULT_ROI_TOKEN}_adaptive":
+        return name
     if name.startswith(_ROI_DIR_PREFIX):
         return name[len(_ROI_DIR_PREFIX) :]
     return None
 
 
-def alps_csv_name(token: str, refined: bool = False) -> str:
+def alps_csv_name(token: str, adaptive: bool = False) -> str:
     """
     Build the ALPS-results CSV filename for ``token``.
 
-    ``refined`` behaves as in :func:`roi_dir_name`.
+    ``adaptive`` behaves as in :func:`roi_dir_name`.
 
     >>> alps_csv_name("rois")
     'alps_results.csv'
     >>> alps_csv_name("squarev9")
     'alps_results_squarev9.csv'
-    >>> alps_csv_name("squarev9", refined=True)
-    'alps_results_squarev9_refined.csv'
+    >>> alps_csv_name("squarev9", adaptive=True)
+    'alps_results_squarev9_adaptive.csv'
     """
-    if refined:
-        token = f"{token}_refined"
+    if adaptive:
+        token = f"{token}_adaptive"
     if token == DEFAULT_ROI_TOKEN:
         return "alps_results.csv"
     return f"alps_results_{token}.csv"
+
+
+def alps_csv_names(tokens) -> list[str]:
+    """
+    Enumerate the ALPS-results CSV filenames a run produces, in stable order.
+
+    The single home for "which CSVs a batch writes": ``batch._write_csv_results``
+    loops it to write and ``build_batch_results_table`` takes ``len()`` of it for
+    the footer count, so the files on disk and the count on screen come from one
+    function and cannot drift.
+
+    Empty ``tokens`` -> the single backward-compat default name
+    (``alps_results.csv``); otherwise one suffixed name per token, ordered by
+    ``sorted(tokens)`` to match the writer's per-shape loop.
+
+    >>> alps_csv_names([])
+    ['alps_results.csv']
+    >>> alps_csv_names(["squarev9"])
+    ['alps_results_squarev9.csv']
+    >>> alps_csv_names({"squarev9", "rois", "sphere2p5"})
+    ['alps_results.csv', 'alps_results_sphere2p5.csv', 'alps_results_squarev9.csv']
+    """
+    if not tokens:
+        return [alps_csv_name(DEFAULT_ROI_TOKEN)]
+    return [alps_csv_name(token) for token in sorted(tokens)]
 
 
 def roi_mask_name(subject: str, roi_name: str) -> str:
@@ -169,6 +253,33 @@ def roi_mask_glob(roi_name: str) -> str:
     '*_left_proj.nii.gz'
     """
     return _ROI_MASK_TEMPLATE.format(subject="*", roi_name=roi_name)
+
+
+def brain_mask_name(subject: str) -> str:
+    """
+    Build the on-disk brain-mask filename the backend writes for one subject.
+
+    The producer half of the brain-mask-filename pair; :func:`brain_mask_glob`
+    is the consumer half over the same private template. The file lives in
+    :data:`REGISTRATION_DIR`.
+
+    >>> brain_mask_name("sub-01")
+    'sub-01_brain_mask.nii.gz'
+    """
+    return _BRAIN_MASK_TEMPLATE.format(subject=subject)
+
+
+def brain_mask_glob() -> str:
+    """
+    Build the glob the viewer uses to find the brain mask regardless of subject.
+
+    The consumer half of the brain-mask-filename pair; the wildcard stands in for
+    the subject prefix :func:`brain_mask_name` writes.
+
+    >>> brain_mask_glob()
+    '*_brain_mask.nii.gz'
+    """
+    return _BRAIN_MASK_TEMPLATE.format(subject="*")
 
 
 @dataclass(frozen=True)

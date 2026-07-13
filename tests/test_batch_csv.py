@@ -150,7 +150,7 @@ def test_shape_csv_both_bytes(tmp_path):
             folder_path="/d/01",
             status="completed",
             alps_results_by_shape={
-                "sphere3_refined": {
+                "sphere3_adaptive": {
                     "alps_lab_left": 1.1,
                     "alps_lab_right": 1.2,
                     "alps_lab_bilateral": 1.15,
@@ -161,9 +161,9 @@ def test_shape_csv_both_bytes(tmp_path):
             },
         )
     ]
-    csv_path = tmp_path / "alps_results_sphere3_refined.csv"
+    csv_path = tmp_path / "alps_results_sphere3_adaptive.csv"
     _runner("Both", results, str(tmp_path))._write_shape_csv(
-        str(csv_path), "sphere3_refined", "Both"
+        str(csv_path), "sphere3_adaptive", "Both"
     )
 
     assert csv_path.read_bytes() == _expected_bytes(

@@ -9,11 +9,13 @@ import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from . import results_layout
 from .constants import (
     DEFAULT_PE_DIRECTION,
     DEFAULT_READOUT_TIME,
     DEFAULT_RPE_SCHEME,
     FA_THRESHOLD,
+    AdaptiveSearchConfig,
 )
 
 if TYPE_CHECKING:
@@ -136,9 +138,6 @@ class PipelineState:
     flirt_options: dict[str, Any] = field(default_factory=dict)
     fnirt_options: dict[str, Any] = field(default_factory=dict)
 
-    # Registration backend to use for FA-to-template registration ('fsl', 'ants' in future)
-    registration_backend: str = "fsl"
-
     # Stage 8: ROI placement parameters
     # ROI shapes to create - list of dicts with 'type' and optional 'radius'
     # e.g., [{'type': 'sphere', 'radius': 3.0}, {'type': 'squarev9'}]
@@ -149,8 +148,10 @@ class PipelineState:
     fa_threshold: float = FA_THRESHOLD
     # ALPS calculation method (ALPS-LAB or ALPS-PAS)
     alps_method: str = "Both"
-    # ROI refinement mode: "Refined", "Standard", or "Both"
-    refine_roi_placement: str = "Refined"
+    # ROI placement mode: "Adaptive", "Standard", or "Both"
+    adaptive_roi_placement: str = "Adaptive"
+    # Adaptive search envelope (per-run tuning of the joint pair search)
+    adaptive_search: AdaptiveSearchConfig = field(default_factory=AdaptiveSearchConfig)
 
     # Output settings
     output_dir: str = ""
@@ -187,7 +188,7 @@ class PipelineState:
     # Keys: 'left_proj', 'left_assoc', 'right_proj', 'right_assoc'
     roi_mask_paths: dict[str, str] = field(default_factory=dict)
 
-    # All ROI results indexed by shape name (e.g., "rois_sphere3_refined")
+    # All ROI results indexed by shape name (e.g., "rois_sphere3_adaptive")
     # Each entry contains: {"roi_mask_paths": {...}, "roi_centers": {...}}
     all_roi_results: dict[str, dict] | None = None
 
@@ -195,7 +196,7 @@ class PipelineState:
     roi_centers: dict[str, tuple] | None = None
     alps_results: dict[str, float] | None = None
 
-    # Per-shape ALPS results indexed by shape name (e.g., "sphere3_refined")
+    # Per-shape ALPS results indexed by shape name (e.g., "sphere3_adaptive")
     # Each entry is a dict with ALPS calculation results for that shape
     alps_results_by_shape: dict[str, dict] | None = None
 
@@ -218,9 +219,11 @@ class PipelineState:
         self.v2_path = self.get_output_path("V2.nii.gz")
         self.v3_path = self.get_output_path("V3.nii.gz")
         # Registration outputs (in registration subdirectory)
-        reg_dir = os.path.join(self.output_dir, "registration")
+        reg_dir = os.path.join(self.output_dir, results_layout.REGISTRATION_DIR)
         self.b0_path = os.path.join(reg_dir, f"{self.output_prefix}_b0_avg.nii.gz")
-        self.brain_mask_path = os.path.join(reg_dir, f"{self.output_prefix}_brain_mask.nii.gz")
+        self.brain_mask_path = os.path.join(
+            reg_dir, results_layout.brain_mask_name(self.output_prefix)
+        )
         self.fa_brain_path = os.path.join(reg_dir, f"{self.output_prefix}_FA_brain.nii.gz")
         self.affine_mat_path = os.path.join(reg_dir, f"{self.output_prefix}_subject2jhu_affine.mat")
         self.warp_coef_path = os.path.join(
@@ -273,7 +276,6 @@ class BatchConfig:
     # Registration parameters (FSL FLIRT/FNIRT)
     flirt_options: dict[str, Any] = field(default_factory=dict)
     fnirt_options: dict[str, Any] = field(default_factory=dict)
-    registration_backend: str = "fsl"  # Registration backend ('fsl', 'ants' in future)
 
     # ROI placement parameters
     # ROI shapes to create - list of dicts with 'type' and optional 'radius'
@@ -282,7 +284,9 @@ class BatchConfig:
     )
     fa_threshold: float = FA_THRESHOLD  # FA threshold for filtering CSF voxels
     alps_method: str = "Both"  # ALPS calculation method (ALPS-LAB, ALPS-PAS, or Both)
-    refine_roi_placement: str = "Refined"  # "Refined", "Standard", or "Both"
+    adaptive_roi_placement: str = "Adaptive"  # "Adaptive", "Standard", or "Both"
+    # Adaptive search envelope (per-run tuning of the joint pair search)
+    adaptive_search: AdaptiveSearchConfig = field(default_factory=AdaptiveSearchConfig)
 
     # Output settings
     output_dir: str = ""
@@ -318,7 +322,7 @@ class SubjectResult:
     alps_pas_right: float | None = None
     alps_pas_bilateral: float | None = None
 
-    # Per-shape ALPS results indexed by shape name (e.g., "sphere3_refined")
+    # Per-shape ALPS results indexed by shape name (e.g., "sphere3_adaptive")
     # Each entry is a dict with: alps_lab_left, alps_lab_right, alps_lab_bilateral,
     # alps_pas_left, alps_pas_right, alps_pas_bilateral
     alps_results_by_shape: dict[str, dict] = field(default_factory=dict)

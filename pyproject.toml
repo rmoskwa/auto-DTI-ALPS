@@ -85,8 +85,9 @@ known-first-party = ["dti_alps"]
 [tool.ruff.lint.per-file-ignores]
 # The seam itself -- the one place subprocess is allowed.
 "dti_alps/processing/tool_runner.py" = ["TID251"]
-# GUI desktop-open (open/xdg-open/explorer): fire-and-forget, cross-platform,
-# no toolchain dependency -- deliberately outside the seam.
+# GUI desktop-open (open/xdg-open/explorer) + viewer-subprocess launch:
+# fire-and-forget, cross-platform, no toolchain dependency -- deliberately
+# outside the seam.
 "dti_alps/gui/app.py" = ["TID251"]
 # Real-binary integration smoke tests: they shell out to
 # actual MRtrix3/FSL on a machine that has them.

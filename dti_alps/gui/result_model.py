@@ -1,15 +1,17 @@
 """
-tk-free presentation model for the live results dispatch.
+Toolkit-free presentation model for the live results dispatch.
 
 ``ResultModel`` maps a worker queue message to an ordered list of *view-intents*
 — plain frozen dataclasses describing what should change in the GUI. The
-``gui/app.py`` adapter interprets each intent into a widget call. The model
-holds no Tkinter and addresses console-tree rows by index, so the dispatch can
-be unit-tested as a value map rather than a sequence of imperative widget pokes.
+``gui/app.py`` Qt adapter interprets each intent into a widget call. The model
+holds no GUI toolkit and addresses console-tree rows by index, so the dispatch
+can be unit-tested as a value map rather than a sequence of imperative widget
+pokes.
 """
 
 from dataclasses import dataclass
 
+from ..processing import results_layout
 from ..processing.messages import (
     BatchCancelled,
     BatchComplete,
@@ -43,19 +45,6 @@ class SetRowStatus:
 
 
 @dataclass(frozen=True)
-class UpdateStageStatus:
-    """Update the stage indicator (log + button colour) for a pipeline stage."""
-
-    stage: str
-    status: str
-
-
-@dataclass(frozen=True)
-class ResetStageButtons:
-    """Reset all stage buttons to their default style."""
-
-
-@dataclass(frozen=True)
 class ResultColumn:
     """One column of the batch-results table: a stable key and its display label."""
 
@@ -72,7 +61,13 @@ class BatchResultsView:
     :class:`ShowBatchResults`. Cells are already formatted strings (the ``.4f``
     precision and ``None -> ""`` rule are baked in), so the adapter inserts them
     verbatim and owns only widget chrome — column widths/anchors, the footer
-    buttons, and the "Results saved to:" label (fed ``output_dir``).
+    buttons, and the "Results saved to:" label (fed ``output_dir`` and
+    ``csv_count``).
+
+    ``csv_count`` is how many ALPS-results CSVs the run wrote (one per shape
+    token, or 1 for the default single-CSV case). It comes from the same
+    :func:`results_layout.alps_csv_names` the batch writer loops, so the footer
+    count cannot disagree with the files on disk.
     """
 
     title: str
@@ -80,6 +75,7 @@ class BatchResultsView:
     columns: tuple[ResultColumn, ...]
     rows: tuple[dict[str, str], ...]
     output_dir: str
+    csv_count: int
 
 
 @dataclass(frozen=True)
@@ -90,7 +86,28 @@ class ShowBatchResults:
 
 
 # Union of all view-intents the adapter knows how to apply.
-Intent = AppendLog | SetRowStatus | UpdateStageStatus | ResetStageButtons | ShowBatchResults
+Intent = AppendLog | SetRowStatus | ShowBatchResults
+
+
+# The stage-id -> display-name map. The engine speaks stage *ids* (``Stage`` carries
+# ``denoise``/``roi``/…); the display names are presentation text and so live here,
+# never in ``processing/``. An unknown id falls through to the raw id.
+_STAGE_NAMES = {
+    "denoise": "Denoising",
+    "degibbs": "Gibbs Ringing Removal",
+    "preproc": "Preprocessing",
+    "synb0": "synB0-DISCO",
+    "eddy": "Eddy",
+    "dti": "DTI Fitting",
+    "registration": "Registration",
+    "roi": "ROI Placement",
+    "results": "Calculating ALPS",
+}
+
+# Stage-status -> log verb. ``failed`` logs ``Failed: {stage}`` for every stage,
+# filling the previously-silent gap for denoise/degibbs/preproc/dti (which emit no
+# other failure detail line). An unrecognized status logs nothing.
+_STAGE_VERBS = {"running": "Running", "complete": "Completed", "failed": "Failed"}
 
 
 def _format_cell(value: float | None) -> str:
@@ -135,7 +152,7 @@ def build_batch_results_table(batch_state: BatchState) -> BatchResultsView:
 
     The ALPS method chooses the column set ("Both" -> 8 columns; ALPS-LAB /
     ALPS-PAS -> 5) and the per-row metric source; cells are pre-formatted
-    (``.4f``, ``None -> ""``). Pure: no Tkinter, no I/O — the live-panel twin of
+    (``.4f``, ``None -> ""``). Pure: no GUI toolkit, no I/O — the live-panel twin of
     the viewer's ``render_dec_slice``.
     """
     method = batch_state.config.alps_method
@@ -167,12 +184,22 @@ def build_batch_results_table(batch_state: BatchState) -> BatchResultsView:
     )
     rows = tuple(_build_row(result, method) for result in batch_state.results)
 
+    # The shape-token union gather is the same one the batch writer does; only
+    # the token -> filename mapping is centralized (in alps_csv_names), so the
+    # count here matches the files _write_csv_results lands.
+    all_shapes: set[str] = set()
+    for result in batch_state.results:
+        if result.alps_results_by_shape:
+            all_shapes.update(result.alps_results_by_shape.keys())
+    csv_count = len(results_layout.alps_csv_names(all_shapes))
+
     return BatchResultsView(
         title=f"Batch Processing Results ({method})",
         summary=summary,
         columns=columns,
         rows=rows,
         output_dir=batch_state.config.output_dir,
+        csv_count=csv_count,
     )
 
 
@@ -208,7 +235,10 @@ class ResultModel:
                 return [AppendLog(text)]
 
             case Stage(stage, status):
-                return [UpdateStageStatus(stage, status)]
+                verb = _STAGE_VERBS.get(status)
+                if verb is None:
+                    return []
+                return [AppendLog(f"{verb}: {_STAGE_NAMES.get(stage, stage)}")]
 
             case BatchStart(total):
                 return [AppendLog(f"Processing 0/{total} subjects")]
@@ -217,7 +247,6 @@ class ResultModel:
                 return [
                     AppendLog(f"Processing {index + 1}/{self.total}: {subject_id}"),
                     SetRowStatus(index, "Processing", "processing"),
-                    ResetStageButtons(),
                 ]
 
             case SubjectComplete(index, result):

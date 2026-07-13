@@ -9,7 +9,7 @@ Usage:
     python -m dti_alps --report /path/to/output
 
 Output:
-    For each ROI shape found (e.g., rois_sphere3, rois_squarev9_refined):
+    For each ROI shape found (e.g., rois_sphere3, rois_squarev9_adaptive):
     - quality_report_{shape}.csv
 """
 
@@ -234,8 +234,9 @@ def discover_roi_shapes(output_dir: Path) -> list[str]:
     """
     Discover all unique ROI shapes in the output directory.
 
-    Scans subject directories to find all rois_* subdirectories
-    and extracts the unique shape names.
+    Scans subject directories to find every ROI subdirectory (the bare
+    ``rois/`` default and the ``rois_*`` variants) and extracts the unique
+    shape tokens.
 
     Parameters
     ----------
@@ -245,7 +246,7 @@ def discover_roi_shapes(output_dir: Path) -> list[str]:
     Returns
     -------
     list of str
-        Unique ROI shape names (e.g., ['sphere3', 'sphere3_refined', 'squarev9'])
+        Unique ROI shape names (e.g., ['rois', 'squarev9', 'squarev9_adaptive'])
     """
     shapes = set()
 
@@ -256,11 +257,14 @@ def discover_roi_shapes(output_dir: Path) -> list[str]:
         if item.name in ["logs", "qc"]:
             continue
 
-        # Look for rois_* directories
-        for roi_dir in item.glob("rois_*"):
-            if roi_dir.is_dir():
-                # Recover the shape token; the glob guarantees the rois_ prefix.
-                shape = results_layout.parse_roi_dir(roi_dir.name)
+        # Recognise every ROI directory, including the bare ``rois/`` default
+        # (which does not carry the ``rois_`` prefix). parse_roi_dir returns None
+        # for non-ROI dirs (registration, etc.).
+        for roi_dir in item.iterdir():
+            if not roi_dir.is_dir():
+                continue
+            shape = results_layout.parse_roi_dir(roi_dir.name)
+            if shape is not None:
                 shapes.add(shape)
 
     return sorted(shapes)
@@ -278,7 +282,7 @@ def discover_subjects_for_shape(
     output_dir : Path
         Path to the batch output directory
     shape : str
-        ROI shape name (e.g., 'sphere3', 'squarev9_refined')
+        ROI shape name (e.g., 'sphere3', 'squarev9_adaptive')
 
     Returns
     -------
@@ -286,7 +290,9 @@ def discover_subjects_for_shape(
         List of tuples with subject ID and path
     """
     subjects = []
-    roi_dir_name = f"rois_{shape}"
+    # Use the contract's name builder so the bare ``rois/`` default resolves
+    # correctly (``f"rois_{shape}"`` would look for ``rois_rois``).
+    roi_dir_basename = results_layout.roi_dir_name(shape)
 
     for item in sorted(output_dir.iterdir()):
         if not item.is_dir():
@@ -294,7 +300,7 @@ def discover_subjects_for_shape(
         if item.name in ["logs", "qc"]:
             continue
 
-        roi_dir = item / roi_dir_name
+        roi_dir = item / roi_dir_basename
         if roi_dir.exists():
             subjects.append((item.name, item))
 
@@ -343,8 +349,8 @@ def calculate_subject_metrics(
     l2_data = nib.load(str(l2_files[0])).get_fdata() if l2_files and l3_files else None
     l3_data = nib.load(str(l3_files[0])).get_fdata() if l2_files and l3_files else None
 
-    # Get ROI directory
-    roi_dir = subject_dir / f"rois_{shape}"
+    # Get ROI directory (via the contract, so the bare ``rois/`` default resolves)
+    roi_dir = subject_dir / results_layout.roi_dir_name(shape)
     if not roi_dir.exists():
         return None
 
