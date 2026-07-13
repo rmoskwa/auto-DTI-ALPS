@@ -9,6 +9,7 @@ import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from . import results_layout
 from .constants import (
     DEFAULT_PE_DIRECTION,
     DEFAULT_READOUT_TIME,
@@ -215,9 +216,11 @@ class PipelineState:
         self.v2_path = self.get_output_path("V2.nii.gz")
         self.v3_path = self.get_output_path("V3.nii.gz")
         # Registration outputs (in registration subdirectory)
-        reg_dir = os.path.join(self.output_dir, "registration")
+        reg_dir = os.path.join(self.output_dir, results_layout.REGISTRATION_DIR)
         self.b0_path = os.path.join(reg_dir, f"{self.output_prefix}_b0_avg.nii.gz")
-        self.brain_mask_path = os.path.join(reg_dir, f"{self.output_prefix}_brain_mask.nii.gz")
+        self.brain_mask_path = os.path.join(
+            reg_dir, results_layout.brain_mask_name(self.output_prefix)
+        )
         self.fa_brain_path = os.path.join(reg_dir, f"{self.output_prefix}_FA_brain.nii.gz")
         self.affine_mat_path = os.path.join(reg_dir, f"{self.output_prefix}_subject2jhu_affine.mat")
         self.warp_coef_path = os.path.join(

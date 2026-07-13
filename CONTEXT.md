@@ -65,6 +65,12 @@ ViewerModel work).
   producer/consumer pair over one template: `roi_mask_name` (writers) and
   `roi_mask_glob` (viewer), so the written name and the glob that finds it
   cannot drift.
+- **Brain mask** — the `dwi2mask` native-space mask the registration backend
+  writes to `REGISTRATION_DIR` (`registration/`) as `{subject}_brain_mask.nii.gz`.
+  A producer/consumer pair over one template — `brain_mask_name` (the `fsl.py`
+  and `state.py` writers) and `brain_mask_glob` (the viewer) — so the three former
+  copies of the literal collapse to one home. Kept on disk unconditionally (no
+  cleanup clause), so the viewer can rely on it for the focused-view toggle.
 
 ## The worker message stream
 
@@ -114,25 +120,58 @@ Owned by `processing/messages.py`.
     `SubjectRecord`s. Its sibling is **LoadError(kind, payload)** for the
     folder-missing / no-results / csv-missing cases (errors-as-data; the adapter owns
     the messagebox phrasing).
-  - **SubjectRecord** — a frozen value record: subject id, folder, FA/V1 paths, and
-    `all_roi_paths` keyed by token. Holds no decoded arrays and no metrics (metrics
-    vary by ROI type and are looked up from the model's CSV cache).
+  - **SubjectRecord** — a frozen value record: subject id, folder, FA/V1 paths,
+    `all_roi_paths` keyed by token, and an optional `brain_mask_path` (the
+    `registration/` mask, or `None` when the subject has none). Holds no decoded
+    arrays and no metrics (metrics vary by ROI type and are looked up from the
+    model's CSV cache).
   - **MetricsView** — the ALPS numbers for the current `(roi_type, subject)`, shaped
     for display.
-  - **render_dec_slice(fa, v1, roi_masks, view, slice, show_rois)** — the pure
-    rendering function: DEC (direction-encoded colour) from |V1|, FA modulation, ROI
-    overlay, and the per-view orientation, returning a finished oriented uint8 RGB
-    picture. `ViewerModel.render_slice` is a thin wrapper feeding it the current
-    loaded arrays; zoom and toolkit conversion stay in the adapter.
+  - **render_dec_slice(fa, v1, roi_masks, brain_mask, view, slice, show_rois,
+    show_brain_mask, wl_center, wl_width)** — the pure rendering function: DEC
+    (direction-encoded colour) from |V1|, **FA windowing** (below), an optional
+    **brain-mask blackening**, an ROI overlay, and the per-view orientation, returning
+    a finished oriented uint8 RGB picture. The brain-mask step blackens out-of-brain
+    voxels on the *finished* image (never perturbing the windowed FA, so toggling
+    leaves in-brain pixels identical) and runs *before* the ROI overlay, so ROI voxels
+    are never hidden by the mask. `ViewerModel.render_slice` is a thin wrapper feeding
+    it the current loaded arrays; zoom, pan, and toolkit conversion stay in the adapter.
+  - **Window/level (FA windowing)** — FA is the *intensity* channel of the DEC image
+    (hue comes from |V1|). Brightness/contrast is a **window** over FA: `render_dec_slice`
+    remaps FA by `clip((FA − (center − width/2)) / width, 0, 1)` before it modulates the
+    colour, replacing the old per-slice `FA / slice-max` auto-normalisation (which made
+    brightness jump slice-to-slice). Hue is untouched. The **default window** is
+    volume-derived — `ViewerModel.default_window() -> (center, width)` returns
+    `(FA-volume-max / 2, FA-volume-max)`, so the default looks like the old brightness
+    but is *stable across slices*; it is recomputed only on subject-select and never
+    carried across subjects. `wl_center`/`wl_width` are adapter-owned transient view
+    cursor state (the twin of zoom and slice), driven by **left-drag**; the adapter
+    clamps `wl_width` to a small positive minimum so a zero-width window never divides
+    (PRD 0021).
   - **ResultsViewerPanel** (`gui/viewer.py`) — the reusable Qt widget that is
     [[ViewerModel]]'s adapter: the whole viewer surface (subject list, DEC image
     pane, navigation/zoom controls, metrics) as one host-agnostic `QWidget`. Both
     hosts embed the **same** panel class — the standalone `dti-alps --viewer`
     window wraps one as its central widget, and the main app docks another as its
     **"Results Viewing"** page under Output Settings. Self-sufficient: every
-    control (Load folder, view, slice, zoom, show-ROIs) is a panel widget, so it
-    carries no menu bar. Loading is on-demand only (a host calls `load_folder`);
-    a finished batch run does not auto-populate it.
+    control (Load folder, view, slice, zoom, show-ROIs, brain-mask) is a panel
+    widget, so it carries no menu bar. The **brain-mask** checkbox (default on)
+    blackens out-of-brain voxels for a focused view; it is disabled for a subject
+    with no mask on disk (driven by `ViewerModel.has_brain_mask`). Loading is
+    on-demand only (a host calls `load_folder`); a finished batch run does not
+    auto-populate it.
+  - **Radiological image interaction** — the image pane follows the PACS mouse
+    convention (PRD 0021, superseding PRD 0010's zoom buttons): **left-drag** =
+    [[window/level|Window/level (FA windowing)]] (vertical = level, horizontal = width),
+    **right-drag** = zoom (up = in, centre-anchored, geometric), **middle-drag** = pan,
+    **wheel** = change slice. Zoom is a single centre-anchored scalar shared by the
+    right-drag and a **geometric 10 %–800 % zoom slider** (the visible affordance that
+    replaced the `-`/`+`/`Fit` buttons), with a zoom-% label. **Best-effort fit** runs
+    on subject-load and on view-switch (not on resize or ROI-switch); a single **"Reset
+    view"** button re-fits the zoom *and* restores the default window. The
+    `QGraphicsView` scrollbars (PRD 0010) are kept `AsNeeded` as a pan fallback for
+    users without a middle button. All of zoom/pan/window-level is adapter-owned
+    transient cursor state; the pixel math stays in [[render_dec_slice]].
 - **ROI shape catalog** (`gui/config.py`, `ROI_SHAPES`) — the single ordered table of
   the *selectable* ROI shapes: one frozen **RoiShape**(`token`, `label`, `geometry`,
   `default`) row per shape. It owns the **closed** input-selection vocabulary

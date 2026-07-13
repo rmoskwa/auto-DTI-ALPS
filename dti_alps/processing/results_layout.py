@@ -83,6 +83,17 @@ ROI_NAMES = ("left_proj", "right_proj", "left_assoc", "right_assoc")
 # backend writes and the glob the viewer uses to find it cannot drift.
 _ROI_MASK_TEMPLATE = "{subject}_{roi_name}.nii.gz"
 
+# --- Registration outputs ---------------------------------------------------
+# The subdirectory the registration backend writes its artifacts into (brain
+# mask, skull-stripped FA, transforms). The one home for the directory name.
+REGISTRATION_DIR = "registration"
+
+# The brain-mask filename pattern (``dwi2mask`` output, native grid), shared by
+# the producer (:func:`brain_mask_name`) and the consumer (:func:`brain_mask_glob`)
+# so the name the backend writes and the glob the viewer uses to find it cannot
+# drift. Lives in :data:`REGISTRATION_DIR`.
+_BRAIN_MASK_TEMPLATE = "{subject}_brain_mask.nii.gz"
+
 
 def shape_token(shape_type: str, sphere_radius: float | None) -> str:
     """
@@ -242,6 +253,33 @@ def roi_mask_glob(roi_name: str) -> str:
     '*_left_proj.nii.gz'
     """
     return _ROI_MASK_TEMPLATE.format(subject="*", roi_name=roi_name)
+
+
+def brain_mask_name(subject: str) -> str:
+    """
+    Build the on-disk brain-mask filename the backend writes for one subject.
+
+    The producer half of the brain-mask-filename pair; :func:`brain_mask_glob`
+    is the consumer half over the same private template. The file lives in
+    :data:`REGISTRATION_DIR`.
+
+    >>> brain_mask_name("sub-01")
+    'sub-01_brain_mask.nii.gz'
+    """
+    return _BRAIN_MASK_TEMPLATE.format(subject=subject)
+
+
+def brain_mask_glob() -> str:
+    """
+    Build the glob the viewer uses to find the brain mask regardless of subject.
+
+    The consumer half of the brain-mask-filename pair; the wildcard stands in for
+    the subject prefix :func:`brain_mask_name` writes.
+
+    >>> brain_mask_glob()
+    '*_brain_mask.nii.gz'
+    """
+    return _BRAIN_MASK_TEMPLATE.format(subject="*")
 
 
 @dataclass(frozen=True)
