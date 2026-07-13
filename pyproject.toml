@@ -21,9 +21,16 @@ dependencies = [
     "numpy",
     "nibabel",
     "scipy",
+    # The `dti-alps` command launches the PySide6 GUI by default, so Qt is a
+    # core dependency -- `pipx install dti-alps` must work with no extra step.
+    # The engine (dti_alps.processing.*) stays Qt-free and imports it lazily,
+    # so headless CLI/library use never imports PySide6.
+    "PySide6",
 ]
 
 [project.optional-dependencies]
+# Retained as a no-op alias so `pip install "dti-alps[gui]"` and the older
+# install docs keep working now that PySide6 is a core dependency.
 gui = [
     "PySide6",
 ]
