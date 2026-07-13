@@ -37,6 +37,9 @@ ENGINE_MODULES = [
     "dti_alps.processing.validators",
     "dti_alps.processing.batch",
     "dti_alps.processing.state",
+    # The Quality Report's background worker (PRD 0022) is an engine module: it
+    # must run the subset compute with no GUI toolkit and never import the view.
+    "dti_alps.processing.report_worker",
 ]
 
 # Names whose presence in a fresh child's ``sys.modules`` after importing an

@@ -41,6 +41,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -57,6 +59,13 @@ from ..processing.pipeline import (
     BatchState,
     BatchWorker,
 )
+from ..processing.report_worker import (
+    ReportCancelled,
+    ReportComplete,
+    ReportError,
+    ReportProgress,
+    ReportWorker,
+)
 from ..processing.validators import validate_runnable, validate_synb0_output_dir
 from . import config
 from .form_model import (
@@ -69,6 +78,12 @@ from .form_model import (
     collect_output_config,
     compute_blockers,
     compute_readiness,
+)
+from .report_model import (
+    FolderScan,
+    QualityReportModel,
+    QualityReportView,
+    build_quality_report_view,
 )
 from .result_model import (
     AppendLog,
@@ -109,6 +124,15 @@ _ROW_TAG_COLORS = {
     "completed": config.COLORS["success"],
     "failed": config.COLORS["error"],
 }
+
+# Quality-report warning highlight (PRD 0022 follow-up). An ROI metric outside its
+# quality threshold gets a soft-red cell with bold dark-red text; a subject with
+# any warning gets an amber id cell, so rows needing manual inspection stand out
+# at a glance. The thresholds/direction live in the engine (report_model); the
+# adapter owns only the colour.
+_QR_WARN_CELL_BG = "#ffd6d6"
+_QR_WARN_CELL_FG = "#8a1f1f"
+_QR_WARN_SUBJECT_BG = "#ffe9c7"
 
 
 def _qt_name_filter(filetypes: list | None) -> str:
@@ -170,6 +194,18 @@ class DTIALPSApplication(QMainWindow):
         # Batch processing state
         self.subject_files_list: list[SubjectFiles] = []
         self.batch_state: BatchState | None = None
+
+        # Quality Report page state (PRD 0022). Its own model, worker, queue, and
+        # cancel event — a channel wholly separate from the pipeline's, so a
+        # report run never touches batch state. ``qr_view`` is the last generated
+        # view (kept for Save-As); ``qr_subject_checks`` maps subject id ->
+        # checkbox for the shape-driven subject list.
+        self.report_model = QualityReportModel()
+        self.qr_view: QualityReportView | None = None
+        self.qr_worker: ReportWorker | None = None
+        self.qr_result_queue: queue.Queue | None = None
+        self.qr_cancel_event: threading.Event | None = None
+        self.qr_subject_checks: dict[str, QCheckBox] = {}
 
         # Per-page widgets (all pages resident in the stack); the synB0 toggle
         # only rebuilds the stage *button* column, never the pages (Decision 6).
@@ -409,6 +445,8 @@ class DTIALPSApplication(QMainWindow):
         sidebar_layout.addWidget(self.output_setup_btn)
         self.results_viewing_btn = self._nav_button("Results Viewing", self._show_results_viewing)
         sidebar_layout.addWidget(self.results_viewing_btn)
+        self.quality_report_btn = self._nav_button("Quality Report", self._show_quality_report)
+        sidebar_layout.addWidget(self.quality_report_btn)
 
         sidebar_layout.addStretch()
 
@@ -435,6 +473,7 @@ class DTIALPSApplication(QMainWindow):
         self._create_output_setup_page()
         self._create_results_page()
         self._create_results_viewing_page()
+        self._create_quality_report_page()
 
     def _nav_button(self, text: str, on_click) -> QPushButton:
         """Create a checkable nav button wired into the exclusive nav group."""
@@ -495,6 +534,9 @@ class DTIALPSApplication(QMainWindow):
 
     def _show_results_viewing(self):
         self._show_page("results_viewing", "Results Viewing", self.results_viewing_btn)
+
+    def _show_quality_report(self):
+        self._show_page("quality_report", "Quality Report", self.quality_report_btn)
 
     def _show_stage(self, stage_idx: int):
         """Show the pipeline stage at ``stage_idx`` for the current mode."""
@@ -1480,6 +1522,387 @@ class DTIALPSApplication(QMainWindow):
 
         if output_folder:
             self.results_panel.load_folder(output_folder)
+
+    # ------------------------------------------------------------------ #
+    # Quality Report page (PRD 0022)
+    # ------------------------------------------------------------------ #
+    def _create_quality_report_page(self):
+        """Build the resident Quality Report page: load folder -> shape -> subjects
+        -> Generate -> grouped table, with an explicit Save-As.
+
+        The GUI companion to ``--report``: same compute leaf, driven in-app over a
+        chosen subject subset. Every widget is resident, so the loaded folder /
+        shape / table persist across navigation (the model holds the folder; the
+        widgets hold the rest — User Story 11).
+        """
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        info = QLabel(
+            "Review ROI placement quality metrics for a processed output folder. "
+            "Pick an ROI shape, choose the subjects, and Generate — this reads the "
+            "results and writes nothing until you Save. Cells outside the quality "
+            "thresholds are highlighted for manual inspection."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        # --- Load folder row ---------------------------------------------- #
+        load_row = QHBoxLayout()
+        load_btn = QPushButton("Load Folder...")
+        load_btn.clicked.connect(self._qr_load_folder)
+        load_row.addWidget(load_btn)
+        self.qr_folder_label = QLabel("No folder loaded.")
+        self.qr_folder_label.setStyleSheet("color: gray;")
+        load_row.addWidget(self.qr_folder_label, stretch=1)
+        layout.addLayout(load_row)
+
+        # --- Shape dropdown ----------------------------------------------- #
+        shape_row = QHBoxLayout()
+        shape_row.addWidget(QLabel("ROI Shape:"))
+        self.qr_shape_combo = QComboBox()
+        self.qr_shape_combo.setEnabled(False)
+        self.qr_shape_combo.currentIndexChanged.connect(self._qr_on_shape_changed)
+        shape_row.addWidget(self.qr_shape_combo)
+        shape_row.addStretch()
+        layout.addLayout(shape_row)
+
+        # --- Subject checkbox list ---------------------------------------- #
+        subjects_group = QGroupBox("Subjects")
+        subjects_layout = QVBoxLayout(subjects_group)
+        select_row = QHBoxLayout()
+        select_all = QPushButton("Select All")
+        select_all.clicked.connect(lambda: self._qr_set_all_subjects(True))
+        deselect_all = QPushButton("Deselect All")
+        deselect_all.clicked.connect(lambda: self._qr_set_all_subjects(False))
+        select_row.addWidget(select_all)
+        select_row.addWidget(deselect_all)
+        select_row.addStretch()
+        subjects_layout.addLayout(select_row)
+
+        subjects_scroll = QScrollArea()
+        subjects_scroll.setWidgetResizable(True)
+        subjects_scroll.setMaximumHeight(160)
+        self.qr_subjects_container = QWidget()
+        self.qr_subjects_layout = QVBoxLayout(self.qr_subjects_container)
+        self.qr_subjects_layout.addStretch()
+        subjects_scroll.setWidget(self.qr_subjects_container)
+        subjects_layout.addWidget(subjects_scroll)
+        layout.addWidget(subjects_group)
+
+        # --- Action row --------------------------------------------------- #
+        action_row = QHBoxLayout()
+        self.qr_generate_btn = QPushButton("Generate")
+        self.qr_generate_btn.clicked.connect(self._qr_generate)
+        self.qr_generate_btn.setEnabled(False)
+        action_row.addWidget(self.qr_generate_btn)
+        self.qr_cancel_btn = QPushButton("Cancel")
+        self.qr_cancel_btn.clicked.connect(self._qr_cancel)
+        self.qr_cancel_btn.setEnabled(False)
+        action_row.addWidget(self.qr_cancel_btn)
+        self.qr_save_btn = QPushButton("Save report as CSV…")
+        self.qr_save_btn.clicked.connect(self._qr_save_csv)
+        self.qr_save_btn.setEnabled(False)
+        action_row.addWidget(self.qr_save_btn)
+        self.qr_progress_label = QLabel("")
+        self.qr_progress_label.setStyleSheet("color: gray;")
+        action_row.addWidget(self.qr_progress_label, stretch=1)
+        layout.addLayout(action_row)
+
+        # --- Grouped table ------------------------------------------------ #
+        # Native headers hidden: the two-tier grouped header (a band per metric
+        # group over its four ROI sub-columns) is drawn as two spanned in-body
+        # rows, the on-screen twin of the CLI CSV's two header rows.
+        self.qr_table = QTableWidget()
+        self.qr_table.horizontalHeader().setVisible(False)
+        self.qr_table.verticalHeader().setVisible(False)
+        self.qr_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        layout.addWidget(self.qr_table, stretch=1)
+
+        self._register_page("quality_report", page)
+
+    # --- Load folder / shape / subject list ------------------------------ #
+    def _qr_load_folder(self):
+        """Select an output folder and scan it for ROI shapes (errors-as-data)."""
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_OUTPUT_DIR)
+        folder = QFileDialog.getExistingDirectory(self, "Select Output Directory", initial_dir)
+        if not folder:
+            return
+        user_config.set_from_path(UserConfig.KEY_OUTPUT_DIR, folder)
+
+        result = self.report_model.load_folder(folder)
+        if isinstance(result, FolderScan):
+            self.qr_folder_label.setText(str(result.folder))
+            self.qr_folder_label.setStyleSheet("")
+            self._qr_populate_shapes(result.shapes)
+        else:
+            self._qr_show_load_error(result)
+
+    def _qr_show_load_error(self, error):
+        """Explain a bad/empty folder rather than silently doing nothing."""
+        messages = {
+            "folder_missing": "That folder does not exist or is not a directory.",
+            "no_shapes": (
+                "No ROI shapes were found in this folder.\n\n"
+                "Choose a processed output directory that contains ROI results."
+            ),
+        }
+        QMessageBox.warning(
+            self,
+            "Cannot Load Folder",
+            f"{messages.get(error.kind, 'Could not load the selected folder.')}\n\n{error.payload}",
+        )
+
+    def _qr_populate_shapes(self, shapes):
+        """Fill the shape dropdown with ``(label, token)`` pairs and pick the first."""
+        combo = self.qr_shape_combo
+        combo.blockSignals(True)
+        combo.clear()
+        for token, label in shapes:
+            combo.addItem(label, token)
+        combo.setEnabled(True)
+        combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+        # Signals were blocked while filling; drive the first shape's list once.
+        self._qr_on_shape_changed()
+
+    def _qr_on_shape_changed(self):
+        """Rebuild the subject list for the selected shape and invalidate the table.
+
+        Changing shape is a fresh compute, so the shown table is cleared and Save
+        disabled until the user Generates again."""
+        token = self.qr_shape_combo.currentData()
+        self._qr_clear_table()
+        self.qr_view = None
+        self.qr_save_btn.setEnabled(False)
+        self.qr_progress_label.setText("")
+
+        if token is None:
+            self._qr_rebuild_subjects([])
+            self.qr_generate_btn.setEnabled(False)
+            return
+
+        subjects = self.report_model.subjects_for_shape(token)
+        self._qr_rebuild_subjects(subjects)
+        self.qr_generate_btn.setEnabled(bool(subjects))
+
+    def _qr_rebuild_subjects(self, subject_ids):
+        """Replace the subject checkboxes (all checked) for the current shape."""
+        # Remove existing checkboxes, keeping the trailing stretch (last item).
+        while self.qr_subjects_layout.count() > 1:
+            item = self.qr_subjects_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.qr_subject_checks = {}
+        for sid in subject_ids:
+            chk = QCheckBox(sid)
+            chk.setChecked(True)
+            self.qr_subject_checks[sid] = chk
+            self.qr_subjects_layout.insertWidget(self.qr_subjects_layout.count() - 1, chk)
+
+    def _qr_set_all_subjects(self, checked):
+        """Check or uncheck every subject checkbox."""
+        for chk in self.qr_subject_checks.values():
+            chk.setChecked(checked)
+
+    def _qr_checked_subjects(self):
+        """The checked subject ids, in the shape's on-disk order."""
+        return [sid for sid, chk in self.qr_subject_checks.items() if chk.isChecked()]
+
+    # --- Generate / cancel (background worker) --------------------------- #
+    def _qr_generate(self):
+        """Start a background report over the checked subjects (read-only)."""
+        token = self.qr_shape_combo.currentData()
+        if token is None or self.report_model.folder is None:
+            return
+        subjects = self._qr_checked_subjects()
+        if not subjects:
+            QMessageBox.information(
+                self,
+                "No Subjects Selected",
+                "Select at least one subject to generate a report.",
+            )
+            return
+
+        self._qr_clear_table()
+        self.qr_view = None
+        self.qr_save_btn.setEnabled(False)
+        self.qr_generate_btn.setEnabled(False)
+        self.qr_cancel_btn.setEnabled(True)
+        self.qr_cancel_btn.setText("Cancel")
+        self.qr_shape_combo.setEnabled(False)
+        self.qr_progress_label.setText("Starting…")
+
+        self.qr_result_queue = queue.Queue()
+        self.qr_cancel_event = threading.Event()
+        self.qr_worker = ReportWorker(
+            self.report_model.folder,
+            token,
+            subjects,
+            self.qr_result_queue,
+            self.qr_cancel_event,
+        )
+        self.qr_worker.start()
+        QTimer.singleShot(100, self._qr_check_results)
+
+    def _qr_cancel(self):
+        """Signal cancellation; the worker stops before the next subject."""
+        if self.qr_cancel_event is not None:
+            self.qr_cancel_event.set()
+        self.qr_cancel_btn.setEnabled(False)
+        self.qr_cancel_btn.setText("Cancelling…")
+
+    def _qr_check_results(self):
+        """Poll the report queue (its own drain loop, mirroring ``_check_results``)."""
+        self._qr_drain_queue()
+        if self.qr_worker and self.qr_worker.is_alive():
+            QTimer.singleShot(100, self._qr_check_results)
+        else:
+            # One more drain: the terminal message may land as the thread exits.
+            self._qr_drain_queue()
+            self._qr_on_worker_finished()
+
+    def _qr_drain_queue(self):
+        """Apply every currently-queued report message to the widgets."""
+        if self.qr_result_queue is None:
+            return
+        try:
+            while True:
+                self._qr_handle_message(self.qr_result_queue.get_nowait())
+        except queue.Empty:
+            pass
+
+    def _qr_handle_message(self, msg):
+        """Translate one report-worker message into widget updates."""
+        if isinstance(msg, ReportProgress):
+            self.qr_progress_label.setText(
+                f"Processing {msg.subject_id} ({msg.index + 1} of {msg.total})…"
+            )
+        elif isinstance(msg, ReportComplete):
+            self.qr_view = build_quality_report_view(msg.shape_token, msg.subjects_data)
+            self._qr_render_table(self.qr_view)
+            n = len(self.qr_view.rows)
+            noun = "subject" if n == 1 else "subjects"
+            self.qr_progress_label.setText(f"Report ready — {n} {noun}.")
+            self.qr_save_btn.setEnabled(n > 0)
+        elif isinstance(msg, ReportError):
+            QMessageBox.critical(
+                self, "Report Error", f"Could not generate the report:\n\n{msg.message}"
+            )
+            self.qr_progress_label.setText("Report failed.")
+        elif isinstance(msg, ReportCancelled):
+            self._qr_clear_table()
+            self.qr_view = None
+            self.qr_progress_label.setText("Report cancelled.")
+
+    def _qr_on_worker_finished(self):
+        """Re-arm the controls after the report thread dies."""
+        self.qr_worker = None
+        self.qr_cancel_btn.setEnabled(False)
+        self.qr_cancel_btn.setText("Cancel")
+        self.qr_generate_btn.setEnabled(bool(self.qr_subject_checks))
+        self.qr_shape_combo.setEnabled(self.qr_shape_combo.count() > 0)
+
+    # --- Table + save ---------------------------------------------------- #
+    def _qr_clear_table(self):
+        """Empty the report table (spans included)."""
+        self.qr_table.clearSpans()
+        self.qr_table.clear()
+        self.qr_table.setRowCount(0)
+        self.qr_table.setColumnCount(0)
+
+    def _qr_style_header_item(self, item):
+        """Centre + embolden a header cell of the grouped table."""
+        item.setTextAlignment(Qt.AlignCenter)
+        font = item.font()
+        font.setBold(True)
+        item.setFont(font)
+
+    def _qr_render_table(self, view: QualityReportView):
+        """Render the view as a two-tier grouped table (group band over ROI cols).
+
+        Row 0 is the metric-group band (each group cell spanning its four ROI
+        sub-columns); row 1 is the ROI sub-column labels; the Subject header spans
+        both. Data rows follow. Cells are the model's pre-formatted strings, so a
+        LAB-only run's Radial-Asymmetry columns are simply blank.
+        """
+        table = self.qr_table
+        groups = view.metric_groups
+        roi_cols = view.roi_columns
+        n_roi = len(roi_cols)
+        n_cols = 1 + len(groups) * n_roi
+
+        self._qr_clear_table()
+        table.setColumnCount(n_cols)
+        table.setRowCount(2 + len(view.rows))
+
+        # Subject header spans both header rows in column 0.
+        subject_hdr = QTableWidgetItem("Subject")
+        self._qr_style_header_item(subject_hdr)
+        table.setItem(0, 0, subject_hdr)
+        table.setSpan(0, 0, 2, 1)
+        table.setColumnWidth(0, 150)
+
+        # Metric-group band (row 0) over its ROI sub-columns (row 1).
+        for g, group_label in enumerate(groups):
+            first_col = 1 + g * n_roi
+            band = QTableWidgetItem(group_label)
+            self._qr_style_header_item(band)
+            table.setItem(0, first_col, band)
+            table.setSpan(0, first_col, 1, n_roi)
+            for r, roi_label in enumerate(roi_cols):
+                sub = QTableWidgetItem(roi_label)
+                self._qr_style_header_item(sub)
+                table.setItem(1, first_col + r, sub)
+                table.setColumnWidth(first_col + r, 85)
+
+        # Data rows: subject id + the flattened formatted cells, with the
+        # model's per-cell warning flags painted for at-a-glance QC.
+        from PySide6.QtGui import QBrush, QColor
+
+        warn_cell_bg = QBrush(QColor(_QR_WARN_CELL_BG))
+        warn_cell_fg = QBrush(QColor(_QR_WARN_CELL_FG))
+        warn_subject_bg = QBrush(QColor(_QR_WARN_SUBJECT_BG))
+        for i, row in enumerate(view.rows):
+            table_row = 2 + i
+            sid_item = QTableWidgetItem(row.subject_id)
+            if row.has_warning:
+                sid_item.setBackground(warn_subject_bg)
+            table.setItem(table_row, 0, sid_item)
+            for k, cell in enumerate(row.cells):
+                item = QTableWidgetItem(cell)
+                item.setTextAlignment(Qt.AlignCenter)
+                if row.warnings[k]:
+                    item.setBackground(warn_cell_bg)
+                    item.setForeground(warn_cell_fg)
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                table.setItem(table_row, 1 + k, item)
+
+    def _qr_save_csv(self):
+        """Save the current report via an explicit, pre-filled Save-As dialog."""
+        if self.qr_view is None or not self.qr_view.subjects_data:
+            return
+        folder = self.report_model.folder
+        default_name = self.report_model.default_csv_name(self.qr_view.shape_token)
+        initial = str(Path(folder) / default_name) if folder else default_name
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Quality Report",
+            initial,
+            "CSV files (*.csv);;All files (*.*)",
+        )
+        if not path:
+            return
+        try:
+            self.report_model.save_csv(self.qr_view, path)
+        except OSError as e:
+            QMessageBox.critical(self, "Save Failed", f"Could not write the report:\n\n{e}")
+            return
+        self.qr_progress_label.setText(f"Saved: {path}")
 
     # ------------------------------------------------------------------ #
     # Run / cancel (live in region d)
