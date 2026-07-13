@@ -56,8 +56,9 @@ class Readiness:
 
     ``can_run`` is the overall Run-button decision; the remaining flags are the
     individual conditions behind it, so a future adapter can surface *why* a run
-    is blocked without re-deriving them. The Qt adapter reads only
-    ``can_run``.
+    is blocked without re-deriving them. The Qt adapter reads ``can_run`` for the
+    button; :func:`compute_blockers` turns the same conditions into the readiness
+    strip's to-do rows.
     """
 
     can_run: bool
@@ -66,6 +67,30 @@ class Readiness:
     has_output_dir: bool
     readout_valid: bool
     synb0_dir_valid: bool
+
+
+# Semantic navigation targets for a blocker row — the on-disk page ids the Qt
+# adapter already registers (``_register_page``), so ``compute_blockers`` names
+# *where* to send the user without importing a widget or a nav method. The
+# adapter maps each token to the matching ``_show_*`` call.
+NAV_DATA_INPUT = "data"
+NAV_SYNB0 = "synb0"
+NAV_OUTPUT_SETUP = "output_setup"
+
+
+@dataclass(frozen=True)
+class Blocker:
+    """
+    One outstanding-requirement row for the readiness strip.
+
+    ``text`` is the fully-phrased, descriptive to-do line (the presentation model
+    owns the wording); ``target`` is a semantic page id (``NAV_*``) the adapter
+    routes to when the row is clicked. Toolkit-free: no colour, icon, or widget
+    lives here — the adapter renders the neutral marker and link style.
+    """
+
+    text: str
+    target: str
 
 
 @dataclass(frozen=True)
@@ -258,3 +283,41 @@ def compute_readiness(form_state: FormState, subjects: list[SubjectFiles]) -> Re
         readout_valid=readout_valid,
         synb0_dir_valid=synb0_dir_valid,
     )
+
+
+def compute_blockers(form_state: FormState, subjects: list[SubjectFiles]) -> list[Blocker]:
+    """
+    The outstanding requirements to run, as ordered, clickable to-do rows.
+
+    One :class:`Blocker` per unmet condition, in nav-flow order (Data Input
+    items, then synB0, then Output Setup); an empty list means
+    :attr:`Readiness.can_run` is ``True``. This is the strip's *only* wording
+    home — the Qt adapter renders the rows and routes clicks by ``target`` but
+    supplies no text.
+
+    The two subject conditions collapse to a single adaptive row: no subjects ->
+    "No subjects added"; some present but invalid -> "N subject(s) are invalid".
+    They never both appear (with zero subjects the validity row would be noise).
+    The synB0 row is emitted only in synB0 mode, matching
+    :func:`compute_readiness`.
+    """
+    blockers: list[Blocker] = []
+
+    if not subjects:
+        blockers.append(Blocker("No subjects added", NAV_DATA_INPUT))
+    else:
+        invalid = sum(1 for s in subjects if not s.is_valid)
+        if invalid:
+            phrase = "subject is" if invalid == 1 else "subjects are"
+            blockers.append(Blocker(f"{invalid} {phrase} invalid", NAV_DATA_INPUT))
+
+    if not is_readout_valid(form_state.readout_auto, form_state.readout_raw):
+        blockers.append(Blocker("Readout time is invalid", NAV_DATA_INPUT))
+
+    if form_state.use_synb0 and not form_state.synb0_output_dir_raw:
+        blockers.append(Blocker("synB0 output folder not set", NAV_SYNB0))
+
+    if not form_state.output_dir:
+        blockers.append(Blocker("Output folder not set", NAV_OUTPUT_SETUP))
+
+    return blockers

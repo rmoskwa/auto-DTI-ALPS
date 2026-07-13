@@ -60,10 +60,14 @@ from ..processing.pipeline import (
 from ..processing.validators import validate_runnable, validate_synb0_output_dir
 from . import config
 from .form_model import (
+    NAV_DATA_INPUT,
+    NAV_OUTPUT_SETUP,
+    NAV_SYNB0,
     FormState,
     OptionState,
     build_batch_state,
     collect_output_config,
+    compute_blockers,
     compute_readiness,
 )
 from .result_model import (
@@ -88,6 +92,15 @@ QPushButton {
 QPushButton:hover:enabled { background-color: #4a9f4a; }
 QPushButton:disabled { background-color: #cccccc; color: #666666; }
 """
+
+# Readiness-strip palette (Decision: neutral to-do tone, never red — the blank
+# first-launch screen is a setup checklist, not an error list). Outstanding rows
+# render an amber ``○`` marker with a link-styled, clickable label; the ready
+# line is green; the running line is muted grey. All phrasing comes from
+# ``form_model.compute_blockers`` — the adapter only supplies colour and markup.
+_STRIP_TODO_COLOR = "#b8860b"  # amber — outstanding, not alarming
+_STRIP_READY_COLOR = "#4a9f4a"  # green — go
+_STRIP_RUNNING_COLOR = "#666666"  # muted — see Console
 
 # Console-tree status tag -> foreground colour, mirroring the Tk viewer's
 # ``tag_configure`` map (Decision 8).
@@ -172,6 +185,7 @@ class DTIALPSApplication(QMainWindow):
 
         # Build UI
         self._create_toolbar()
+        self._create_readiness_strip()
         self._create_main_layout()
 
         # Initialize first stage
@@ -247,11 +261,12 @@ class DTIALPSApplication(QMainWindow):
         )
 
     def _update_run_button_state(self):
-        """Enable/disable the Run button from the current form snapshot."""
+        """Enable/disable the Run button and refresh the readiness strip."""
         readiness = compute_readiness(self._form_state(), self.subject_files_list)
         # While a run is in flight, Run stays disabled regardless of readiness.
         running = self.worker is not None and self.worker.is_alive()
         self.run_btn.setEnabled(readiness.can_run and not running)
+        self._update_readiness_strip(readiness, running)
 
     # ------------------------------------------------------------------ #
     # Toolbar
@@ -277,12 +292,84 @@ class DTIALPSApplication(QMainWindow):
 
         layout.addStretch()
 
+    def _create_readiness_strip(self):
+        """
+        Create the always-visible readiness strip under the toolbar.
+
+        A container whose rows are rebuilt each time by
+        :meth:`_update_readiness_strip` — outstanding-requirement to-do rows
+        (from ``form_model.compute_blockers``), a green ready line, or a muted
+        running line. Lives outside the content stack so it survives navigation
+        while the user jumps between pages to clear each blocker.
+        """
+        self.readiness_strip = QWidget()
+        strip_layout = QVBoxLayout(self.readiness_strip)
+        strip_layout.setContentsMargins(0, 2, 0, 4)
+        strip_layout.setSpacing(1)
+        self.readiness_strip_layout = strip_layout
+
+    def _navigate_to(self, target: str):
+        """Route a blocker row's semantic target to the matching nav page."""
+        if target == NAV_OUTPUT_SETUP:
+            self._show_output_setup()
+        elif target in (NAV_DATA_INPUT, NAV_SYNB0):
+            stages = self._current_stages()
+            for idx, (stage_id, _name) in enumerate(stages):
+                if stage_id == target:
+                    self._show_stage(idx)
+                    break
+
+    def _clear_readiness_strip(self):
+        """Remove all rows from the strip layout."""
+        while self.readiness_strip_layout.count():
+            item = self.readiness_strip_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _strip_label(self, markup: str, color: str) -> QLabel:
+        """A centered strip row rendered from rich text in ``color``."""
+        label = QLabel(markup)
+        label.setTextFormat(Qt.RichText)
+        label.setAlignment(Qt.AlignCenter)
+        label.setStyleSheet(f"color: {color};")
+        return label
+
+    def _update_readiness_strip(self, readiness, running: bool):
+        """Rebuild the strip for the current run/ready/blocked state."""
+        self._clear_readiness_strip()
+
+        if running:
+            self.readiness_strip_layout.addWidget(
+                self._strip_label("&#9654; Running &mdash; see Console", _STRIP_RUNNING_COLOR)
+            )
+            return
+
+        blockers = compute_blockers(self._form_state(), self.subject_files_list)
+        if not blockers:
+            n = len(self.subject_files_list)
+            noun = "subject" if n == 1 else "subjects"
+            self.readiness_strip_layout.addWidget(
+                self._strip_label(f"&#10003; Ready to run {n} {noun}", _STRIP_READY_COLOR)
+            )
+            return
+
+        for blocker in blockers:
+            row = self._strip_label(
+                f'&#9675; <a href="{blocker.target}" '
+                f'style="color: {_STRIP_TODO_COLOR};">{blocker.text}</a>',
+                _STRIP_TODO_COLOR,
+            )
+            row.linkActivated.connect(self._navigate_to)
+            self.readiness_strip_layout.addWidget(row)
+
     def _create_main_layout(self):
         """Create the sidebar (nav) + content stack."""
         central = QWidget()
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
         outer.addWidget(self.toolbar_widget)
+        outer.addWidget(self.readiness_strip)
 
         body = QHBoxLayout()
         outer.addLayout(body)
@@ -1423,10 +1510,11 @@ class DTIALPSApplication(QMainWindow):
 
         self.batch_state = build_batch_state(self._form_state(), self.subject_files_list)
 
-        # Disable Run, arm Cancel.
+        # Disable Run, arm Cancel, flip the strip to its running line.
         self.run_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.cancel_btn.setText("Cancel")
+        self._update_readiness_strip(None, running=True)
 
         # Clear log and console tree, then seed the tree with the subjects.
         self.log_text.clear()
