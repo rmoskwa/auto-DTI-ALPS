@@ -172,6 +172,34 @@ Owned by `processing/messages.py`.
     `QGraphicsView` scrollbars (PRD 0010) are kept `AsNeeded` as a pan fallback for
     users without a middle button. All of zoom/pan/window-level is adapter-owned
     transient cursor state; the pixel math stays in [[render_dec_slice]].
+- **QualityReportModel** (`gui/report_model.py`) — the **Quality Report** page's
+  tk-free presentation model, the read-side sibling of [[ViewerModel]] over the same
+  **results-on-disk contract**. It is the GUI companion to the `--report` CLI
+  (`processing/report.py`). `load_folder(folder)` scans an output dir and returns the
+  discovered **shape tokens** (labelled by the same `roi_display_name` the viewer uses)
+  with **errors-as-data** (`LoadError`-style, as [[ViewerModel]] does, never a widget or
+  messagebox); `subjects_for_shape(token)` lists the subjects that have that
+  shape (the shape drives the checkbox list). It reuses the Qt-free compute leaf
+  `processing/report.py` (`calculate_subject_metrics`, `write_report_csv`) **unchanged** —
+  the model composes those over a chosen **subject subset** without writing to disk, and
+  shapes the numbers into a **QualityReportView**. This subsetting is a capability the
+  whole-folder CLI does not have (PRD 0022).
+  - **QualityReportView** — the plain-data grouped table for one *(shape × subject
+    subset)*: the ordered **metric groups** (`Directional Alignment (V1)`,
+    `Angular Dispersion (V1)`, `Fractional Anisotropy`, `Radial Asymmetry (λ2/λ3)`), the
+    four ROI sub-columns (`left_proj`/`left_assoc`/`right_proj`/`right_assoc`), and one
+    row per subject with cells already formatted. The adapter renders it as a **two-tier
+    grouped header** (a band per metric group spanning its four ROI columns) — the
+    on-disk twin of the CLI CSV's two header rows. The Radial-Asymmetry group is empty
+    for a LAB-only run (no L2/L3), exactly as the CLI CSV leaves it.
+  - **Report worker** (`processing/report_worker.py`) — a `threading.Thread` in the
+    engine (Qt-free) that runs the subset compute and pushes its **own** small typed
+    message set (report *progress* / *complete* / *error* / *cancelled*) onto a
+    `queue.Queue`, drained by the adapter's `QTimer` — the same threading discipline as
+    the pipeline's **worker message stream** but a **separate channel**: these messages
+    are deliberately **not** members of the closed
+    **WorkerMessage** union, so a report event can never leak into pipeline dispatch and
+    the union stays batch-lifecycle-only. Cancellable between subjects via a cancel event.
 - **ROI shape catalog** (`gui/config.py`, `ROI_SHAPES`) — the single ordered table of
   the *selectable* ROI shapes: one frozen **RoiShape**(`token`, `label`, `geometry`,
   `default`) row per shape. It owns the **closed** input-selection vocabulary
