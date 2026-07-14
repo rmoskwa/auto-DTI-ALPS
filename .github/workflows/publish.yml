@@ -18,6 +18,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The JHU ROI templates (dti_alps/templates/*.nii.gz) are tracked in
+          # git-LFS. Without this, checkout leaves ~130-byte LFS pointer stubs
+          # in their place and `python -m build` ships those stubs in the wheel.
+          # pipx then installs a package whose templates are truncated text
+          # files, and FSL fails at ROI placement with "short read, file may be
+          # truncated". Pull the real binaries so the wheel contains real data.
+          lfs: true
 
       - uses: actions/setup-python@v6
         with:
@@ -36,6 +44,25 @@ jobs:
             exit 1
           fi
           echo "Tag and package version agree: ${version}"
+
+      # Guard against shipping git-LFS pointer stubs instead of the real ROI
+      # templates. `twine check` only validates metadata, so a wheel full of
+      # 130-byte pointer files passes it and breaks ROI placement at runtime.
+      # Every template must be a real gzip stream, not an LFS pointer.
+      - name: Verify ROI templates are real files, not LFS pointers
+        run: |
+          fail=0
+          for f in dti_alps/templates/*.nii.gz; do
+            if head -c 64 "$f" | grep -q "git-lfs.github.com/spec"; then
+              echo "::error::$f is a git-LFS pointer stub, not the real template. Checkout must use lfs: true."
+              fail=1
+            elif [ "$(head -c 2 "$f" | xxd -p)" != "1f8b" ]; then
+              echo "::error::$f is not a gzip file (missing 1f8b magic). Template may be corrupt or truncated."
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] && echo "All ROI templates are real gzip files."
+          exit "$fail"
 
       - name: Build sdist and wheel
         run: |
