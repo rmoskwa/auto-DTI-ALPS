@@ -138,7 +138,7 @@ pipx install dti-alps
 #    https://github.com/rmoskwa/auto-DTI-ALPS/releases
 
 # 3. Or, to stay in the conda environment, realign its font stack
-conda install -c conda-forge "freetype>=2.12" harfbuzz --update-deps
+conda install -c conda-forge freetype harfbuzz --update-deps
 ```
 
 Confirm Qt loads before relaunching:

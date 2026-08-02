@@ -4,6 +4,7 @@ DTI-ALPS Processing GUI
 A PySide6 (Qt) graphical interface for end-to-end DTI-ALPS analysis.
 """
 
+import re
 import sys
 
 
@@ -29,22 +30,74 @@ def _check_science_deps():
 RELEASES_URL = "https://github.com/rmoskwa/auto-DTI-ALPS/releases"
 
 
+_MISSING_LIB_RE = re.compile(r"([\w.+-]+\.so[\w.]*): cannot open shared object file")
+
+
+def qt_targeted_remedy(error_text: str) -> list[str] | None:
+    """Match a loader error against the known Qt-load failure families.
+
+    Returns the extra numbered step for a recognised family, or ``None`` when
+    the error says nothing specific enough to act on -- in which case the caller
+    offers only the environment-independent fixes rather than guessing. The
+    families are distinguished by what the dynamic loader reports, since the
+    remedies point in genuinely different directions: a mismatched pair of
+    libraries inside one prefix, a library absent from the host altogether, and
+    a host older than the wheel was built for.
+
+    Order matters. A missing-file report names the library that could not be
+    found, which may itself be ``libfreetype``/``libharfbuzz``, so it is matched
+    before the font-stack family; likewise a glibc version error can be reported
+    against a font library that is merely the one requiring it.
+    """
+    missing = _MISSING_LIB_RE.search(error_text)
+    if missing:
+        lib = missing.group(1)
+        return [
+            f"  3. The host is missing {lib} altogether. Install it with the system",
+            "     package manager (on Debian/Ubuntu, `apt-file search` names the",
+            f"     providing package): sudo apt install <package providing {lib}>",
+        ]
+
+    if "GLIBC_" in error_text:
+        return [
+            "  3. The host's glibc is older than this PySide6 build requires. Note",
+            "     the AppImage does not help here -- it bundles Qt, not glibc. Either",
+            "     install an older PySide6 alongside the app:",
+            '       pipx inject dti-alps "PySide6==<version built for your glibc>"',
+            "     or run on a newer host OS.",
+        ]
+
+    if re.search(r"freetype|harfbuzz|\bFT_", error_text, re.IGNORECASE):
+        return [
+            "  3. Two libraries in this environment disagree (classically a conda",
+            "     prefix whose harfbuzz is newer than its freetype). Realign them:",
+            "       conda install -c conda-forge freetype harfbuzz --update-deps",
+        ]
+
+    return None
+
+
 def qt_load_failure_message(exc: BaseException) -> list[str]:
     """Build the operator-facing lines for a PySide6 that imports but won't load.
 
     Kept as a pure, Qt-free function returning lines (not printing) so the
     wording is testable without a Qt install. The failure it explains is a host
     system-library problem, not a DTI-ALPS defect: PySide6 is present, but
-    loading Qt pulls in shared libraries from the surrounding environment, and a
-    mismatched set there (classically a conda prefix whose ``harfbuzz`` is newer
-    than its ``freetype``) aborts the import.
+    loading Qt pulls in shared libraries from the surrounding environment, and
+    the wrong set there aborts the import.
+
+    The first two fixes hold regardless of which library failed, so they are
+    always offered; a third, diagnosis-specific step is appended only when
+    :func:`qt_targeted_remedy` recognises the error. Anything unrecognised gets
+    no third step -- silence beats confidently misdirecting someone whose
+    failure has nothing to do with the family we happened to see first.
     """
-    return [
+    lines = [
         "Error: PySide6 is installed, but its Qt libraries failed to load.",
         f"  {exc}",
         "",
         "This is a problem with the shared libraries in the current environment,",
-        "not with DTI-ALPS itself. Common fixes, in order of preference:",
+        "not with DTI-ALPS itself. Fixes, in order of preference:",
         "",
         "  1. Install outside conda, in an isolated environment:",
         "       conda deactivate",
@@ -52,10 +105,14 @@ def qt_load_failure_message(exc: BaseException) -> list[str]:
         "",
         "  2. Use the AppImage, which bundles its own Qt (no Python needed):",
         f"       {RELEASES_URL}",
-        "",
-        "  3. If you must stay in a conda environment, realign its font stack:",
-        '       conda install -c conda-forge "freetype>=2.12" harfbuzz --update-deps',
     ]
+
+    remedy = qt_targeted_remedy(str(exc))
+    if remedy is not None:
+        lines.append("")
+        lines.extend(remedy)
+
+    return lines
 
 
 def _check_viewer_dependencies():
