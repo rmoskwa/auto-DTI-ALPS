@@ -93,6 +93,34 @@ the newer AppImage and replace the old file.
 > host. If the app fails to start with an `xcb` platform-plugin error, install
 > it: `sudo apt install libxcb-cursor0` (Debian/Ubuntu).
 
+### Install into a conda environment
+
+Conda is fully supported, and is the right choice if you want to `import
+dti_alps.processing` from your own scripts and notebooks alongside the rest of
+your analysis stack. Take Qt (and the other compiled dependencies) from
+conda-forge, then let pip add the app itself:
+
+```bash
+conda install -c conda-forge pyside6 numpy scipy nibabel
+pip install dti-alps
+```
+
+pip recognises the conda-provided packages as satisfying its requirements and
+installs only `dti-alps` on top, so Qt and its C libraries stay under conda's
+control as one consistent set. Keeping the environment on a single channel
+avoids mismatches between those libraries:
+
+```bash
+conda config --add channels conda-forge
+conda config --set channel_priority strict
+```
+
+If the GUI fails to start with an `undefined symbol` error mentioning
+`libharfbuzz` or `libfreetype`, the environment's font libraries disagree with
+each other; `conda install -c conda-forge freetype harfbuzz --update-deps`
+realigns them. The headless entry points (`--reanalyze`, `--report`) never load
+Qt, so they keep working regardless.
+
 ### From source (development)
 
 ```bash
