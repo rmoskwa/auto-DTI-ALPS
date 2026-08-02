@@ -95,9 +95,7 @@ the newer AppImage and replace the old file.
 
 ### Install into a conda environment
 
-Conda is fully supported, and is the right choice if you want to `import
-dti_alps.processing` from your own scripts and notebooks alongside the rest of
-your analysis stack. Take Qt (and the other compiled dependencies) from
+Take Qt (and the other compiled dependencies) from
 conda-forge, then let pip add the app itself:
 
 ```bash
