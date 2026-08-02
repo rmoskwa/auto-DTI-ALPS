@@ -77,13 +77,6 @@ Update with `pipx upgrade dti-alps`.
 Plain `pip install dti-alps` inside a **virtualenv** works too and provides the
 same `dti-alps` command.
 
-> **Avoid installing into a conda/mamba environment.** The GUI's Qt libraries
-> are loaded from the surrounding environment, and conda prefixes frequently
-> carry a mismatched set (see
-> [GUI fails to start with an `undefined symbol` error](#gui-fails-to-start-with-an-undefined-symbol-error)).
-> Use pipx or the AppImage instead; both keep the GUI out of conda's library
-> path. Run `conda deactivate` first if an environment is active.
-
 ### Download the AppImage (no Python needed)
 
 For double-click file with no Python setup, grab the latest Linux **AppImage** from the [Releases page](https://github.com/rmoskwa/auto-DTI-ALPS/releases):
@@ -105,55 +98,6 @@ the newer AppImage and replace the old file.
 ```bash
 pip install -e ".[gui]"
 ```
-
-### Troubleshooting the install
-
-#### GUI fails to start with an `undefined symbol` error
-
-```
-ImportError: .../lib/libharfbuzz.so.0: undefined symbol: FT_Get_Colorline_Stops
-```
-
-PySide6 is installed, but the Qt libraries it loads are being resolved against a
-mismatched set of system libraries — most often a conda/mamba prefix whose
-`harfbuzz` was built against a newer `freetype` than the one in the same
-environment. The symbol name varies; anything of the form *library X, undefined
-symbol from library Y* is the same problem. It is not specific to this app: the
-same environment breaks any Qt program.
-
-Check whether the install landed in a conda environment:
-
-```bash
-which dti-alps      # .../miniconda3/envs/<name>/bin/dti-alps  →  it did
-```
-
-Fixes, in order of preference:
-
-```bash
-# 1. Reinstall outside conda, isolated (recommended)
-conda deactivate
-pipx install dti-alps
-
-# 2. Or use the AppImage, which bundles its own Qt
-#    https://github.com/rmoskwa/auto-DTI-ALPS/releases
-
-# 3. Or, to stay in the conda environment, realign its font stack
-conda install -c conda-forge freetype harfbuzz --update-deps
-```
-
-Confirm Qt loads before relaunching:
-
-```bash
-python -c "from PySide6.QtWidgets import QApplication; print('ok')"
-```
-
-The headless entry points (`--reanalyze`, `--report`) never load Qt, so they keep
-working in an environment where the GUI cannot start.
-
-#### GUI fails to start with an `xcb` platform-plugin error
-
-Qt 6 needs `libxcb-cursor0` on the host — see the note under
-[Download the AppImage](#download-the-appimage-no-python-needed).
 
 ## Usage
 
