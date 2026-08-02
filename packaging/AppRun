@@ -1,5 +1,21 @@
 #!/bin/sh
 # AppImage entry point: launch the bundled PyInstaller executable, forwarding
 # all CLI args (so --viewer / --report / --reanalyze work from the AppImage).
+#
+# The bundle ships its own Python, Qt and support libraries. Loader variables
+# inherited from the invoking shell can override them with host copies --
+# conda/mamba activation and neuroimaging setup scripts (FSL, MRtrix3) are the
+# usual sources -- which reintroduces exactly the mismatched-library failures
+# the AppImage exists to avoid. Drop them so the bundle resolves against itself.
+#
+# PATH is deliberately left alone: MRtrix3 and FSL are NOT bundled and must
+# still be found on the user's PATH.
+unset LD_LIBRARY_PATH
+unset LD_PRELOAD
+unset PYTHONHOME
+unset PYTHONPATH
+unset QT_PLUGIN_PATH
+unset QML2_IMPORT_PATH
+
 HERE="$(dirname "$(readlink -f "${0}")")"
 exec "${HERE}/usr/bin/dti-alps" "$@"
