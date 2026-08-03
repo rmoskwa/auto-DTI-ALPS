@@ -22,6 +22,48 @@ not redefined here.
   widgets. It owns all phrasing, colour, truncation, and dialog type. The engine and
   the presentation models carry no widget code.
 
+## Front ends
+
+The engine has two, and neither is a client of the other (PRD 0024).
+
+- **Front end** — a package that drives the engine for a user: the **GUI**
+  (`dti_alps/gui/`) or the **CLI** (`dti_alps/cli/`). Each owns its own phrasing and
+  its own presentation model over the same worker message stream; neither imports the
+  other.
+- **Verb** — a CLI subcommand naming one thing the tool does: `run`, `reanalyze`,
+  `report`, `view`, `gui`. `run` is the only one that executes the full pipeline; the
+  rest operate on an output directory a run already produced.
+  _Avoid_: mode, command, action.
+
+## Protocol vs run placement
+
+The two unlike halves of a batch configuration. The distinction is what makes an
+analysis shareable, and it is load-bearing wherever configuration is written to disk.
+
+- **Protocol** — the portable description of *what the analysis is*: which stages run,
+  the acquisition parameters, every per-stage tool option, the ROI shapes and ALPS
+  method, the adaptive search envelope, which outputs are kept. Contains nothing
+  machine-specific, so it can be published beside a methods section or handed to a
+  collaborator unchanged. This is the only thing a **protocol file** carries.
+  _Avoid_: config, settings, preset.
+- **Run placement** — where one invocation lands: the output directory and the staging
+  choice. Machine- and invocation-specific, and never serialized into a protocol file.
+  _Avoid_: output config (that name already means the retention flags).
+- **Protocol hash** — a stable digest of a protocol, stored beside a subject's results
+  so a later run can tell whether it was produced under the *same* analysis.
+- **Completion marker** — the per-subject results artifact carrying that subject's
+  status, ALPS values, and protocol hash. Its presence with a matching hash is what
+  makes a subject skippable on resume; a mismatch means the subject is reprocessed.
+
+## Subject identity
+
+- **Subject id** — the name a discovered run is filed under: it is both the
+  per-subject output directory name and the key of a row in the results CSV. Derived
+  from the data's path, so two runs that resolve to the same id would overwrite each
+  other — a **collision**, which the engine refuses to start on rather than resolving
+  silently.
+  _Avoid_: subject name, participant id.
+
 ## The results-on-disk contract
 
 The artifact the engine writes and the viewer/reports read. Owned by
