@@ -54,6 +54,67 @@ def subject_id_from_path(folder_path: str, id_depth: int = DEFAULT_ID_DEPTH) -> 
     return "_".join(parts[-max(1, id_depth) :])
 
 
+def dwi_stem(filepath: str) -> str:
+    """
+    The filename stem of ``filepath``, with imaging extensions removed.
+
+    Handles double extensions like ``.nii.gz``, and sidecar files that embed the
+    original ``.nii`` / ``.nii.gz`` inside their basename (e.g. Flywheel's
+    ``<dwi>.nii.gz.flywheel.json``), so a sidecar's stem matches its DWI file's.
+
+    >>> dwi_stem("/data/10_1003/DTI64_b1300.nii.gz")
+    'DTI64_b1300'
+    """
+    filename = os.path.basename(filepath)
+    if filename.endswith(".nii.gz"):
+        return filename[:-7]
+    base = os.path.splitext(filename)[0]
+    for nii_ext in (".nii.gz", ".nii"):
+        idx = base.find(nii_ext)
+        if idx >= 0:
+            return base[:idx]
+    return base
+
+
+def assign_subject_ids(subjects: list["SubjectFiles"], id_depth: int = DEFAULT_ID_DEPTH) -> None:
+    """
+    Set ``subject_id`` on every run in ``subjects``, in place.
+
+    The sole owner of the runs-to-ids rule, so discovery and any later renaming
+    (the GUI's id-depth control) cannot drift apart. Runs are grouped by
+    ``folder_path`` and each group named on its own terms:
+
+    - **One run in the folder** -- the folder *is* the subject, so the id is its
+      trailing ``id_depth`` path components. This is what keeps identically
+      named DWI files in sibling folders apart (``10_1003/DTI64.nii.gz`` vs
+      ``10_1005/DTI64.nii.gz``).
+    - **Several runs** -- the folder no longer identifies the subject, the DWI
+      filename stem does. The stem is therefore the deepest identity component
+      and any extra depth comes from the folder's *parents*: at depth 1 the id
+      is the bare stem, at depth 2 it gains the folder name, and so on.
+
+    Ids are derived from ``dwi_path``, never from the incoming ``subject_id``,
+    so re-running at a new depth replaces the previous id rather than
+    compounding it. That idempotence is what lets a caller hold a mutable list
+    of runs and re-name it on every change.
+    """
+    by_folder: dict[str, list[SubjectFiles]] = {}
+    for subject in subjects:
+        by_folder.setdefault(subject.folder_path, []).append(subject)
+
+    depth = max(1, id_depth)
+    for folder, runs in by_folder.items():
+        if len(runs) == 1:
+            runs[0].subject_id = subject_id_from_path(folder, depth)
+            continue
+
+        # Depth 1 leaves the prefix empty, so the id is the bare stem.
+        prefix = subject_id_from_path(folder, depth - 1) if depth > 1 else ""
+        for subject in runs:
+            stem = dwi_stem(subject.dwi_path or "")
+            subject.subject_id = f"{prefix}_{stem}" if prefix else stem
+
+
 def check_unique_subject_ids(subjects: list["SubjectFiles"]) -> None:
     """
     Raise :class:`SubjectIdCollisionError` if any subject id appears twice.
@@ -66,8 +127,10 @@ def check_unique_subject_ids(subjects: list["SubjectFiles"]) -> None:
     re-runs and breaking ``reanalyze`` against an existing output directory.
 
     The message names the colliding id and the DWI files behind it, and suggests
-    the remedy (a deeper ``--id-depth``), because the common cause is a BIDS
-    glob where every leaf folder is named ``dwi``.
+    the remedy (a deeper id), because the common cause is a BIDS glob where
+    every leaf folder is named ``dwi``. It names the remedy in both front ends'
+    terms: this is raised from ``BatchRunner.run_batch``, so a GUI user reads it
+    too and would otherwise go hunting for a flag they cannot type.
     """
     by_id: dict[str, list[SubjectFiles]] = {}
     for subject in subjects:
@@ -87,8 +150,10 @@ def check_unique_subject_ids(subjects: list["SubjectFiles"]) -> None:
         for run in runs:
             lines.append(f"    {run.dwi_path}")
     lines.append(
-        "Increase --id-depth so more of the path contributes to the id "
-        "(e.g. --id-depth 3 turns sub-01/ses-1/dwi into sub-01_ses-1_dwi)."
+        "Increase the id depth so more of the path contributes to the id "
+        "(--id-depth on the command line, the 'ID depth' control beside the "
+        "subject list in the GUI): depth 3 turns sub-01/ses-1/dwi into "
+        "sub-01_ses-1_dwi."
     )
     raise SubjectIdCollisionError("\n".join(lines))
 
@@ -201,12 +266,11 @@ class SubjectDiscovery:
 
         Each DWI file with matching bvec/bval files becomes a separate entry.
 
-        Subject ids are built from ``id_depth`` components of identity, where the
-        *deepest* component is the folder name when the folder holds one run and
-        the DWI filename stem when it holds several -- because with several runs
-        the folder no longer identifies the subject, the stem does:
-
-        For ``/data/raw/10_1003``:
+        Naming is delegated to :func:`assign_subject_ids`, which owns the rule
+        for both discovery and later re-naming. Ids are built from ``id_depth``
+        components of identity, where the *deepest* component is the folder name
+        when the folder holds one run and the DWI filename stem when it holds
+        several. For ``/data/raw/10_1003``:
 
         ===== ===================== ================================
         depth 1 run                 2 runs
@@ -240,26 +304,26 @@ class SubjectDiscovery:
             return []
 
         # Build lookup dictionaries by stem for fast matching
-        bvec_by_stem = {self._get_stem(f): f for f in bvec_files}
-        bval_by_stem = {self._get_stem(f): f for f in bval_files}
-        json_by_stem = {self._get_stem(f): f for f in json_files}
+        bvec_by_stem = {dwi_stem(f): f for f in bvec_files}
+        bval_by_stem = {dwi_stem(f): f for f in bval_files}
+        json_by_stem = {dwi_stem(f): f for f in json_files}
 
         # Find all DWI files with matching bvec/bval
         results: list[SubjectFiles] = []
         matched_dwi_files: list[str] = []
 
         for dwi_path in dwi_files:
-            dwi_stem = self._get_stem(dwi_path)
+            stem = dwi_stem(dwi_path)
 
-            bvec_match = bvec_by_stem.get(dwi_stem)
-            bval_match = bval_by_stem.get(dwi_stem)
-            json_match = json_by_stem.get(dwi_stem)
+            bvec_match = bvec_by_stem.get(stem)
+            bval_match = bval_by_stem.get(stem)
+            json_match = json_by_stem.get(stem)
 
             # Only include if we have matching bvec and bval
             if bvec_match and bval_match:
                 subject = SubjectFiles(
                     folder_path=self.folder_path,
-                    subject_id=dwi_stem,
+                    subject_id=stem,
                     dwi_path=dwi_path,
                     bvec_path=bvec_match,
                     bval_path=bval_match,
@@ -268,40 +332,13 @@ class SubjectDiscovery:
                 results.append(subject)
                 matched_dwi_files.append(dwi_path)
 
-        if len(results) == 1:
-            # Single run: the folder IS the subject, so the id is the trailing
-            # path components. This prevents collisions when different subject
-            # folders contain identically-named DWI files (e.g.
-            # 10_1003/DTI64.nii.gz vs 10_1005/DTI64.nii.gz).
-            results[0].subject_id = subject_id_from_path(self.folder_path, self.id_depth)
-        else:
-            # Multiple runs: the stem is the deepest identity component (it is
-            # what distinguishes the runs), so any extra depth comes from the
-            # folder's *parents*. At depth 1 that prefix is empty and the id is
-            # the bare stem -- today's naming.
-            prefix = self._parent_prefix()
-            for subject in results:
-                subject.subject_id = (
-                    f"{prefix}_{subject.subject_id}" if prefix else subject.subject_id
-                )
+        assign_subject_ids(results, self.id_depth)
 
         # Look for reverse PE images for each result
         for subject in results:
             subject.reverse_pe_path = self._find_reverse_pe(matched_dwi_files, subject.dwi_path)
 
         return results
-
-    def _parent_prefix(self) -> str:
-        """
-        The trailing ``id_depth - 1`` components of this folder's path.
-
-        Empty at depth 1. Used only on the multi-run path, where the DWI stem
-        already supplies the deepest identity component, so the folder name is
-        the *second* component rather than the first.
-        """
-        if self.id_depth <= 1:
-            return ""
-        return subject_id_from_path(self.folder_path, self.id_depth - 1)
 
     def _find_files(self, extensions: list[str]) -> list[str]:
         """Find all files matching given extensions in the folder."""
@@ -310,25 +347,6 @@ class SubjectDiscovery:
             pattern = os.path.join(self.folder_path, ext)
             files.extend(glob(pattern))
         return sorted(files)
-
-    def _get_stem(self, filepath: str) -> str:
-        """
-        Get the filename stem (without extensions).
-
-        Handles double extensions like .nii.gz, and sidecar files that embed
-        the original .nii / .nii.gz inside their basename (e.g. Flywheel's
-        `<dwi>.nii.gz.flywheel.json`), so the stem matches the corresponding
-        DWI file.
-        """
-        filename = os.path.basename(filepath)
-        if filename.endswith(".nii.gz"):
-            return filename[:-7]
-        base = os.path.splitext(filename)[0]
-        for nii_ext in (".nii.gz", ".nii"):
-            idx = base.find(nii_ext)
-            if idx >= 0:
-                return base[:idx]
-        return base
 
     def _find_reverse_pe(self, all_dwi_files: list[str], current_dwi: str | None) -> str | None:
         """

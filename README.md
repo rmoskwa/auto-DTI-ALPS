@@ -170,11 +170,12 @@ dti-alps run --subjects /data/cohort --output /data/out \
     --opt dwifslpreproc:-eddy_options='--repol --slm=linear'
 ```
 
-**BIDS layouts.** Discovery scans a folder and, failing that, its immediate
-subdirectories. Deeper trees are reached with a shell glob. Because every BIDS
-leaf folder is named `dwi`, use `--id-depth` so subjects stay distinguishable;
-`--id-depth 3` files `sub-01/ses-1/dwi` as `sub-01_ses-1_dwi`. A run refuses
-to start if two subjects would resolve to the same identifier.
+Discovery scans a folder and, failing that, its immediate
+subdirectories. Deeper trees are reached with a shell glob. If filenames
+are similar (e.g. a scan protocol named all subfolders + subfiles for each
+subject identically), use  `--id-depth` or the  "ID Depth" spinner in the GUI
+to disambiguate. For example: `--id-depth 3` files `sub-01/ses-1/dwi` as `sub-01_ses-1_dwi`.
+A run refuses to start if two subjects would resolve to the same identifier.
 
 **Exit codes**, for branching in a job script:
 
