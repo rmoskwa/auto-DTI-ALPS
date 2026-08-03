@@ -62,7 +62,7 @@ Whichever route you choose, MRtrix3 and FSL are **not** bundled and must be
 installed separately and on your `PATH` (see
 [External Neuroimaging Software](#external-neuroimaging-software)).
 
-### Install with pipx (recommended)
+### Install with pipx
 
 If you have Python 3.10+, [`pipx`](https://pipx.pypa.io/) installs the app into
 an isolated environment and puts the `dti-alps` command on your `PATH`:
