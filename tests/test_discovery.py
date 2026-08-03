@@ -9,7 +9,16 @@ Focuses on subject_id derivation:
 
 import os
 
-from dti_alps.processing.discovery import SubjectDiscovery
+import pytest
+
+from dti_alps.processing.batch import BatchRunner
+from dti_alps.processing.discovery import (
+    SubjectDiscovery,
+    SubjectIdCollisionError,
+    check_unique_subject_ids,
+    discover_with_subdir_fallback,
+)
+from dti_alps.processing.state import BatchConfig, BatchState
 
 
 def _create_empty_file(path: str) -> None:
@@ -139,3 +148,174 @@ class TestSubjectIdDerivation:
         assert results[0].bvec_path.endswith("DTI64_b1300.bvec")
         assert results[0].bval_path.endswith("DTI64_b1300.bval")
         assert results[0].is_valid
+
+
+class TestIdDepth:
+    """
+    ``id_depth`` widens the subject id to more of the path.
+
+    The motivating case is a BIDS tree: every leaf is named ``dwi``, so at the
+    default depth an entire cohort collapses onto one id.
+    """
+
+    def test_default_depth_is_the_folder_basename(self, tmp_path):
+        """Depth 1 reproduces the historical naming byte for byte."""
+        subject_dir = tmp_path / "sub-01" / "ses-1" / "dwi"
+        _make_dwi_set(str(subject_dir), "dwi")
+
+        results = SubjectDiscovery(str(subject_dir)).discover_files()
+
+        assert results[0].subject_id == "dwi"
+
+    def test_depth_three_joins_the_trailing_components(self, tmp_path):
+        subject_dir = tmp_path / "sub-01" / "ses-1" / "dwi"
+        _make_dwi_set(str(subject_dir), "dwi")
+
+        results = SubjectDiscovery(str(subject_dir), id_depth=3).discover_files()
+
+        assert results[0].subject_id == "sub-01_ses-1_dwi"
+
+    def test_multi_run_depth_one_is_the_bare_stem(self, tmp_path):
+        """Today's multi-run naming: the stem alone, no folder prefix."""
+        subject_dir = tmp_path / "10_1003"
+        subject_dir.mkdir()
+        _make_dwi_set(str(subject_dir), "DTI64_b1300")
+        _make_dwi_set(str(subject_dir), "DTI64_b2600")
+
+        results = SubjectDiscovery(str(subject_dir)).discover_files()
+
+        assert sorted(r.subject_id for r in results) == ["DTI64_b1300", "DTI64_b2600"]
+
+    def test_multi_run_extra_depth_comes_from_the_parents(self, tmp_path):
+        """
+        With several runs the stem is already the deepest identity component,
+        so depth 2 adds the folder above it -- not the folder *and* the stem.
+        """
+        subject_dir = tmp_path / "10_1003"
+        subject_dir.mkdir()
+        _make_dwi_set(str(subject_dir), "DTI64_b1300")
+        _make_dwi_set(str(subject_dir), "DTI64_b2600")
+
+        results = SubjectDiscovery(str(subject_dir), id_depth=2).discover_files()
+
+        assert sorted(r.subject_id for r in results) == [
+            "10_1003_DTI64_b1300",
+            "10_1003_DTI64_b2600",
+        ]
+
+    def test_depth_deeper_than_the_path_does_not_raise(self, tmp_path):
+        subject_dir = tmp_path / "10_1003"
+        subject_dir.mkdir()
+        _make_dwi_set(str(subject_dir), "DTI64")
+
+        results = SubjectDiscovery(str(subject_dir), id_depth=99).discover_files()
+
+        assert results[0].subject_id.endswith("10_1003")
+
+    def test_subdir_fallback_forwards_the_depth(self, tmp_path):
+        cohort = tmp_path / "cohort"
+        for sid in ("sub-01", "sub-02"):
+            _make_dwi_set(str(cohort / sid), "dwi")
+
+        results = discover_with_subdir_fallback(str(cohort), id_depth=2)
+
+        assert sorted(r.subject_id for r in results) == ["cohort_sub-01", "cohort_sub-02"]
+
+
+class TestSubjectIdCollisionGuard:
+    """
+    Duplicate subject ids are a hard error, not a warning.
+
+    The id names the output directory *and* keys the results-CSV row, so two
+    runs sharing one would send both to ``out/<id>/`` and collapse the CSV to a
+    single row -- one subject's numbers silently replaced by another's.
+    ``new_unique_runs`` does not catch this: it dedupes on ``dwi_path``, which
+    is genuinely distinct.
+    """
+
+    def _bids_cohort(self, tmp_path):
+        """Two BIDS subjects whose leaf folders are both named ``dwi``."""
+        runs = []
+        for sid in ("sub-01", "sub-02"):
+            leaf = tmp_path / sid / "ses-1" / "dwi"
+            _make_dwi_set(str(leaf), "dwi")
+            runs.extend(SubjectDiscovery(str(leaf)).discover_files())
+        return runs
+
+    def test_unique_ids_pass(self, tmp_path):
+        for sid in ("10_1003", "10_1005"):
+            _make_dwi_set(str(tmp_path / sid), "DTI64")
+        runs = [
+            r
+            for sid in ("10_1003", "10_1005")
+            for r in SubjectDiscovery(str(tmp_path / sid)).discover_files()
+        ]
+
+        check_unique_subject_ids(runs)  # does not raise
+
+    def test_empty_list_passes(self):
+        check_unique_subject_ids([])
+
+    def test_bids_glob_collision_is_rejected(self, tmp_path):
+        runs = self._bids_cohort(tmp_path)
+        assert [r.subject_id for r in runs] == ["dwi", "dwi"]
+
+        with pytest.raises(SubjectIdCollisionError) as exc:
+            check_unique_subject_ids(runs)
+
+        message = str(exc.value)
+        assert "'dwi'" in message
+        assert "--id-depth" in message
+        # Both offending DWI files are named, so the user can see what collided.
+        assert message.count(".nii.gz") == 2
+
+    def test_id_depth_resolves_the_collision(self, tmp_path):
+        runs = []
+        for sid in ("sub-01", "sub-02"):
+            leaf = tmp_path / sid / "ses-1" / "dwi"
+            _make_dwi_set(str(leaf), "dwi")
+            runs.extend(SubjectDiscovery(str(leaf), id_depth=3).discover_files())
+
+        check_unique_subject_ids(runs)  # does not raise
+        assert sorted(r.subject_id for r in runs) == ["sub-01_ses-1_dwi", "sub-02_ses-1_dwi"]
+
+    def test_multi_run_collision_across_folders_is_rejected(self, tmp_path):
+        """
+        The latent GUI bug: two folders each holding DTI64_b1300 + DTI64_b2600
+        collide by exactly the mechanism the folder-name rule exists to prevent.
+        """
+        runs = []
+        for sid in ("10_1003", "10_1005"):
+            folder = tmp_path / sid
+            folder.mkdir()
+            _make_dwi_set(str(folder), "DTI64_b1300")
+            _make_dwi_set(str(folder), "DTI64_b2600")
+            runs.extend(SubjectDiscovery(str(folder)).discover_files())
+
+        with pytest.raises(SubjectIdCollisionError):
+            check_unique_subject_ids(runs)
+
+
+class TestBatchRunnerChecksIdsBeforeProcessing:
+    """
+    The guard lives in the engine, so both front ends hit it -- and it fires
+    before any data is touched.
+    """
+
+    def test_run_batch_raises_on_collision(self, tmp_path):
+        runs = []
+        for sid in ("sub-01", "sub-02"):
+            leaf = tmp_path / sid / "ses-1" / "dwi"
+            _make_dwi_set(str(leaf), "dwi")
+            runs.extend(SubjectDiscovery(str(leaf)).discover_files())
+
+        state = BatchState(config=BatchConfig(output_dir=str(tmp_path / "out")), subjects=runs)
+        messages = []
+
+        with pytest.raises(SubjectIdCollisionError):
+            BatchRunner(state, progress_callback=messages.append).run_batch()
+
+        # Nothing was announced and no output directory was created: the guard
+        # fires before BatchStart, not partway through a cohort.
+        assert messages == []
+        assert not (tmp_path / "out").exists()

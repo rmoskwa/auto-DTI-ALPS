@@ -160,13 +160,24 @@ class BatchRunner:
         """
         Run batch processing for all subjects.
 
+        Raises
+        ------
+        SubjectIdCollisionError
+            If two runs share a subject id. Checked before any data is touched,
+            because the id names both the output directory and the CSV row key:
+            processing would silently overwrite one subject's results with
+            another's. Both front ends reach the guard here.
+
         Returns
         -------
         bool
             True if all subjects succeeded, False if any failed
         """
         # Import here to avoid circular imports
+        from .discovery import check_unique_subject_ids
         from .pipeline import PipelineRunner
+
+        check_unique_subject_ids(self.batch_state.subjects)
 
         total = self.batch_state.total_subjects
         self._notify(BatchStart(total))
