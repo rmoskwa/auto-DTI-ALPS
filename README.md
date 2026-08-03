@@ -129,6 +129,7 @@ pip install -e ".[gui]"
 
 ```bash
 dti-alps                    # Launch GUI (default)
+dti-alps run --subjects /data/cohort --output /data/out   # Process a cohort
 dti-alps view               # Launch Results Viewer
 dti-alps view /path         # Launch viewer with specific output folder
 dti-alps report /path       # Generate quality reports
@@ -139,3 +140,63 @@ dti-alps reanalyze /path --sphere 3  # Reanalyze with different ROI shapes
 
 When running the AppImage, substitute `./dti-alps-*.AppImage` for `dti-alps`;
 all CLI arguments are forwarded (e.g. `./dti-alps-*.AppImage view /path`).
+
+### Headless processing
+
+`dti-alps run` executes the whole pipeline with no display attached — point it
+at a cohort, walk away, come back to a results CSV.
+
+```bash
+# The simplest complete run: discovery, defaults, one command
+dti-alps run --subjects /data/cohort --output /data/out
+
+# A BIDS cohort, a protocol exported from the GUI, tuned ROIs
+dti-alps run --subjects /bids/sub-*/ses-1/dwi --output /data/out \
+    --config study-protocol.json --id-depth 3 --sphere 2,3 --nthreads 8
+
+# Check what would happen before committing 40 CPU-hours
+dti-alps run --subjects /bids/sub-*/ses-1/dwi --output /data/out --dry-run
+
+# Pick up where a preempted node left off
+dti-alps run --subjects /data/cohort --output /data/out --resume
+```
+
+**Protocol files.** The knobs that vary per run — where the data is, ROI shapes,
+ALPS method, acquisition parameters — are flags. The deep surface (the per-stage
+MRtrix3/FSL options and the output-retention settings) lives in an optional
+protocol file, which the GUI exports from its *Output Setup* page. Flags override
+the file; the file overrides defaults; omitting it entirely still gives a
+complete, working run.
+
+A protocol describes *the analysis only* — it carries no paths from the machine
+that produced it — so you can commit it beside your analysis code and a
+collaborator can run it unchanged. That is why `--output` is always required.
+`--opt STAGE:NAME=VALUE` sets any tool option inline, so you are never blocked on
+authoring a file:
+
+```bash
+dti-alps run --subjects /data/cohort --output /data/out \
+    --opt dwifslpreproc:-eddy_options='--repol --slm=linear'
+```
+
+**BIDS layouts.** Discovery scans a folder and, failing that, its immediate
+subdirectories — the same rule the GUI's "Add folder" uses. Deeper trees are
+reached with a shell glob. Because every BIDS leaf folder is named `dwi`, use
+`--id-depth` so subjects stay distinguishable; `--id-depth 3` files
+`sub-01/ses-1/dwi` as `sub-01_ses-1_dwi`. A run refuses to start if two subjects
+would resolve to the same identifier.
+
+**Exit codes**, for branching in a job script:
+
+| Code | Meaning |
+|------|---------|
+| `0`  | Every subject completed |
+| `1`  | Finished with at least one failure |
+| `2`  | Usage or configuration error |
+| `3`  | Preflight failure — a required MRtrix3/FSL command is missing |
+| `130`| Interrupted with Ctrl-C (the results CSV is still written) |
+
+Raw MRtrix3 and FSL output is shown by default, so an eddy failure can be
+diagnosed without re-running; `--quiet` reduces it to stage- and subject-level
+lines. Either way the run leaves a timestamped `dti_alps_*.log` in the output
+directory, the same record the GUI console produces.
