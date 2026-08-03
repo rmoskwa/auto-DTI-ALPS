@@ -1,6 +1,6 @@
 [project]
 name = "dti-alps"
-version = "0.1.2"
+version = "0.2.0"
 description = "Automatic DTI-ALPS ROI detection and analysis"
 readme = "README.md"
 requires-python = ">=3.10"
