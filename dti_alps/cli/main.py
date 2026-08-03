@@ -34,6 +34,14 @@ EXIT_USAGE = 2
 EXIT_PREFLIGHT = 3
 EXIT_INTERRUPTED = 130
 
+# The `...` in argparse's generated usage line stands in for a verb's own flags
+# without saying how to see them, and `-h` binds to whichever parser reads it
+# first -- so `%(prog)s -h VERB` prints this help, not the verb's.
+EPILOG = """
+Per-verb help:
+  %(prog)s VERB --help    the flags for one verb, e.g. `%(prog)s run -h`
+"""
+
 
 def _launch_gui(args: argparse.Namespace) -> int:
     """Launch the main GUI application (the bare-command default)."""
@@ -51,6 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
             "Automatic DTI-ALPS ROI detection and analysis. "
             "Run with no arguments to launch the GUI."
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
     )
 
     verbs = parser.add_subparsers(dest="verb", metavar="VERB")
