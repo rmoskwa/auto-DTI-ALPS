@@ -21,7 +21,7 @@ import nibabel as nib
 import numpy as np
 import pytest
 
-import dti_alps.__main__ as cli
+import dti_alps.cli.main as cli
 from dti_alps.processing import reanalysis
 from dti_alps.processing.constants import AdaptiveSearchConfig
 from dti_alps.processing.reanalysis import (
@@ -174,15 +174,13 @@ def test_run_reanalysis_without_runner_defaults_to_real(tmp_path, monkeypatch):
 # --- CLI flags: parse, validation, defaults ---------------------------------
 
 
-def _parse(monkeypatch, extra_args):
-    argv = ["prog", "--reanalyze", "/out", "--sphere", "3"] + extra_args
-    monkeypatch.setattr(cli.sys, "argv", argv)
-    return cli._parse_reanalysis_args()
+def _parse(extra_args):
+    """Parse a ``reanalyze`` command line through the real top-level grammar."""
+    return cli.build_parser().parse_args(["reanalyze", "/out", "--sphere", "3"] + extra_args)
 
 
-def test_envelope_flags_parse_to_ints(monkeypatch):
+def test_envelope_flags_parse_to_ints():
     args = _parse(
-        monkeypatch,
         [
             "--search-x",
             "4",
@@ -200,8 +198,8 @@ def test_envelope_flags_parse_to_ints(monkeypatch):
     assert (args.max_y_drift, args.max_z_drift) == (2, 4)
 
 
-def test_envelope_flags_default_to_historical_values(monkeypatch):
-    args = _parse(monkeypatch, [])
+def test_envelope_flags_default_to_historical_values():
+    args = _parse([])
     default = AdaptiveSearchConfig()
     assert args.search_x == default.search_x
     assert args.search_y == default.search_y
@@ -212,9 +210,9 @@ def test_envelope_flags_default_to_historical_values(monkeypatch):
 
 @pytest.mark.parametrize("flag", ["--search-x", "--search-z", "--max-y-drift"])
 @pytest.mark.parametrize("bad", ["0", "5"])
-def test_out_of_range_envelope_flag_rejected(monkeypatch, flag, bad):
+def test_out_of_range_envelope_flag_rejected(flag, bad):
     with pytest.raises(SystemExit):
-        _parse(monkeypatch, [flag, bad])
+        _parse([flag, bad])
 
 
 # --- The assembled envelope reaches placement -------------------------------

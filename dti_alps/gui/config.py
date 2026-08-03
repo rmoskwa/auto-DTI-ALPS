@@ -11,11 +11,15 @@ from dataclasses import dataclass
 # not here. (noqa: these names are intentional re-exports, not dead imports.)
 from ..processing.constants import (  # noqa: F401
     ADAPTIVE_SEARCH_RANGE,
+    ALPS_METHODS,
+    DEFAULT_ALPS_METHOD,
     DEFAULT_PE_DIRECTION,
     DEFAULT_READOUT_TIME,
+    DEFAULT_ROI_METHOD,
     DEFAULT_RPE_SCHEME,
     FA_THRESHOLD,
     READOUT_TIME_RANGE,
+    ROI_METHOD_OPTIONS,
     ROI_SPHERE_RADIUS_RANGE,
     TENSOR_DXX_INDEX,
     TENSOR_DYY_INDEX,
@@ -43,14 +47,6 @@ RPE_SCHEMES = {
     "all": "All DWIs have opposing PE",
     "header": "PE info from image headers",
 }
-
-# ALPS calculation methods
-ALPS_METHODS = ["ALPS-LAB", "ALPS-PAS", "Both"]
-DEFAULT_ALPS_METHOD = "Both"
-
-# ROI method options
-ROI_METHOD_OPTIONS = ["Adaptive", "Standard", "Both"]
-DEFAULT_ROI_METHOD = "Both"
 
 
 # ROI shape catalog (PRD 0015) — the single ordered source for the *selectable*

@@ -18,6 +18,7 @@ Scope): the sidebar stage buttons do not recolor during a run (status coloring
 dropped, Decision 6), and there is a working Cancel button (Decision 7).
 """
 
+import os
 import queue
 import threading
 from pathlib import Path
@@ -55,6 +56,7 @@ from ..processing.discovery import (
     discover_with_subdir_fallback,
     new_unique_runs,
 )
+from ..processing.messages import Log
 from ..processing.pipeline import (
     BatchRunner,
     BatchState,
@@ -67,6 +69,7 @@ from ..processing.report_worker import (
     ReportProgress,
     ReportWorker,
 )
+from ..processing.run_log import LogFileSink, format_log_line
 from ..processing.validators import validate_runnable, validate_synb0_output_dir
 from . import config
 from .form_model import (
@@ -189,8 +192,9 @@ class DTIALPSApplication(QMainWindow):
         self.result_queue = None
         self.result_model = None  # Presentation model translating worker messages to intents
         self.cancel_event: threading.Event | None = None
-        self.log_file = None  # File handle for log output
-        self.log_file_path: str | None = None
+        # The run log is the engine's LogFileSink (processing/run_log.py), composed
+        # around the worker callback -- not a file this adapter owns.
+        self.log_sink: LogFileSink | None = None
 
         # Batch processing state
         self.subject_files_list: list[SubjectFiles] = []
@@ -310,6 +314,9 @@ class DTIALPSApplication(QMainWindow):
         running = self.worker is not None and self.worker.is_alive()
         self.run_btn.setEnabled(readiness.can_run and not running)
         self._update_readiness_strip(readiness, running)
+        # The copyable command mirrors the same paths, so it refreshes on the
+        # same signal the Run button does rather than needing its own wiring.
+        self._refresh_equivalent_command()
 
     # ------------------------------------------------------------------ #
     # Toolbar
@@ -1518,9 +1525,100 @@ class DTIALPSApplication(QMainWindow):
         note = QLabel("Note: The ALPS results CSV is always saved.")
         note.setStyleSheet("color: gray;")
         content.addWidget(note)
+
+        content.addWidget(self._build_headless_group())
         content.addStretch()
 
         self._register_page("output_setup", page)
+
+    def _build_headless_group(self) -> QGroupBox:
+        """
+        The "run this headlessly" section: export a protocol, copy the command.
+
+        It lives on Output Setup because the output-retention checkboxes above
+        are themselves protocol keys, so this is where the full analysis is
+        finally pinned down.
+        """
+        group = QGroupBox("Run headlessly")
+        layout = QVBoxLayout(group)
+
+        blurb = QLabel(
+            "Export this configuration as a protocol file, then run the same "
+            "analysis from a terminal or a job script. The protocol carries the "
+            "analysis only — no paths from this machine — so it can be committed "
+            "beside your code or handed to a collaborator."
+        )
+        blurb.setWordWrap(True)
+        layout.addWidget(blurb)
+
+        row = QHBoxLayout()
+        export_btn = QPushButton("Export Protocol…")
+        export_btn.clicked.connect(self._export_protocol)
+        row.addWidget(export_btn)
+        row.addStretch()
+        layout.addLayout(row)
+
+        layout.addWidget(QLabel("Equivalent command:"))
+        self.equivalent_command_field = QLineEdit()
+        self.equivalent_command_field.setReadOnly(True)
+        # Read-only but selectable and copyable — the point is to paste it into
+        # a job script.
+        self.equivalent_command_field.setStyleSheet("font-family: monospace;")
+        layout.addWidget(self.equivalent_command_field)
+
+        self._exported_protocol_path = ""
+        self._refresh_equivalent_command()
+        return group
+
+    def _refresh_equivalent_command(self):
+        """Re-render the copyable command from the paths currently in the form."""
+        from ..cli.run import equivalent_command
+
+        if not hasattr(self, "equivalent_command_field"):
+            return
+
+        folders = list(dict.fromkeys(s.folder_path for s in self.subject_files_list))
+        self.equivalent_command_field.setText(
+            equivalent_command(
+                folders,
+                self.output_dir_edit.text(),
+                getattr(self, "_exported_protocol_path", ""),
+            )
+        )
+
+    def _export_protocol(self):
+        """Write the current form as a protocol file, through the engine's writer."""
+        from ..processing.config_io import write_protocol
+
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_SAVE)
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Protocol",
+            os.path.join(initial_dir or "", "study-protocol.json"),
+            "JSON files (*.json);;All files (*)",
+        )
+        if not path:
+            return
+
+        # The single tested seam: widget values become domain values in
+        # build_batch_state, exactly as they do on Run. The empty subject list is
+        # deliberate — a protocol describes the analysis, not the cohort.
+        config = build_batch_state(self._form_state(), []).config
+        try:
+            write_protocol(path, config)
+        except OSError as e:
+            QMessageBox.critical(self, "Export Failed", f"Could not write {path}:\n{e}")
+            return
+
+        user_config.set_from_path(UserConfig.KEY_CLI_SAVE, path)
+        self._exported_protocol_path = path
+        self._refresh_equivalent_command()
+        QMessageBox.information(
+            self,
+            "Protocol Exported",
+            f"Written to:\n{path}\n\nThe command below now references it.",
+        )
 
     def _set_all_outputs(self, checked: bool):
         """Check or uncheck every output-retention checkbox."""
@@ -1994,15 +2092,24 @@ class DTIALPSApplication(QMainWindow):
 
         self._show_console()
 
-        self._init_log_file(output_dir)
-        self._log("Starting batch processing...")
-
         self.result_queue = queue.Queue()
         self.cancel_event = threading.Event()
         self.result_model = ResultModel([s.subject_id for s in self.subject_files_list])
 
+        # Compose the engine's log sink around the queue: every message still
+        # reaches the console, and Log lines are additionally filed. The sink
+        # announces the log through the same stream, so the notice lands in the
+        # console like any other line.
+        self.log_sink = LogFileSink(
+            output_dir, collect_output_config(self._form_state().output_flags)
+        )
+        queue_callback = self.log_sink.wrap(self.result_queue.put)
+        queue_callback(Log("Starting batch processing..."))
+
         batch_runner = BatchRunner(self.batch_state)
-        self.worker = BatchWorker(batch_runner, self.result_queue, self.cancel_event)
+        self.worker = BatchWorker(
+            batch_runner, self.result_queue, self.cancel_event, message_sink=queue_callback
+        )
         self.worker.start()
 
         QTimer.singleShot(100, self._check_results)
@@ -2165,58 +2272,24 @@ class DTIALPSApplication(QMainWindow):
     # ------------------------------------------------------------------ #
     # Logging
     # ------------------------------------------------------------------ #
-    def _init_log_file(self, output_dir: str):
-        """Initialize log file in the output directory."""
-        import os
-        from datetime import datetime
-
-        os.makedirs(output_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.log_file_path = os.path.join(output_dir, f"dti_alps_{timestamp}.log")
-        try:
-            self.log_file = open(self.log_file_path, "w", encoding="utf-8")
-            self._log(f"Log file created: {self.log_file_path}")
-        except OSError as e:
-            self._log(f"Warning: Could not create log file: {e}")
-            self.log_file = None
-            self.log_file_path = None
-
     def _close_log_file(self):
-        """Close the log file if open, and delete if not wanted."""
-        import os
-
-        if self.log_file:
-            try:
-                self.log_file.close()
-            except OSError:
-                pass
-            self.log_file = None
-
-        if self.log_file_path:
-            output_config = collect_output_config(self._form_state().output_flags)
-            if not output_config.log_file and os.path.exists(self.log_file_path):
-                try:
-                    os.remove(self.log_file_path)
-                except OSError:
-                    pass
-            self.log_file_path = None
+        """Close the run log, honouring the retention flag (delegated to the sink)."""
+        if self.log_sink is not None:
+            self.log_sink.close()
+            self.log_sink = None
 
     def _log(self, message: str):
-        """Append a timestamped line to the log console (and the log file)."""
+        """Append a timestamped line to the log console.
+
+        The file half of this used to live here; it is the engine's
+        :class:`~dti_alps.processing.run_log.LogFileSink` now, composed around
+        the worker's message stream, so a headless run leaves the same record.
+        The line format is shared with the sink so both agree byte for byte.
+        """
         from datetime import datetime
 
-        timestamp = datetime.now().strftime("[%H:%M:%S]")
-        log_line = f"{timestamp} {message}"
-
-        self.log_text.appendPlainText(log_line)
+        self.log_text.appendPlainText(format_log_line(message, datetime.now()))
         self.log_text.ensureCursorVisible()
-
-        if self.log_file:
-            try:
-                self.log_file.write(log_line + "\n")
-                self.log_file.flush()
-            except OSError:
-                pass
 
 
 def _bold(label: QLabel) -> QLabel:

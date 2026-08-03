@@ -8,6 +8,7 @@ via queues.
 
 import queue
 import threading
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from .messages import BatchCancelled, BatchPartial, BatchSuccess, Error, WorkerMessage
@@ -28,6 +29,7 @@ class BatchWorker(threading.Thread):
         batch_runner: "BatchRunner",
         result_queue: queue.Queue,
         cancel_event: threading.Event,
+        message_sink: Callable[[WorkerMessage], None] | None = None,
     ):
         """
         Initialize the batch worker thread.
@@ -40,18 +42,27 @@ class BatchWorker(threading.Thread):
             Queue for sending results back to GUI
         cancel_event : threading.Event
             Event for signaling cancellation
+        message_sink : callable, optional
+            Where every message is delivered. Defaults to ``result_queue.put``.
+            A front end passes a *composed* sink here -- typically
+            ``LogFileSink.wrap(result_queue.put)`` -- so the log file sees the
+            same stream the GUI does. Supplying it as a parameter rather than
+            setting ``batch_runner.progress_callback`` is deliberate: this
+            worker owns that attribute (it must interleave the cancellation
+            check), so a callback assigned by the caller would be overwritten.
         """
         super().__init__(daemon=True)
         self.batch_runner = batch_runner
         self.result_queue = result_queue
         self.cancel_event = cancel_event
+        self.message_sink = message_sink or result_queue.put
 
     def run(self):
         """Execute batch processing in background."""
         try:
-            # Set up progress callback to send to queue
+            # Deliver progress to the sink, checking cancellation as we go.
             def progress_callback(message: WorkerMessage):
-                self.result_queue.put(message)
+                self.message_sink(message)
 
                 # Check cancellation after each message
                 if self.cancel_event.is_set():
@@ -63,11 +74,11 @@ class BatchWorker(threading.Thread):
             success = self.batch_runner.run_batch()
 
             if self.cancel_event.is_set():
-                self.result_queue.put(BatchCancelled())
+                self.message_sink(BatchCancelled())
             elif success:
-                self.result_queue.put(BatchSuccess(self.batch_runner.batch_state))
+                self.message_sink(BatchSuccess(self.batch_runner.batch_state))
             else:
-                self.result_queue.put(BatchPartial(self.batch_runner.batch_state))
+                self.message_sink(BatchPartial(self.batch_runner.batch_state))
 
         except Exception as e:
-            self.result_queue.put(Error(str(e)))
+            self.message_sink(Error(str(e)))

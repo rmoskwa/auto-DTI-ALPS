@@ -35,7 +35,8 @@ the bare ``rois`` directory and ``alps_results.csv``; every other token gets the
 """
 
 import csv
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # --- ALPS method labels (detected from the CSV column set) ------------------
@@ -280,6 +281,113 @@ def brain_mask_glob() -> str:
     '*_brain_mask.nii.gz'
     """
     return _BRAIN_MASK_TEMPLATE.format(subject="*")
+
+
+# --- Per-subject completion marker ------------------------------------------
+# `_write_csv_results` runs after the whole subject loop, so ALPS numbers live
+# only in memory until the batch ends -- and nothing on disk records that a
+# subject is done. A 200-subject cohort killed at 180 therefore redoes all 180.
+# The marker fixes both: it lands as each subject completes (so a hard kill keeps
+# the finished subjects' numbers) and `--resume` reads it to decide what to skip.
+#
+# It sits *inside* the subject's own directory, beside the data it describes --
+# unlike the batch CSV, which is one row keyed by id at the cohort level.
+COMPLETION_MARKER = "alps_result.json"
+
+
+def completion_marker_path(subject_dir: str | Path) -> Path:
+    """
+    The completion marker's path inside one subject's output directory.
+
+    >>> completion_marker_path("/out/sub-01").name
+    'alps_result.json'
+    """
+    return Path(subject_dir) / COMPLETION_MARKER
+
+
+@dataclass(frozen=True)
+class CompletionMarker:
+    """
+    What one finished subject recorded: its status, its ALPS values, and the
+    hash of the protocol that produced them.
+
+    ``protocol_hash`` is what makes ``--resume`` safe. Skipping on the marker's
+    mere *existence* would be a heuristic: a subject killed mid-FNIRT leaves an
+    output directory that looks populated, so a cohort could silently carry one
+    subject whose ROI masks came from a half-finished warp. Matching the hash
+    also means an edited protocol reprocesses everything, so a cohort can never
+    end up half-processed one way and half the other.
+    """
+
+    subject_id: str
+    status: str
+    protocol_hash: str
+    error: str = ""
+    # ALPS values keyed by shape name, e.g.
+    # {"rois_adaptive": {"alps_lab_left": 1.42, ...}}.
+    alps_by_shape: dict[str, dict] = field(default_factory=dict)
+
+
+def write_completion_marker(subject_dir: str | Path, marker: CompletionMarker) -> None:
+    """
+    Write ``marker`` into ``subject_dir``.
+
+    A pure file-I/O leaf, like :func:`write_alps_csv`: it creates the directory
+    if needed but logs nothing and swallows no errors -- each caller keeps its
+    own failure policy.
+    """
+    path = completion_marker_path(subject_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document = {
+        "subject_id": marker.subject_id,
+        "status": marker.status,
+        "protocol_hash": marker.protocol_hash,
+        "error": marker.error,
+        "alps_by_shape": marker.alps_by_shape,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(document, f, indent=2)
+        f.write("\n")
+
+
+def read_completion_marker(subject_dir: str | Path) -> CompletionMarker | None:
+    """
+    Read the completion marker from ``subject_dir``, or ``None`` if there is
+    none (or it is unreadable).
+
+    An unreadable marker reads as absent rather than raising: the only consumer
+    is ``--resume``, and the safe answer to "is this subject done?" when the
+    record is damaged is *no*.
+    """
+    path = completion_marker_path(subject_dir)
+    try:
+        with open(path, encoding="utf-8") as f:
+            document = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(document, dict):
+        return None
+
+    return CompletionMarker(
+        subject_id=document.get("subject_id", ""),
+        status=document.get("status", ""),
+        protocol_hash=document.get("protocol_hash", ""),
+        error=document.get("error", ""),
+        alps_by_shape=document.get("alps_by_shape") or {},
+    )
+
+
+def is_complete_for_protocol(subject_dir: str | Path, protocol_hash: str) -> bool:
+    """
+    Whether ``subject_dir`` holds a *completed* result for ``protocol_hash``.
+
+    The precise question ``--resume`` asks. False for an absent or damaged
+    marker, for a subject that failed or was skipped, and for one processed
+    under a different protocol.
+    """
+    marker = read_completion_marker(subject_dir)
+    return bool(marker and marker.status == "completed" and marker.protocol_hash == protocol_hash)
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,86 @@ from dataclasses import dataclass, field
 from glob import glob
 from pathlib import Path
 
+# The default subject-id depth: one path component, which is the folder basename.
+# Reproduces the historical naming byte for byte (see :func:`subject_id_from_path`).
+DEFAULT_ID_DEPTH = 1
+
+
+class SubjectIdCollisionError(Exception):
+    """
+    Two or more discovered runs resolve to the same subject id.
+
+    A hard error rather than a warning, because the id is the output directory
+    name (``output_dir/<subject_id>``) *and* the key of every results-CSV row.
+    Two runs sharing an id would write into the same folder and collapse to a
+    single CSV row -- one subject's results silently overwritten by another's.
+
+    Raised by :func:`check_unique_subject_ids`, which both front ends reach
+    through ``BatchRunner.run_batch``.
+    """
+
+
+def subject_id_from_path(folder_path: str, id_depth: int = DEFAULT_ID_DEPTH) -> str:
+    """
+    Derive a subject id from the last ``id_depth`` components of ``folder_path``.
+
+    ``id_depth=1`` (the default) is the folder basename -- the historical rule,
+    reproduced byte for byte. Deeper values join the trailing components with
+    ``_``, which is what makes a BIDS layout addressable: every
+    ``sub-XX/ses-1/dwi`` folder is named ``dwi``, so at depth 1 an entire cohort
+    would collapse onto one id.
+
+    >>> subject_id_from_path("/bids/sub-01/ses-1/dwi")
+    'dwi'
+    >>> subject_id_from_path("/bids/sub-01/ses-1/dwi", 3)
+    'sub-01_ses-1_dwi'
+    >>> subject_id_from_path("/data/10_1003", 5)  # deeper than the path is long
+    'data_10_1003'
+    """
+    parts = [p for p in Path(folder_path).parts if p not in ("/", "\\")]
+    if not parts:
+        return ""
+    return "_".join(parts[-max(1, id_depth) :])
+
+
+def check_unique_subject_ids(subjects: list["SubjectFiles"]) -> None:
+    """
+    Raise :class:`SubjectIdCollisionError` if any subject id appears twice.
+
+    The id is both the output subdirectory name and the results-CSV row key, so
+    a duplicate is unrecoverable data loss rather than cosmetic confusion. This
+    is deliberately *not* auto-repaired by widening the id depth: doing so would
+    make output folder names a function of cohort composition, so adding one
+    subject could rename the output of subjects already processed -- breaking
+    re-runs and breaking ``reanalyze`` against an existing output directory.
+
+    The message names the colliding id and the DWI files behind it, and suggests
+    the remedy (a deeper ``--id-depth``), because the common cause is a BIDS
+    glob where every leaf folder is named ``dwi``.
+    """
+    by_id: dict[str, list[SubjectFiles]] = {}
+    for subject in subjects:
+        by_id.setdefault(subject.subject_id, []).append(subject)
+
+    collisions = {sid: runs for sid, runs in by_id.items() if len(runs) > 1}
+    if not collisions:
+        return
+
+    lines = [
+        f"{len(collisions)} subject id(s) are used by more than one run. "
+        "Each id names an output directory and a results-CSV row, so processing "
+        "would overwrite one subject's results with another's."
+    ]
+    for sid, runs in sorted(collisions.items()):
+        lines.append(f"  '{sid}':")
+        for run in runs:
+            lines.append(f"    {run.dwi_path}")
+    lines.append(
+        "Increase --id-depth so more of the path contributes to the id "
+        "(e.g. --id-depth 3 turns sub-01/ses-1/dwi into sub-01_ses-1_dwi)."
+    )
+    raise SubjectIdCollisionError("\n".join(lines))
+
 
 @dataclass
 class SubjectFiles:
@@ -23,9 +103,11 @@ class SubjectFiles:
     folder_path : str
         Path to the subject's data folder
     subject_id : str
-        Subject identifier. For single-run folders, this is the folder basename
-        (e.g., "10_1003"). For multi-run folders, this is the DWI filename stem
-        (e.g., "DTI64_b1300") to differentiate runs within the same folder.
+        Subject identifier, and the name of this subject's output directory. At
+        the default id depth: the folder basename for single-run folders (e.g.
+        "10_1003"), the DWI filename stem for multi-run folders (e.g.
+        "DTI64_b1300") to differentiate runs within the same folder. Deeper ids
+        prepend more of the path -- see :meth:`SubjectDiscovery.discover_files`.
     dwi_path : str or None
         Path to 4D diffusion-weighted image
     bvec_path : str or None
@@ -97,7 +179,7 @@ class SubjectDiscovery:
     BVAL_EXTENSIONS = ["*.bval", "*.bvals"]
     JSON_EXTENSIONS = ["*.json"]
 
-    def __init__(self, folder_path: str):
+    def __init__(self, folder_path: str, id_depth: int = DEFAULT_ID_DEPTH):
         """
         Initialize discovery for a folder.
 
@@ -105,17 +187,42 @@ class SubjectDiscovery:
         ----------
         folder_path : str
             Path to the subject's data folder
+        id_depth : int
+            How many trailing path components contribute to the subject id.
+            ``1`` (the default) reproduces the historical naming exactly; see
+            :meth:`discover_files` for how it composes with the multi-run rule.
         """
         self.folder_path = os.path.abspath(folder_path)
+        self.id_depth = max(1, id_depth)
 
     def discover_files(self) -> list[SubjectFiles]:
         """
         Auto-discover all DWI runs in the folder.
 
         Each DWI file with matching bvec/bval files becomes a separate entry.
-        When a single DWI run is found, subject_id is set to the folder basename
-        (e.g., "10_1003") since the folder identifies the subject. When multiple
-        runs are found, subject_id uses the DWI filename stem to differentiate them.
+
+        Subject ids are built from ``id_depth`` components of identity, where the
+        *deepest* component is the folder name when the folder holds one run and
+        the DWI filename stem when it holds several -- because with several runs
+        the folder no longer identifies the subject, the stem does:
+
+        For ``/data/raw/10_1003``:
+
+        ===== ===================== ================================
+        depth 1 run                 2 runs
+        ===== ===================== ================================
+          1   ``10_1003``           ``DTI64_b1300``
+          2   ``raw_10_1003``       ``10_1003_DTI64_b1300``
+          3   ``data_raw_10_1003``  ``raw_10_1003_DTI64_b1300``
+        ===== ===================== ================================
+
+        At the default depth of 1 this is the historical naming byte for byte.
+        Deeper values are what make a BIDS tree addressable: every leaf there is
+        named ``dwi``, so ``--id-depth 3`` yields ``sub-01_ses-1_dwi``.
+
+        Ids are *not* auto-disambiguated on collision -- see
+        :func:`check_unique_subject_ids` for why widening silently would be worse
+        than failing.
 
         Returns
         -------
@@ -161,17 +268,40 @@ class SubjectDiscovery:
                 results.append(subject)
                 matched_dwi_files.append(dwi_path)
 
-        # Single run: use folder name as subject_id (the folder IS the subject)
-        # This prevents collisions when different subject folders contain
-        # identically-named DWI files (e.g., 10_1003/DTI64.nii.gz vs 10_1005/DTI64.nii.gz)
         if len(results) == 1:
-            results[0].subject_id = os.path.basename(self.folder_path)
+            # Single run: the folder IS the subject, so the id is the trailing
+            # path components. This prevents collisions when different subject
+            # folders contain identically-named DWI files (e.g.
+            # 10_1003/DTI64.nii.gz vs 10_1005/DTI64.nii.gz).
+            results[0].subject_id = subject_id_from_path(self.folder_path, self.id_depth)
+        else:
+            # Multiple runs: the stem is the deepest identity component (it is
+            # what distinguishes the runs), so any extra depth comes from the
+            # folder's *parents*. At depth 1 that prefix is empty and the id is
+            # the bare stem -- today's naming.
+            prefix = self._parent_prefix()
+            for subject in results:
+                subject.subject_id = (
+                    f"{prefix}_{subject.subject_id}" if prefix else subject.subject_id
+                )
 
         # Look for reverse PE images for each result
         for subject in results:
             subject.reverse_pe_path = self._find_reverse_pe(matched_dwi_files, subject.dwi_path)
 
         return results
+
+    def _parent_prefix(self) -> str:
+        """
+        The trailing ``id_depth - 1`` components of this folder's path.
+
+        Empty at depth 1. Used only on the multi-run path, where the DWI stem
+        already supplies the deepest identity component, so the folder name is
+        the *second* component rather than the first.
+        """
+        if self.id_depth <= 1:
+            return ""
+        return subject_id_from_path(self.folder_path, self.id_depth - 1)
 
     def _find_files(self, extensions: list[str]) -> list[str]:
         """Find all files matching given extensions in the folder."""
@@ -241,7 +371,9 @@ class SubjectDiscovery:
         return None
 
 
-def discover_with_subdir_fallback(folder: str) -> list[SubjectFiles]:
+def discover_with_subdir_fallback(
+    folder: str, id_depth: int = DEFAULT_ID_DEPTH
+) -> list[SubjectFiles]:
     """
     Discover DWI runs in a folder, falling back to immediate subdirectories.
 
@@ -250,10 +382,19 @@ def discover_with_subdir_fallback(folder: str) -> list[SubjectFiles]:
     results are concatenated. This lets a user select either a single subject
     folder or a parent folder containing several subject folders.
 
+    The fallback is deliberately one level deep only. Deeper trees are reached
+    by shell globbing on the CLI (``--subjects /bids/sub-*/ses-1/dwi``) rather
+    than by a recursive walk here: shell expansion is more expressive than any
+    ``--depth`` flag, and a recursive walk would be CLI-only behaviour, so GUI
+    and CLI discovery would diverge.
+
     Parameters
     ----------
     folder : str
         Folder to scan (a subject folder or a parent of subject folders).
+    id_depth : int
+        Forwarded to :class:`SubjectDiscovery`; how many trailing path
+        components contribute to each subject id.
 
     Returns
     -------
@@ -262,14 +403,14 @@ def discover_with_subdir_fallback(folder: str) -> list[SubjectFiles]:
         top-level scan is empty; an empty list means nothing was found at
         either level.
     """
-    discovered = SubjectDiscovery(folder).discover_files()
+    discovered = SubjectDiscovery(folder, id_depth).discover_files()
     if discovered:
         return discovered
 
     runs: list[SubjectFiles] = []
     subdirs = sorted(p for p in Path(folder).iterdir() if p.is_dir())
     for subdir in subdirs:
-        runs.extend(SubjectDiscovery(str(subdir)).discover_files())
+        runs.extend(SubjectDiscovery(str(subdir), id_depth).discover_files())
     return runs
 
 

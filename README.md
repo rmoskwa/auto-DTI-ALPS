@@ -15,7 +15,7 @@ Core dependencies (installed automatically):
 - [PySide6](https://doc.qt.io/qtforpython/) — the Qt toolkit for the GUI and results viewer
 
 The engine (`dti_alps.processing.*`) is Qt-free and imports PySide6 lazily, so
-headless CLI use (`--reanalyze`, `--report`) and library use never load Qt.
+headless CLI use (`reanalyze`, `report`) and library use never load Qt.
 
 ### External Neuroimaging Software
 
@@ -116,8 +116,8 @@ conda config --set channel_priority strict
 If the GUI fails to start with an `undefined symbol` error mentioning
 `libharfbuzz` or `libfreetype`, the environment's font libraries disagree with
 each other; `conda install -c conda-forge freetype harfbuzz --update-deps`
-realigns them. The headless entry points (`--reanalyze`, `--report`) never load
-Qt, so they keep working regardless.
+realigns them. The headless verbs (`run`, `reanalyze`, `report`) never load Qt,
+so they keep working regardless.
 
 ### From source (development)
 
@@ -129,11 +129,64 @@ pip install -e ".[gui]"
 
 ```bash
 dti-alps                    # Launch GUI (default)
-dti-alps --viewer           # Launch Results Viewer
-dti-alps --viewer /path     # Launch viewer with specific output folder
-dti-alps --report /path     # Generate quality reports
-dti-alps --reanalyze /path --sphere 3  # Reanalyze with different ROI shapes
+dti-alps run --subjects /data/cohort --output /data/out   # Process a cohort
+dti-alps view               # Launch Results Viewer
+dti-alps view /path         # Launch viewer with specific output folder
+dti-alps report /path       # Generate quality reports
+dti-alps reanalyze /path --sphere 3  # Reanalyze with different ROI shapes
 ```
 
+`dti-alps VERB --help` lists the flags for any one verb.
+
 When running the AppImage, substitute `./dti-alps-*.AppImage` for `dti-alps`;
-all CLI flags are forwarded (e.g. `./dti-alps-*.AppImage --viewer /path`).
+all CLI arguments are forwarded (e.g. `./dti-alps-*.AppImage view /path`).
+
+### Headless processing
+
+`dti-alps run` executes the whole pipeline with no display attached.
+
+```bash
+# The simplest complete run: discovery, defaults, one command
+dti-alps run --subjects /data/cohort --output /data/out
+
+# A BIDS cohort, a protocol exported from the GUI, tuned ROIs
+dti-alps run --subjects /bids/sub-*/ses-1/dwi --output /data/out \
+    --config study-protocol.json --id-depth 3 --sphere 2,3 --nthreads 8
+
+# Check what would happen before committing to a long run
+dti-alps run --subjects /bids/sub-*/ses-1/dwi --output /data/out --dry-run
+
+# Pick up where a preempted node left off
+dti-alps run --subjects /data/cohort --output /data/out --resume
+```
+You can save protocol settings as **config files** which can be exported through the GUI within the **Output Setup** page.
+Pass the config.json file into the CLI command to avoid typing out needlessly long arguments.
+
+`--opt STAGE:NAME=VALUE` sets any tool option inline, so you are never blocked on
+authoring a file:
+
+```bash
+dti-alps run --subjects /data/cohort --output /data/out \
+    --opt dwifslpreproc:-eddy_options='--repol --slm=linear'
+```
+
+**BIDS layouts.** Discovery scans a folder and, failing that, its immediate
+subdirectories. Deeper trees are reached with a shell glob. Because every BIDS
+leaf folder is named `dwi`, use `--id-depth` so subjects stay distinguishable;
+`--id-depth 3` files `sub-01/ses-1/dwi` as `sub-01_ses-1_dwi`. A run refuses
+to start if two subjects would resolve to the same identifier.
+
+**Exit codes**, for branching in a job script:
+
+| Code | Meaning |
+|------|---------|
+| `0`  | Every subject completed |
+| `1`  | Finished with at least one failure |
+| `2`  | Usage or configuration error |
+| `3`  | Preflight failure — a required MRtrix3/FSL command is missing |
+| `130`| Interrupted with Ctrl-C (the results CSV is still written) |
+
+Raw MRtrix3 and FSL output is shown by default, so an eddy failure can be
+diagnosed without re-running; `--quiet` reduces it to stage- and subject-level
+lines. Either way the run leaves a timestamped `dti_alps_*.log` in the output
+directory, the same record the GUI console produces.

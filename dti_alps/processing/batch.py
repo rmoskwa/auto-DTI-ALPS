@@ -132,11 +132,6 @@ class BatchRunner:
             dwifslpreproc_options=dict(batch_config.dwifslpreproc_options),
             dwi2tensor_options=dict(batch_config.dwi2tensor_options),
             tensor2metric_options=dict(batch_config.tensor2metric_options),
-            # Legacy preprocessing options (for backward compatibility)
-            eddy_options=batch_config.eddy_options,
-            topup_options=batch_config.topup_options,
-            generate_qc=batch_config.generate_qc,
-            keep_intermediates=batch_config.keep_intermediates,
             # synB0-DISCO parameters (user runs synB0 externally)
             use_synb0=batch_config.use_synb0,
             synb0_output_dir=batch_config.synb0_output_dir,
@@ -165,13 +160,24 @@ class BatchRunner:
         """
         Run batch processing for all subjects.
 
+        Raises
+        ------
+        SubjectIdCollisionError
+            If two runs share a subject id. Checked before any data is touched,
+            because the id names both the output directory and the CSV row key:
+            processing would silently overwrite one subject's results with
+            another's. Both front ends reach the guard here.
+
         Returns
         -------
         bool
             True if all subjects succeeded, False if any failed
         """
         # Import here to avoid circular imports
+        from .discovery import check_unique_subject_ids
         from .pipeline import PipelineRunner
+
+        check_unique_subject_ids(self.batch_state.subjects)
 
         total = self.batch_state.total_subjects
         self._notify(BatchStart(total))
@@ -186,6 +192,7 @@ class BatchRunner:
             result = self._process_single_subject(subject_files, i, PipelineRunner)
             self.batch_state.results.append(result)
 
+            self._write_completion_marker(result)
             self._notify(SubjectComplete(i, result))
 
         # Write CSV output
@@ -376,6 +383,34 @@ class BatchRunner:
 
         result.processing_time = time.time() - start_time
         return result
+
+    def _write_completion_marker(self, result: SubjectResult) -> None:
+        """
+        Record this subject's outcome beside its data, as it finishes.
+
+        Two jobs in one file. It is the durability fix: `_write_csv_results`
+        runs only after the whole loop, so a hard kill (preemption, OOM) would
+        otherwise lose every finished subject's numbers. And it is what
+        ``--resume`` reads -- carrying the protocol hash, so a subject processed
+        under different settings is reprocessed rather than wrongly skipped.
+
+        Marker failures never fail a subject: the analysis succeeded, and losing
+        the ability to resume is a smaller loss than discarding the result.
+        """
+        from .config_io import protocol_hash
+
+        subject_dir = os.path.join(self.batch_state.config.output_dir, result.subject_id)
+        marker = results_layout.CompletionMarker(
+            subject_id=result.subject_id,
+            status=result.status,
+            protocol_hash=protocol_hash(self.batch_state.config),
+            error=result.error_message or "",
+            alps_by_shape=result.alps_results_by_shape,
+        )
+        try:
+            results_layout.write_completion_marker(subject_dir, marker)
+        except OSError as e:
+            self._notify(Log(f"  Warning: could not write completion marker: {e}"))
 
     def _mark_remaining_skipped(self, start_index: int) -> None:
         """Mark remaining subjects as skipped due to cancellation."""
