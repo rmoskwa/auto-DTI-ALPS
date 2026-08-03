@@ -15,7 +15,7 @@ Core dependencies (installed automatically):
 - [PySide6](https://doc.qt.io/qtforpython/) — the Qt toolkit for the GUI and results viewer
 
 The engine (`dti_alps.processing.*`) is Qt-free and imports PySide6 lazily, so
-headless CLI use (`--reanalyze`, `--report`) and library use never load Qt.
+headless CLI use (`reanalyze`, `report`) and library use never load Qt.
 
 ### External Neuroimaging Software
 
@@ -116,8 +116,8 @@ conda config --set channel_priority strict
 If the GUI fails to start with an `undefined symbol` error mentioning
 `libharfbuzz` or `libfreetype`, the environment's font libraries disagree with
 each other; `conda install -c conda-forge freetype harfbuzz --update-deps`
-realigns them. The headless entry points (`--reanalyze`, `--report`) never load
-Qt, so they keep working regardless.
+realigns them. The headless verbs (`run`, `reanalyze`, `report`) never load Qt,
+so they keep working regardless.
 
 ### From source (development)
 
@@ -129,11 +129,13 @@ pip install -e ".[gui]"
 
 ```bash
 dti-alps                    # Launch GUI (default)
-dti-alps --viewer           # Launch Results Viewer
-dti-alps --viewer /path     # Launch viewer with specific output folder
-dti-alps --report /path     # Generate quality reports
-dti-alps --reanalyze /path --sphere 3  # Reanalyze with different ROI shapes
+dti-alps view               # Launch Results Viewer
+dti-alps view /path         # Launch viewer with specific output folder
+dti-alps report /path       # Generate quality reports
+dti-alps reanalyze /path --sphere 3  # Reanalyze with different ROI shapes
 ```
 
+`dti-alps VERB --help` lists the flags for any one verb.
+
 When running the AppImage, substitute `./dti-alps-*.AppImage` for `dti-alps`;
-all CLI flags are forwarded (e.g. `./dti-alps-*.AppImage --viewer /path`).
+all CLI arguments are forwarded (e.g. `./dti-alps-*.AppImage view /path`).
