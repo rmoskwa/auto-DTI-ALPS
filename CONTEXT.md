@@ -14,13 +14,15 @@ not redefined here.
   test that asserts the *property* (no toolkit resident after importing an engine
   module — the engine runs headless), not merely the proxy (no `dti_alps.gui`
   resident).
-- **GUI** — the `dti_alps/gui/` package. May hold tk-free **presentation models**
+- **GUI** — the `dti_alps/gui/` package. May hold Qt-free **presentation models**
   (see *ResultModel*, *ViewerModel*) that carry GUI text and shaping but import no
-  Tkinter, plus the Tkinter **adapter** layer that renders them.
-- **Adapter** — the Tkinter (one day PySide6) layer. It reads widgets, calls a
-  presentation model or engine function, and applies the returned plain data to
+  PySide6, plus the Qt **adapter** layer that renders them.
+- **Adapter** — the PySide6 layer (`gui/app.py`, `gui/viewer.py`). It reads widgets,
+  calls a presentation model or engine function, and applies the returned plain data to
   widgets. It owns all phrasing, colour, truncation, and dialog type. The engine and
-  the presentation models carry no widget code.
+  the presentation models carry no widget code. Qt is the only toolkit: the Tk adapter
+  was removed in PRD 0013, and the models it was written against survived the port
+  unchanged — which is the point of the seam.
 
 ## Front ends
 
@@ -133,7 +135,7 @@ Owned by `processing/messages.py`.
   the batch-level messages. (The single-subject `PipelineWorker` and its
   `complete`/`cancelled`/`failed` messages were cut — the GUI runs every job as a batch.)
 
-## Presentation models (tk-free, GUI-side)
+## Presentation models (Qt-free, GUI-side)
 
 - **ResultModel** (`gui/result_model.py`) — translates a worker-queue message into an
   ordered list of **view-intents** (frozen dataclasses the adapter applies). Drives
@@ -215,7 +217,7 @@ Owned by `processing/messages.py`.
     users without a middle button. All of zoom/pan/window-level is adapter-owned
     transient cursor state; the pixel math stays in [[render_dec_slice]].
 - **QualityReportModel** (`gui/report_model.py`) — the **Quality Report** page's
-  tk-free presentation model, the read-side sibling of [[ViewerModel]] over the same
+  Qt-free presentation model, the read-side sibling of [[ViewerModel]] over the same
   **results-on-disk contract**. It is the GUI companion to the `--report` CLI
   (`processing/report.py`). `load_folder(folder)` scans an output dir and returns the
   discovered **shape tokens** (labelled by the same `roi_display_name` the viewer uses)
@@ -262,7 +264,7 @@ Owned by `processing/messages.py`.
   `geometry`. Exactly one row is `default=True` — it both pre-checks the box and is
   the form model's "nothing selected → this shape" fallback. The engine never imports
   the catalog; it sees only the `geometry` dict inside `BatchConfig` (PRD 0015).
-- **Form model** (input side, `gui/form_model.py`) — the tk-free **input model**:
+- **Form model** (input side, `gui/form_model.py`) — the Qt-free **input model**:
   *not* a stateful `*Model` class but a module of pure builders over a **FormState**
   snapshot. The input-side mirror of [[ResultModel]]: ResultModel maps *worker message
   → view-intents*; the form model maps *form snapshot → domain objects*. The adapter
@@ -315,7 +317,7 @@ Owned by `processing/messages.py`.
   each a link that jumps to the page that fixes it; **ready** — a green
   "✓ Ready to run N subjects" line (the Run button is now enabled); **running** — a
   muted "▶ Running — see Console" line. Rebuilt each `_update_run_button_state` from
-  the tk-free model; the adapter owns only colour, marker, and link markup. Tone is
+  the Qt-free model; the adapter owns only colour, marker, and link markup. Tone is
   deliberately never red — a blank first launch is a checklist, not an error list.
 
 ## Science terms (brief)
