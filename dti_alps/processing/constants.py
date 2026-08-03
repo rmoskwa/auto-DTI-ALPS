@@ -40,6 +40,21 @@ QUALITY_WARN_RADIAL_ASYMMETRY_MAX = 2.0  # λ2/λ3; warn if mean ratio > this
 # Readout time validation range (seconds)
 READOUT_TIME_RANGE = (0.001, 1.0)
 
+# ALPS calculation method: the closed vocabulary ``alps_method`` is drawn from,
+# and its default.
+ALPS_METHODS = ["ALPS-LAB", "ALPS-PAS", "Both"]
+DEFAULT_ALPS_METHOD = "Both"
+
+# ROI placement method: the closed vocabulary ``adaptive_roi_placement`` is drawn
+# from, and its default. The default lives here rather than in ``gui/config.py``
+# because all three consumers -- BatchConfig, PipelineState, and the GUI form --
+# must agree on it. They did not: the dataclasses defaulted to "Adaptive" while
+# the GUI defaulted to "Both", a divergence invisible only because the GUI always
+# set the field explicitly. A second front end reading the dataclass default would
+# have run a different analysis from the GUI with no flag in sight.
+ROI_METHOD_OPTIONS = ["Adaptive", "Standard", "Both"]
+DEFAULT_ROI_METHOD = "Both"
+
 # ROI sphere radius validation range (mm)
 ROI_SPHERE_RADIUS_RANGE = (1.0, 4.0)
 

@@ -11,8 +11,10 @@ from typing import TYPE_CHECKING, Any
 
 from . import results_layout
 from .constants import (
+    DEFAULT_ALPS_METHOD,
     DEFAULT_PE_DIRECTION,
     DEFAULT_READOUT_TIME,
+    DEFAULT_ROI_METHOD,
     DEFAULT_RPE_SCHEME,
     FA_THRESHOLD,
     AdaptiveSearchConfig,
@@ -143,9 +145,9 @@ class PipelineState:
     # FA threshold for filtering CSF voxels from ROIs
     fa_threshold: float = FA_THRESHOLD
     # ALPS calculation method (ALPS-LAB or ALPS-PAS)
-    alps_method: str = "Both"
+    alps_method: str = DEFAULT_ALPS_METHOD
     # ROI placement mode: "Adaptive", "Standard", or "Both"
-    adaptive_roi_placement: str = "Adaptive"
+    adaptive_roi_placement: str = DEFAULT_ROI_METHOD
     # Adaptive search envelope (per-run tuning of the joint pair search)
     adaptive_search: AdaptiveSearchConfig = field(default_factory=AdaptiveSearchConfig)
 
@@ -273,8 +275,8 @@ class BatchConfig:
         default_factory=lambda: [{"type": "sphere", "radius": 3.0}]
     )
     fa_threshold: float = FA_THRESHOLD  # FA threshold for filtering CSF voxels
-    alps_method: str = "Both"  # ALPS calculation method (ALPS-LAB, ALPS-PAS, or Both)
-    adaptive_roi_placement: str = "Adaptive"  # "Adaptive", "Standard", or "Both"
+    alps_method: str = DEFAULT_ALPS_METHOD  # ALPS-LAB, ALPS-PAS, or Both
+    adaptive_roi_placement: str = DEFAULT_ROI_METHOD  # "Adaptive", "Standard", or "Both"
     # Adaptive search envelope (per-run tuning of the joint pair search)
     adaptive_search: AdaptiveSearchConfig = field(default_factory=AdaptiveSearchConfig)
 

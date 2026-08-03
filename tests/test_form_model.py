@@ -20,9 +20,15 @@ from dti_alps.gui.form_model import (
     compute_blockers,
     compute_readiness,
 )
-from dti_alps.processing.constants import AdaptiveSearchConfig
+from dti_alps.processing.constants import (
+    ALPS_METHODS,
+    DEFAULT_ALPS_METHOD,
+    DEFAULT_ROI_METHOD,
+    ROI_METHOD_OPTIONS,
+    AdaptiveSearchConfig,
+)
 from dti_alps.processing.discovery import SubjectFiles
-from dti_alps.processing.state import BatchState, OutputConfig
+from dti_alps.processing.state import BatchConfig, BatchState, OutputConfig, PipelineState
 from dti_alps.processing.validators import is_readout_valid
 
 
@@ -368,3 +374,40 @@ class TestReadoutValidityInversionGuard:
 
     def test_manual_parseable_is_valid(self):
         assert is_readout_valid(False, "0.05") is True
+
+
+class TestRoiAndAlpsMethodDefaultsAgree:
+    """
+    The ROI/ALPS method vocabularies and defaults live in the engine, so the
+    three consumers cannot disagree about them.
+
+    The divergence this guards against was real: ``BatchConfig`` and
+    ``PipelineState`` defaulted ``adaptive_roi_placement`` to "Adaptive" while
+    the GUI form defaulted it to "Both". It stayed invisible because the GUI
+    always set the field explicitly -- but a front end that builds a
+    ``BatchConfig`` from its defaults (the CLI) would silently run a different
+    analysis from the GUI with no flag in sight.
+    """
+
+    def test_roi_method_default_is_one_value_across_all_three(self):
+        assert BatchConfig().adaptive_roi_placement == DEFAULT_ROI_METHOD
+        assert PipelineState().adaptive_roi_placement == DEFAULT_ROI_METHOD
+        assert FormState().adaptive_roi_placement == DEFAULT_ROI_METHOD
+
+    def test_alps_method_default_is_one_value_across_all_three(self):
+        assert BatchConfig().alps_method == DEFAULT_ALPS_METHOD
+        assert PipelineState().alps_method == DEFAULT_ALPS_METHOD
+        assert FormState().alps_method == DEFAULT_ALPS_METHOD
+
+    def test_defaults_are_members_of_their_vocabularies(self):
+        assert DEFAULT_ROI_METHOD in ROI_METHOD_OPTIONS
+        assert DEFAULT_ALPS_METHOD in ALPS_METHODS
+
+    def test_gui_config_re_exports_the_engine_values(self):
+        """``config.X`` must resolve to the engine's value, not a GUI copy."""
+        from dti_alps.gui import config
+
+        assert config.DEFAULT_ROI_METHOD is DEFAULT_ROI_METHOD
+        assert config.DEFAULT_ALPS_METHOD is DEFAULT_ALPS_METHOD
+        assert config.ROI_METHOD_OPTIONS is ROI_METHOD_OPTIONS
+        assert config.ALPS_METHODS is ALPS_METHODS

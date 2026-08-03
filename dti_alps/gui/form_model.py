@@ -22,8 +22,10 @@ source of truth. It imports only ``processing`` types, ``processing.validators``
 from dataclasses import dataclass, field
 
 from ..processing.constants import (
+    DEFAULT_ALPS_METHOD,
     DEFAULT_PE_DIRECTION,
     DEFAULT_READOUT_TIME,
+    DEFAULT_ROI_METHOD,
     DEFAULT_RPE_SCHEME,
     FA_THRESHOLD,
     AdaptiveSearchConfig,
@@ -118,8 +120,8 @@ class FormState:
     use_synb0: bool = False
     synb0_output_dir_raw: str = ""
     fa_threshold: float = FA_THRESHOLD
-    alps_method: str = "Both"
-    adaptive_roi_placement: str = "Both"
+    alps_method: str = DEFAULT_ALPS_METHOD
+    adaptive_roi_placement: str = DEFAULT_ROI_METHOD
     # Adaptive search envelope, as five raw widget scalars. Assembled into an
     # AdaptiveSearchConfig (where the 1-4 guard fires) in build_batch_state.
     # Defaults track the AdaptiveSearchConfig defaults so an untouched form
