@@ -555,12 +555,17 @@ def validate_data_flags(args: argparse.Namespace) -> str | None:
 
 
 def preflight(use_synb0: bool) -> list[str]:
-    """Return the external commands that are missing, in report order."""
-    from ..processing.commands import check_fsl_available, check_mrtrix3_available
+    """
+    Return the external commands that are missing, in report order.
 
-    _, missing_mrtrix = check_mrtrix3_available(use_synb0)
-    _, missing_fsl = check_fsl_available(use_synb0)
-    return missing_mrtrix + missing_fsl
+    A thin re-export of the engine's :func:`~dti_alps.processing.commands.preflight`
+    so the GUI asks the same question (it cannot import a CLI module). Kept as a
+    module-level name because the suite monkeypatches ``run.preflight`` to fake a
+    broken PATH.
+    """
+    from ..processing.commands import preflight as engine_preflight
+
+    return engine_preflight(use_synb0)
 
 
 def _preflight_report(missing: list[str]) -> list[str]:

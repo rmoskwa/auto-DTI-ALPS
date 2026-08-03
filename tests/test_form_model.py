@@ -10,6 +10,7 @@ mirroring ``test_result_model.py`` for the output side.
 
 from dti_alps.gui.form_model import (
     NAV_DATA_INPUT,
+    NAV_NONE,
     NAV_OUTPUT_SETUP,
     NAV_SYNB0,
     Blocker,
@@ -297,6 +298,20 @@ class TestComputeReadiness:
         assert r.synb0_dir_valid is True
         assert r.can_run is True
 
+    def test_missing_tools_block_an_otherwise_ready_form(self):
+        """A broken PATH disables Run, as it exits 3 on the CLI."""
+        r = compute_readiness(self._ready_form(), [_valid_subject()], ["fnirt"])
+        assert r.can_run is False
+        assert r.tools_available is False
+        # The form itself is faultless -- only the environment fails.
+        assert r.has_subjects is True
+        assert r.has_output_dir is True
+
+    def test_tools_default_to_available(self):
+        """Callers that never probe PATH keep today's behaviour."""
+        r = compute_readiness(self._ready_form(), [_valid_subject()])
+        assert r.tools_available is True
+
 
 class TestComputeBlockers:
     """compute_blockers() turns unmet conditions into ordered to-do rows."""
@@ -357,11 +372,40 @@ class TestComputeBlockers:
             Blocker("Output folder not set", NAV_OUTPUT_SETUP),
         ]
 
+    def test_missing_tools_row_is_last_and_unclickable(self):
+        """The environment row sorts after every form row and targets no page."""
+        form = FormState(output_dir="", readout_auto=True)
+        blockers = compute_blockers(form, [_valid_subject()], ["fnirt"])
+        assert blockers == [
+            Blocker("Output folder not set", NAV_OUTPUT_SETUP),
+            Blocker("Not on PATH: fnirt — install MRtrix3/FSL", NAV_NONE),
+        ]
+
+    def test_many_missing_tools_collapse_to_one_row(self):
+        """An uninstalled FSL must not fill the strip with eight rows."""
+        missing = ["flirt", "fnirt", "invwarp", "applywarp", "fslmaths"]
+        blockers = compute_blockers(self._ready_form(), [_valid_subject()], missing)
+        assert blockers == [
+            Blocker(
+                "Not on PATH: flirt, fnirt, invwarp, applywarp, fslmaths — install MRtrix3/FSL",
+                NAV_NONE,
+            )
+        ]
+
     def test_blocker_empty_iff_readiness_can_run(self):
         """The strip empties exactly when the Run button would enable."""
         form = FormState(output_dir="/out", readout_auto=True)
         subjects = [_valid_subject()]
         assert (compute_blockers(form, subjects) == []) is compute_readiness(form, subjects).can_run
+
+    def test_blocker_empty_iff_readiness_can_run_with_missing_tools(self):
+        """The invariant holds for the environment condition too, not just the form."""
+        form = FormState(output_dir="/out", readout_auto=True)
+        subjects = [_valid_subject()]
+        missing = ["fnirt"]
+        assert (compute_blockers(form, subjects, missing) == []) is compute_readiness(
+            form, subjects, missing
+        ).can_run
 
 
 class TestReadoutValidityInversionGuard:

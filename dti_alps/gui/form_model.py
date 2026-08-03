@@ -19,6 +19,7 @@ source of truth. It imports only ``processing`` types, ``processing.validators``
 ``processing.constants``, and ``dataclasses`` — never ``tkinter`` or ``PySide6``.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from ..processing.constants import (
@@ -70,6 +71,7 @@ class Readiness:
     has_output_dir: bool
     readout_valid: bool
     synb0_dir_valid: bool
+    tools_available: bool = True
 
 
 # Semantic navigation targets for a blocker row — the on-disk page ids the Qt
@@ -79,6 +81,10 @@ class Readiness:
 NAV_DATA_INPUT = "data"
 NAV_SYNB0 = "synb0"
 NAV_OUTPUT_SETUP = "output_setup"
+# The one blocker no page can fix: a missing external tool is an install
+# problem, not a form field. The adapter renders this row as plain text rather
+# than a link, so it never offers a click that would go nowhere.
+NAV_NONE = ""
 
 
 @dataclass(frozen=True)
@@ -273,25 +279,41 @@ def build_batch_state(form_state: FormState, subjects: list[SubjectFiles]) -> Ba
     return BatchState(config=batch_config, subjects=list(subjects))
 
 
-def compute_readiness(form_state: FormState, subjects: list[SubjectFiles]) -> Readiness:
+def compute_readiness(
+    form_state: FormState,
+    subjects: list[SubjectFiles],
+    missing_tools: Sequence[str] = (),
+) -> Readiness:
     """
     Reproduce today's Run-button enable/disable decision, as structured flags.
 
-    The five conditions match ``_update_run_button_state`` exactly: subjects
+    The five form conditions match ``_update_run_button_state`` exactly: subjects
     present, all subjects valid, output dir set, readout valid (via
     :func:`is_readout_valid`, **not** the coerce-to-default resolver), and — in
     synB0 mode only — the synB0 output dir set. Computed independently of
     ``validate_runnable`` (which is first-failure-wins and cannot yield the
     per-condition flags); the two agree by construction.
+
+    ``missing_tools`` is the sixth condition and the only one that is not a form
+    value: the external commands the engine's ``preflight`` could not find. It is
+    passed *in* rather than looked up here — this module stays pure, so the PATH
+    probe (and its caching) belongs to the adapter. The empty default means every
+    existing caller keeps today's behaviour.
     """
     has_subjects = len(subjects) > 0
     all_subjects_valid = all(s.is_valid for s in subjects) if has_subjects else False
     has_output_dir = bool(form_state.output_dir)
     readout_valid = is_readout_valid(form_state.readout_auto, form_state.readout_raw)
     synb0_dir_valid = bool(form_state.synb0_output_dir_raw) if form_state.use_synb0 else True
+    tools_available = not missing_tools
 
     can_run = (
-        has_subjects and all_subjects_valid and has_output_dir and readout_valid and synb0_dir_valid
+        has_subjects
+        and all_subjects_valid
+        and has_output_dir
+        and readout_valid
+        and synb0_dir_valid
+        and tools_available
     )
 
     return Readiness(
@@ -301,24 +323,35 @@ def compute_readiness(form_state: FormState, subjects: list[SubjectFiles]) -> Re
         has_output_dir=has_output_dir,
         readout_valid=readout_valid,
         synb0_dir_valid=synb0_dir_valid,
+        tools_available=tools_available,
     )
 
 
-def compute_blockers(form_state: FormState, subjects: list[SubjectFiles]) -> list[Blocker]:
+def compute_blockers(
+    form_state: FormState,
+    subjects: list[SubjectFiles],
+    missing_tools: Sequence[str] = (),
+) -> list[Blocker]:
     """
     The outstanding requirements to run, as ordered, clickable to-do rows.
 
     One :class:`Blocker` per unmet condition, in nav-flow order (Data Input
-    items, then synB0, then Output Setup); an empty list means
-    :attr:`Readiness.can_run` is ``True``. This is the strip's *only* wording
-    home — the Qt adapter renders the rows and routes clicks by ``target`` but
-    supplies no text.
+    items, then synB0, then Output Setup, then the environment); an empty list
+    means :attr:`Readiness.can_run` is ``True``. This is the strip's *only*
+    wording home — the Qt adapter renders the rows and routes clicks by
+    ``target`` but supplies no text.
 
     The two subject conditions collapse to a single adaptive row: no subjects ->
     "No subjects added"; some present but invalid -> "N subject(s) are invalid".
     They never both appear (with zero subjects the validity row would be noise).
     The synB0 row is emitted only in synB0 mode, matching
     :func:`compute_readiness`.
+
+    ``missing_tools`` (see :func:`compute_readiness`) yields the last row, and
+    the only one targeting :data:`NAV_NONE`: it is sorted last because it is the
+    one the user must leave the app to fix, and it collapses to a single row
+    however many commands are absent — an uninstalled FSL would otherwise fill
+    the strip with eight identical-looking lines.
     """
     blockers: list[Blocker] = []
 
@@ -338,5 +371,9 @@ def compute_blockers(form_state: FormState, subjects: list[SubjectFiles]) -> lis
 
     if not form_state.output_dir:
         blockers.append(Blocker("Output folder not set", NAV_OUTPUT_SETUP))
+
+    if missing_tools:
+        names = ", ".join(missing_tools)
+        blockers.append(Blocker(f"Not on PATH: {names} — install MRtrix3/FSL", NAV_NONE))
 
     return blockers
