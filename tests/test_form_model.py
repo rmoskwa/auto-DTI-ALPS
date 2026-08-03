@@ -20,6 +20,12 @@ from dti_alps.gui.form_model import (
     compute_blockers,
     compute_readiness,
 )
+from dti_alps.processing.config_io import (
+    PROTOCOL_FIELDS,
+    protocol_hash,
+    read_protocol,
+    write_protocol,
+)
 from dti_alps.processing.constants import (
     ALPS_METHODS,
     DEFAULT_ALPS_METHOD,
@@ -411,3 +417,111 @@ class TestRoiAndAlpsMethodDefaultsAgree:
         assert config.DEFAULT_ALPS_METHOD is DEFAULT_ALPS_METHOD
         assert config.ROI_METHOD_OPTIONS is ROI_METHOD_OPTIONS
         assert config.ALPS_METHODS is ALPS_METHODS
+
+
+class TestGuiToProtocolConvergence:
+    """
+    Guard 3: a fully-populated GUI form, exported and read back, is the same
+    analysis.
+
+    This is the test that makes "a headless batch is a scaling decision, not a
+    scientific one" checkable. It runs the real seam end to end -- FormState ->
+    build_batch_state -> write_protocol -> read_protocol -> BatchConfig -- and
+    asserts every protocol field matches. If a GUI value stops surviving the
+    trip, this fails rather than a cohort quietly being processed two ways.
+    """
+
+    def _fully_populated_form(self) -> FormState:
+        """Every field set away from its default, so nothing passes by accident."""
+        return FormState(
+            run_denoising=False,
+            run_degibbs=False,
+            pe_direction="PA",
+            auto_pe_direction=False,
+            readout_auto=False,
+            readout_raw="0.037",
+            rpe_scheme="pair",
+            use_synb0=True,
+            synb0_output_dir_raw="/data/synb0/OUTPUTS",
+            fa_threshold=0.35,
+            alps_method="ALPS-PAS",
+            adaptive_roi_placement="Standard",
+            search_x=4,
+            search_y=2,
+            search_z=3,
+            max_y_drift=2,
+            max_z_drift=4,
+            output_dir="/home/someone/out",
+            staging_enabled=True,
+            staging_dir_raw="/fast/local",
+            roi_shape_flags={"sphere2p5": True, "squarev9": True},
+            output_flags={"denoised_dwi": False, "tensor": False, "log_file": False},
+            cli_options={
+                "dwidenoise": {"-nthreads": OptionState(True, "8", "int")},
+                "mrdegibbs": {"-nshifts": OptionState(True, "32", "int")},
+                "dwifslpreproc": {
+                    "-eddy_options": OptionState(True, "--repol", "string"),
+                    "-nocleanup": OptionState(True, type="flag"),
+                },
+                "dwi2tensor": {"-ols": OptionState(True, type="flag")},
+                "tensor2metric": {"-modulate": OptionState(True, "FA", "choice")},
+                "synb0_eddy": {"niter": OptionState(True, "7", "int")},
+                "flirt": {"-dof": OptionState(True, "9", "choice")},
+                "fnirt": {"--warpres": OptionState(True, "8,8,8", "string")},
+            },
+        )
+
+    def test_every_protocol_field_survives_export_and_read(self, tmp_path):
+        exported = build_batch_state(self._fully_populated_form(), []).config
+        path = tmp_path / "study-protocol.json"
+        write_protocol(path, exported)
+
+        reloaded = read_protocol(path)
+
+        for name in sorted(PROTOCOL_FIELDS):
+            assert getattr(reloaded, name) == getattr(exported, name), name
+
+    def test_the_two_configs_describe_one_analysis(self, tmp_path):
+        exported = build_batch_state(self._fully_populated_form(), []).config
+        path = tmp_path / "study-protocol.json"
+        write_protocol(path, exported)
+
+        assert protocol_hash(read_protocol(path)) == protocol_hash(exported)
+
+    def test_the_exported_file_carries_no_paths_from_this_machine(self, tmp_path):
+        """User story 4: commit it beside the analysis code and hand it over."""
+        exported = build_batch_state(self._fully_populated_form(), []).config
+        path = tmp_path / "study-protocol.json"
+        write_protocol(path, exported)
+
+        text = path.read_text()
+        assert "/home/someone/out" not in text
+        assert "/fast/local" not in text
+        # The synB0 input dataset *is* protocol -- dropping it would silently
+        # turn a 10-stage pipeline into a 9-stage one.
+        assert "/data/synb0/OUTPUTS" in text
+
+
+class TestRoiShapeVocabularyCoverage:
+    """
+    Guard 4a: every catalog ROI shape is expressible as an engine geometry, so
+    a shape the GUI offers can never be one a protocol cannot carry.
+    """
+
+    def test_every_catalog_token_maps_to_a_geometry(self):
+        from dti_alps.gui.config import ROI_SHAPES
+
+        for shape in ROI_SHAPES:
+            cfg = build_batch_state(FormState(roi_shape_flags={shape.token: True}), []).config
+            assert cfg.roi_shapes == [shape.geometry]
+
+    def test_every_catalog_geometry_survives_a_protocol_round_trip(self, tmp_path):
+        from dti_alps.gui.config import ROI_SHAPES
+
+        cfg = build_batch_state(
+            FormState(roi_shape_flags={s.token: True for s in ROI_SHAPES}), []
+        ).config
+        path = tmp_path / "protocol.json"
+        write_protocol(path, cfg)
+
+        assert read_protocol(path).roi_shapes == cfg.roi_shapes
