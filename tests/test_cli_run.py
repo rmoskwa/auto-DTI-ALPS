@@ -963,3 +963,72 @@ class TestSigint:
         assert code == EXIT_INTERRUPTED
         assert (output / "alps_results.csv").exists()
         assert captured["runner"].cancelled is True
+
+
+class TestEquivalentCommand:
+    """
+    The GUI's copyable line. Rendered by the CLI so the flag spellings have one
+    home -- and asserted to parse back through the real grammar, which is what
+    actually makes drift impossible rather than merely unlikely.
+    """
+
+    def test_minimal_form(self):
+        assert run_verb.equivalent_command(["/data/cohort"], "/data/out") == (
+            "dti-alps run --subjects /data/cohort --output /data/out"
+        )
+
+    def test_repeated_subjects(self):
+        command = run_verb.equivalent_command(["/a", "/b"], "/out")
+
+        assert command.count("--subjects") == 2
+        assert "/a" in command and "/b" in command
+
+    def test_config_is_included_when_exported(self):
+        command = run_verb.equivalent_command(["/a"], "/out", "/study/protocol.json")
+
+        assert "--config /study/protocol.json" in command
+
+    def test_id_depth_is_included_only_when_non_default(self):
+        assert "--id-depth" not in run_verb.equivalent_command(["/a"], "/out")
+        assert "--id-depth 3" in run_verb.equivalent_command(["/a"], "/out", id_depth=3)
+
+    def test_paths_with_spaces_are_quoted(self):
+        command = run_verb.equivalent_command(["/data/my cohort"], "/out")
+
+        assert "'/data/my cohort'" in command
+
+    def test_placeholders_when_the_form_is_incomplete(self):
+        """An empty form still renders something intelligible rather than a stub."""
+        command = run_verb.equivalent_command([], "")
+
+        assert command == "dti-alps run --subjects <SUBJECT_FOLDER> --output <OUTPUT_DIR>"
+
+    def test_placeholders_are_not_shell_quoted(self):
+        """Quoted, they read as a literal path somebody forgot to fill in."""
+        command = run_verb.equivalent_command([], "")
+
+        assert "'<" not in command
+
+    @pytest.mark.parametrize(
+        "subjects,output,config,depth",
+        [
+            (["/data/cohort"], "/data/out", "", 1),
+            (["/a", "/b"], "/out", "/p.json", 3),
+            (["/data/my cohort"], "/my out", "/my protocol.json", 2),
+        ],
+    )
+    def test_the_rendered_command_parses_back(self, subjects, output, config, depth):
+        """The drift guard: what the GUI shows is a command that actually works."""
+        import shlex
+
+        rendered = run_verb.equivalent_command(subjects, output, config, depth)
+        argv = shlex.split(rendered)
+
+        assert argv[:2] == ["dti-alps", "run"]
+        args = build_parser().parse_args(argv[1:])
+
+        assert args.subjects == subjects
+        assert args.output == output
+        assert args.id_depth == depth
+        assert (args.config or "") == config
+        assert run_verb.validate_data_flags(args) is None

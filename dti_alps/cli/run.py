@@ -91,6 +91,55 @@ Exit codes:
 """
 
 
+def equivalent_command(
+    subject_paths: list[str],
+    output_dir: str,
+    config_path: str = "",
+    id_depth: int = 1,
+) -> str:
+    """
+    The ``dti-alps run`` command line equivalent to a given set of paths.
+
+    Rendered here rather than in the GUI so the flag spellings have one home: a
+    hand-written twin in the Qt adapter would drift the first time a flag was
+    renamed, and it would drift silently -- the string looks fine either way.
+    (A test asserts the rendered command parses back through the real grammar,
+    which is what actually makes drift impossible.)
+
+    This is the bridge the whole feature exists for: configure interactively
+    once, copy the line, scale on the cluster. Without it, a researcher who
+    exports a protocol still has to go and read ``run --help`` to learn how to
+    consume it.
+
+    >>> equivalent_command(["/data/cohort"], "/data/out")
+    'dti-alps run --subjects /data/cohort --output /data/out'
+    """
+    parts = ["dti-alps", "run"]
+    for path in subject_paths:
+        parts += ["--subjects", _quote(path)]
+    if not subject_paths:
+        parts += ["--subjects", "<SUBJECT_FOLDER>"]
+    parts += ["--output", _quote(output_dir) if output_dir else "<OUTPUT_DIR>"]
+    if id_depth != 1:
+        parts += ["--id-depth", str(id_depth)]
+    if config_path:
+        parts += ["--config", _quote(config_path)]
+    return " ".join(parts)
+
+
+def _quote(path: str) -> str:
+    """
+    Shell-quote a path only when it needs it, so the common case stays readable.
+
+    Placeholders are rendered unquoted by their callers -- ``'<OUTPUT_DIR>'`` in
+    quotes reads as a literal path somebody forgot to fill in, which is the
+    opposite of the hint it is meant to be.
+    """
+    import shlex
+
+    return shlex.quote(path)
+
+
 def _validate_opt(value: str) -> tuple[str, str, str]:
     """Parse and validate one ``--opt STAGE:NAME=VALUE``."""
     stages = option_stages()

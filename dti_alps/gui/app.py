@@ -18,6 +18,7 @@ Scope): the sidebar stage buttons do not recolor during a run (status coloring
 dropped, Decision 6), and there is a working Cancel button (Decision 7).
 """
 
+import os
 import queue
 import threading
 from pathlib import Path
@@ -313,6 +314,9 @@ class DTIALPSApplication(QMainWindow):
         running = self.worker is not None and self.worker.is_alive()
         self.run_btn.setEnabled(readiness.can_run and not running)
         self._update_readiness_strip(readiness, running)
+        # The copyable command mirrors the same paths, so it refreshes on the
+        # same signal the Run button does rather than needing its own wiring.
+        self._refresh_equivalent_command()
 
     # ------------------------------------------------------------------ #
     # Toolbar
@@ -1521,9 +1525,100 @@ class DTIALPSApplication(QMainWindow):
         note = QLabel("Note: The ALPS results CSV is always saved.")
         note.setStyleSheet("color: gray;")
         content.addWidget(note)
+
+        content.addWidget(self._build_headless_group())
         content.addStretch()
 
         self._register_page("output_setup", page)
+
+    def _build_headless_group(self) -> QGroupBox:
+        """
+        The "run this headlessly" section: export a protocol, copy the command.
+
+        It lives on Output Setup because the output-retention checkboxes above
+        are themselves protocol keys, so this is where the full analysis is
+        finally pinned down.
+        """
+        group = QGroupBox("Run headlessly")
+        layout = QVBoxLayout(group)
+
+        blurb = QLabel(
+            "Export this configuration as a protocol file, then run the same "
+            "analysis from a terminal or a job script. The protocol carries the "
+            "analysis only — no paths from this machine — so it can be committed "
+            "beside your code or handed to a collaborator."
+        )
+        blurb.setWordWrap(True)
+        layout.addWidget(blurb)
+
+        row = QHBoxLayout()
+        export_btn = QPushButton("Export Protocol…")
+        export_btn.clicked.connect(self._export_protocol)
+        row.addWidget(export_btn)
+        row.addStretch()
+        layout.addLayout(row)
+
+        layout.addWidget(QLabel("Equivalent command:"))
+        self.equivalent_command_field = QLineEdit()
+        self.equivalent_command_field.setReadOnly(True)
+        # Read-only but selectable and copyable — the point is to paste it into
+        # a job script.
+        self.equivalent_command_field.setStyleSheet("font-family: monospace;")
+        layout.addWidget(self.equivalent_command_field)
+
+        self._exported_protocol_path = ""
+        self._refresh_equivalent_command()
+        return group
+
+    def _refresh_equivalent_command(self):
+        """Re-render the copyable command from the paths currently in the form."""
+        from ..cli.run import equivalent_command
+
+        if not hasattr(self, "equivalent_command_field"):
+            return
+
+        folders = list(dict.fromkeys(s.folder_path for s in self.subject_files_list))
+        self.equivalent_command_field.setText(
+            equivalent_command(
+                folders,
+                self.output_dir_edit.text(),
+                getattr(self, "_exported_protocol_path", ""),
+            )
+        )
+
+    def _export_protocol(self):
+        """Write the current form as a protocol file, through the engine's writer."""
+        from ..processing.config_io import write_protocol
+
+        user_config = get_user_config()
+        initial_dir = user_config.get_initial_dir(UserConfig.KEY_CLI_SAVE)
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Protocol",
+            os.path.join(initial_dir or "", "study-protocol.json"),
+            "JSON files (*.json);;All files (*)",
+        )
+        if not path:
+            return
+
+        # The single tested seam: widget values become domain values in
+        # build_batch_state, exactly as they do on Run. The empty subject list is
+        # deliberate — a protocol describes the analysis, not the cohort.
+        config = build_batch_state(self._form_state(), []).config
+        try:
+            write_protocol(path, config)
+        except OSError as e:
+            QMessageBox.critical(self, "Export Failed", f"Could not write {path}:\n{e}")
+            return
+
+        user_config.set_from_path(UserConfig.KEY_CLI_SAVE, path)
+        self._exported_protocol_path = path
+        self._refresh_equivalent_command()
+        QMessageBox.information(
+            self,
+            "Protocol Exported",
+            f"Written to:\n{path}\n\nThe command below now references it.",
+        )
 
     def _set_all_outputs(self, checked: bool):
         """Check or uncheck every output-retention checkbox."""
