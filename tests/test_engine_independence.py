@@ -55,6 +55,8 @@ FORBIDDEN_MODULES = ["dti_alps.gui", "PySide6", "tkinter"]
 CLI_MODULES = [
     "dti_alps.cli",
     "dti_alps.cli.main",
+    "dti_alps.cli.run",
+    "dti_alps.cli.render",
     "dti_alps.cli.reanalyze",
     "dti_alps.cli.report",
     "dti_alps.cli.validators",

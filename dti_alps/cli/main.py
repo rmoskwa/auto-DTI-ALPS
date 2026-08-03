@@ -26,7 +26,7 @@ Exit codes are the CLI's contract with a job script:
 import argparse
 import sys
 
-from . import reanalyze, report, view
+from . import reanalyze, report, run, view
 
 EXIT_OK = 0
 EXIT_FAILURES = 1
@@ -57,6 +57,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     gui_parser = verbs.add_parser("gui", help="Launch the main GUI application (default)")
     gui_parser.set_defaults(_execute=_launch_gui)
+
+    run_parser = verbs.add_parser(
+        "run",
+        help="Process a cohort end to end, headlessly",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=run.EPILOG,
+    )
+    run.add_arguments(run_parser)
+    run_parser.set_defaults(_execute=run.execute)
 
     view_parser = verbs.add_parser("view", help="Launch the results viewer")
     view.add_arguments(view_parser)
