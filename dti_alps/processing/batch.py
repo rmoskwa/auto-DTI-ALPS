@@ -132,11 +132,6 @@ class BatchRunner:
             dwifslpreproc_options=dict(batch_config.dwifslpreproc_options),
             dwi2tensor_options=dict(batch_config.dwi2tensor_options),
             tensor2metric_options=dict(batch_config.tensor2metric_options),
-            # Legacy preprocessing options (for backward compatibility)
-            eddy_options=batch_config.eddy_options,
-            topup_options=batch_config.topup_options,
-            generate_qc=batch_config.generate_qc,
-            keep_intermediates=batch_config.keep_intermediates,
             # synB0-DISCO parameters (user runs synB0 externally)
             use_synb0=batch_config.use_synb0,
             synb0_output_dir=batch_config.synb0_output_dir,

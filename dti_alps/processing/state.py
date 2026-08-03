@@ -115,10 +115,6 @@ class PipelineState:
     # Legacy preprocessing fields (for backward compatibility)
     eddy_mask_path: str | None = None
     eddy_slspec_path: str | None = None
-    eddy_options: str = ""
-    topup_options: str = ""
-    generate_qc: bool = False
-    keep_intermediates: bool = False
 
     # synB0-DISCO alternative preprocessing (user runs synB0 externally)
     use_synb0: bool = False  # Use synB0-DISCO outputs instead of dwifslpreproc
@@ -261,12 +257,6 @@ class BatchConfig:
     dwifslpreproc_options: dict[str, Any] = field(default_factory=dict)
     dwi2tensor_options: dict[str, Any] = field(default_factory=dict)
     tensor2metric_options: dict[str, Any] = field(default_factory=dict)
-
-    # Legacy preprocessing options (for backward compatibility)
-    eddy_options: str = ""
-    topup_options: str = ""
-    generate_qc: bool = False
-    keep_intermediates: bool = False
 
     # synB0-DISCO alternative preprocessing (user runs synB0 externally)
     use_synb0: bool = False  # Use synB0-DISCO outputs instead of dwifslpreproc

@@ -194,13 +194,6 @@ def build_dwifslpreproc_cmd(state: "PipelineState") -> list[str]:
         cmd.extend(["-eddy_mask", state.eddy_mask_path])
     if state.eddy_slspec_path:
         cmd.extend(["-eddy_slspec", state.eddy_slspec_path])
-    if state.eddy_options:
-        cmd.extend(["-eddy_options", f" {state.eddy_options}"])
-    if state.topup_options:
-        cmd.extend(["-topup_options", f" {state.topup_options}"])
-    if state.generate_qc:
-        qc_dir = state.get_output_path("eddy_qc")
-        cmd.extend(["-eddyqc_all", qc_dir])
 
     # Append options from dict (new GUI options)
     _append_options_from_dict(cmd, state.dwifslpreproc_options)
