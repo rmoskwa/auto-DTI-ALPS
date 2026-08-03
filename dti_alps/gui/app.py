@@ -76,6 +76,7 @@ from ..processing.validators import validate_runnable, validate_synb0_output_dir
 from . import config
 from .form_model import (
     NAV_DATA_INPUT,
+    NAV_NONE,
     NAV_OUTPUT_SETUP,
     NAV_SYNB0,
     FormState,
@@ -202,6 +203,9 @@ class DTIALPSApplication(QMainWindow):
         self.subject_files_list: list[SubjectFiles] = []
         self.batch_state: BatchState | None = None
 
+        # use_synb0 -> the engine commands missing on PATH; see _missing_tools.
+        self._preflight_cache: dict[bool, tuple[str, ...]] = {}
+
         # Quality Report page state (PRD 0022). Its own model, worker, queue, and
         # cancel event — a channel wholly separate from the pipeline's, so a
         # report run never touches batch state. ``qr_view`` is the last generated
@@ -309,13 +313,34 @@ class DTIALPSApplication(QMainWindow):
             cli_options=cli_options,
         )
 
+    def _missing_tools(self, use_synb0: bool) -> tuple[str, ...]:
+        """
+        The engine commands not on PATH for this route, probed once per route.
+
+        Cached because this runs on every keystroke that touches the form, and a
+        probe is ~15 ``shutil.which`` calls. PATH is fixed for the life of the
+        process, so a stale answer is not reachable -- but the two routes need
+        separate answers (the synB0 route drops ``dwifslpreproc`` and adds
+        ``eddy``), hence a dict rather than one value.
+        """
+        if use_synb0 not in self._preflight_cache:
+            from ..processing.commands import preflight
+
+            self._preflight_cache[use_synb0] = tuple(preflight(use_synb0))
+        return self._preflight_cache[use_synb0]
+
     def _update_run_button_state(self):
         """Enable/disable the Run button and refresh the readiness strip."""
-        readiness = compute_readiness(self._form_state(), self.subject_files_list)
+        form_state = self._form_state()
+        # Preflight gates Run the same way it gates ``dti-alps run`` (exit 3):
+        # without it a missing fnirt only surfaces as a stage-7 failure, hours
+        # into a batch.
+        missing_tools = self._missing_tools(form_state.use_synb0)
+        readiness = compute_readiness(form_state, self.subject_files_list, missing_tools)
         # While a run is in flight, Run stays disabled regardless of readiness.
         running = self.worker is not None and self.worker.is_alive()
         self.run_btn.setEnabled(readiness.can_run and not running)
-        self._update_readiness_strip(readiness, running)
+        self._update_readiness_strip(readiness, running, missing_tools)
         # The copyable command mirrors the same paths, so it refreshes on the
         # same signal the Run button does rather than needing its own wiring.
         self._refresh_equivalent_command()
@@ -387,7 +412,7 @@ class DTIALPSApplication(QMainWindow):
         label.setStyleSheet(f"color: {color};")
         return label
 
-    def _update_readiness_strip(self, readiness, running: bool):
+    def _update_readiness_strip(self, readiness, running: bool, missing_tools=()):
         """Rebuild the strip for the current run/ready/blocked state."""
         self._clear_readiness_strip()
 
@@ -397,7 +422,7 @@ class DTIALPSApplication(QMainWindow):
             )
             return
 
-        blockers = compute_blockers(self._form_state(), self.subject_files_list)
+        blockers = compute_blockers(self._form_state(), self.subject_files_list, missing_tools)
         if not blockers:
             n = len(self.subject_files_list)
             noun = "subject" if n == 1 else "subjects"
@@ -407,6 +432,13 @@ class DTIALPSApplication(QMainWindow):
             return
 
         for blocker in blockers:
+            # NAV_NONE rows (a missing external tool) are plain text: there is no
+            # page that fixes them, and a dead link reads as a broken one.
+            if blocker.target == NAV_NONE:
+                self.readiness_strip_layout.addWidget(
+                    self._strip_label(f"&#9675; {blocker.text}", _STRIP_TODO_COLOR)
+                )
+                continue
             row = self._strip_label(
                 f'&#9675; <a href="{blocker.target}" '
                 f'style="color: {_STRIP_TODO_COLOR};">{blocker.text}</a>',

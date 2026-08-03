@@ -287,10 +287,10 @@ Owned by `processing/messages.py`.
     `resolve_readout_time`. The `OutputConfig` assembly is also exposed as the public
     `collect_output_config(output_flags)`, since the adapter needs it on its own when
     deciding whether to delete the log file, not only inside a full batch build.
-  - **compute_readiness(form_state, subjects) -> Readiness** — the pure Run-button
-    decision. `Readiness` carries `can_run` plus the per-condition flags
+  - **compute_readiness(form_state, subjects, missing_tools) -> Readiness** — the pure
+    Run-button decision. `Readiness` carries `can_run` plus the per-condition flags
     (`has_subjects`, `all_subjects_valid`, `has_output_dir`, `readout_valid`,
-    `synb0_dir_valid`). It computes each condition independently (so a future adapter
+    `synb0_dir_valid`, `tools_available`). It computes each condition independently (so a future adapter
     can say *why* a run is blocked); it agrees with the first-failure-wins pre-flight
     [[validate_runnable]] by construction, not by calling it. Readout validity comes
     from its own `is_readout_valid(auto, raw)` predicate — deliberately **not**
@@ -307,6 +307,22 @@ Owned by `processing/messages.py`.
       `NAV_SYNB0="synb0"`, `NAV_OUTPUT_SETUP="output_setup"`), the on-disk page ids the
       adapter already registers, so the model names *where to send the user* without
       importing a widget or a nav method; the adapter maps each to its `_show_*` call.
+      `NAV_NONE=""` is the exception: the row is rendered as plain text, not a link,
+      because no page fixes it.
+
+## Preflight
+
+- **Preflight** — the pre-run answer to "will this die on a missing tool?":
+  `processing/commands.preflight(use_synb0) -> list[str]`, the external commands the
+  chosen route invokes but cannot find on PATH. It lives in the **engine** so both
+  front ends ask the identical question and cannot disagree about what counts as
+  required; only the reaction differs — `dti-alps run` prints a report and exits 3,
+  the GUI raises a [[compute_blockers|Blocker]] row (`NAV_NONE`) that disables Run.
+  The route matters: the synB0 path drops `dwifslpreproc` and demands `eddy`.
+  The PATH probe is *not* done inside the form model, which stays pure — the adapter
+  probes (caching per route, since PATH is fixed for the process's life) and passes
+  `missing_tools` in. Without it a missing `fnirt` first surfaces as a stage-7
+  failure, hours into a batch.
 
 ## The readiness strip (GUI adapter)
 

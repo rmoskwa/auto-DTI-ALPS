@@ -10,7 +10,11 @@ import shutil
 
 import pytest
 
-from dti_alps.processing.commands import check_fsl_available, check_mrtrix3_available
+from dti_alps.processing.commands import (
+    check_fsl_available,
+    check_mrtrix3_available,
+    preflight,
+)
 
 
 @pytest.fixture
@@ -162,3 +166,26 @@ class TestVariantMatchingIsPerCommand:
         fake_path(*[c for c in ALL_FSL if c != "fslmaths"], "fslfslmaths")
 
         assert check_fsl_available() == (True, [])
+
+
+class TestPreflight:
+    """The one question both front ends ask: what is missing for this run?"""
+
+    def test_complete_install_reports_nothing(self, fake_path):
+        fake_path(*ALL_MRTRIX, *ALL_FSL)
+
+        assert preflight() == []
+
+    def test_missing_from_both_toolchains_reported_mrtrix_first(self, fake_path):
+        fake_path(
+            *[c for c in ALL_MRTRIX if c != "dwi2mask"], *[c for c in ALL_FSL if c != "fnirt"]
+        )
+
+        assert preflight() == ["dwi2mask", "fnirt"]
+
+    def test_route_is_honoured(self, fake_path):
+        """The synB0 route drops ``dwifslpreproc`` and demands ``eddy``."""
+        fake_path(*[c for c in ALL_MRTRIX if c != "dwifslpreproc"], *ALL_FSL)
+
+        assert preflight(use_synb0=False) == ["dwifslpreproc"]
+        assert preflight(use_synb0=True) == ["eddy"]

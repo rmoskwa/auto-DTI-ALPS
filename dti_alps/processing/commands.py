@@ -433,3 +433,19 @@ def check_fsl_available(use_synb0: bool = False) -> tuple[bool, list[str]]:
         if not _find_any([tpl.format(cmd=cmd) for tpl in _FSL_VARIANT_TEMPLATES])
     ]
     return (len(missing) == 0, missing)
+
+
+def preflight(use_synb0: bool = False) -> list[str]:
+    """
+    Return the external commands this run needs but cannot find, in report order.
+
+    The single answer to "will this run die on a missing tool?", so the two front
+    ends ask the same question and cannot disagree about what counts as required.
+    Both consume the list; only the phrasing differs (the CLI prints a report and
+    exits 3, the GUI raises a readiness-strip row).
+
+    Empty means every command the ``use_synb0`` route invokes resolves on PATH.
+    """
+    _, missing_mrtrix = check_mrtrix3_available(use_synb0)
+    _, missing_fsl = check_fsl_available(use_synb0)
+    return missing_mrtrix + missing_fsl
