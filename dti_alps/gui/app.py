@@ -52,7 +52,9 @@ from PySide6.QtWidgets import (
 )
 
 from ..processing.discovery import (
+    DEFAULT_ID_DEPTH,
     SubjectFiles,
+    assign_subject_ids,
     discover_with_subdir_fallback,
     new_unique_runs,
 )
@@ -624,6 +626,23 @@ class DTIALPSApplication(QMainWindow):
         btn_row.addWidget(remove_btn)
         btn_row.addWidget(clear_btn)
         btn_row.addStretch()
+
+        # The GUI twin of the CLI's --id-depth. It sits with the subject list
+        # because what it changes is the Subject ID column, which is a preview
+        # of the output folder names the run will produce.
+        btn_row.addWidget(QLabel("ID depth:"))
+        self.id_depth_spin = QSpinBox()
+        self.id_depth_spin.setRange(1, 8)
+        self.id_depth_spin.setValue(DEFAULT_ID_DEPTH)
+        self.id_depth_spin.setToolTip(
+            "How many trailing path components name each subject.\n"
+            "Raise it when subjects would otherwise share an id — a BIDS tree\n"
+            "names every leaf folder 'dwi', so depth 3 gives sub-01_ses-1_dwi.\n"
+            "Equivalent to the CLI's --id-depth."
+        )
+        self.id_depth_spin.valueChanged.connect(self._on_id_depth_change)
+        btn_row.addWidget(self.id_depth_spin)
+
         folders_layout.addLayout(btn_row)
 
         layout.addWidget(folders_group, stretch=1)
@@ -773,7 +792,7 @@ class DTIALPSApplication(QMainWindow):
         first crossing 1 -> multiple subjects.
         """
         try:
-            discovered_runs = discover_with_subdir_fallback(folder_path)
+            discovered_runs = discover_with_subdir_fallback(folder_path, self.id_depth_spin.value())
 
             if not discovered_runs:
                 QMessageBox.information(
@@ -799,6 +818,7 @@ class DTIALPSApplication(QMainWindow):
             if added > 0:
                 now_multiple = len(self.subject_files_list) > 1
                 self._log(f"Added {added} DWI run(s) from {folder_path}")
+                self._reassign_subject_ids()
                 self._update_run_button_state()
 
                 if self.synb0_check.isChecked() and count_before <= 1 and now_multiple:
@@ -835,7 +855,30 @@ class DTIALPSApplication(QMainWindow):
                 del self.subject_files_list[idx]
             self.subjects_tree.takeTopLevelItem(idx)
 
+        self._reassign_subject_ids()
         self._update_run_button_state()
+
+    def _on_id_depth_change(self):
+        """Re-name every listed subject at the newly chosen depth."""
+        self._reassign_subject_ids()
+        self._update_run_button_state()
+
+    def _reassign_subject_ids(self):
+        """
+        Re-derive the subject ids for the current list and show them in the tree.
+
+        Ids stay a pure function of (listed runs, depth), so this runs after any
+        change to either rather than only on the spinner. One consequence is
+        deliberate: removing one of a folder's several runs re-names the
+        survivor to the folder itself, because a folder holding a single run
+        *is* that subject. Deriving the column any other way would let it show
+        ids that discovery would never produce.
+        """
+        assign_subject_ids(self.subject_files_list, self.id_depth_spin.value())
+        for row, subject in enumerate(self.subject_files_list):
+            item = self.subjects_tree.topLevelItem(row)
+            if item is not None:
+                item.setText(0, subject.subject_id)
 
     def _clear_all_subjects(self):
         """Clear all subjects from the list (with confirmation)."""
@@ -1583,6 +1626,9 @@ class DTIALPSApplication(QMainWindow):
                 folders,
                 self.output_dir_edit.text(),
                 getattr(self, "_exported_protocol_path", ""),
+                # Without the depth the pasted command would re-derive different
+                # subject ids than the ones on screen.
+                self.id_depth_spin.value(),
             )
         )
 

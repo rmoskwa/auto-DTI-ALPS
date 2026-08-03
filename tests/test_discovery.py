@@ -15,6 +15,7 @@ from dti_alps.processing.batch import BatchRunner
 from dti_alps.processing.discovery import (
     SubjectDiscovery,
     SubjectIdCollisionError,
+    assign_subject_ids,
     check_unique_subject_ids,
     discover_with_subdir_fallback,
 )
@@ -220,6 +221,92 @@ class TestIdDepth:
         results = discover_with_subdir_fallback(str(cohort), id_depth=2)
 
         assert sorted(r.subject_id for r in results) == ["cohort_sub-01", "cohort_sub-02"]
+
+
+class TestReassignSubjectIds:
+    """
+    ``assign_subject_ids`` re-names an already-discovered list at a new depth.
+
+    This is what lets the GUI's ID-depth control re-name subjects that are
+    already in the list, instead of forcing a remove-and-re-add. It has to reach
+    the same ids discovery would, which is why discovery delegates to it.
+    """
+
+    def test_reassigning_is_idempotent_not_cumulative(self, tmp_path):
+        """
+        Ids derive from the path, never from the id already there.
+
+        A depth that compounded on each change would produce
+        ``sub-01_ses-1_sub-01_ses-1_dwi`` after two spins of the control.
+        """
+        subject_dir = tmp_path / "sub-01" / "ses-1" / "dwi"
+        _make_dwi_set(str(subject_dir), "dwi")
+        runs = SubjectDiscovery(str(subject_dir)).discover_files()
+
+        assign_subject_ids(runs, 3)
+        assign_subject_ids(runs, 3)
+
+        assert runs[0].subject_id == "sub-01_ses-1_dwi"
+
+    def test_depth_can_be_narrowed_again(self, tmp_path):
+        """Lowering the control undoes it; the id is a function of depth alone."""
+        subject_dir = tmp_path / "sub-01" / "ses-1" / "dwi"
+        _make_dwi_set(str(subject_dir), "dwi")
+        runs = SubjectDiscovery(str(subject_dir), id_depth=3).discover_files()
+
+        assign_subject_ids(runs, 1)
+
+        assert runs[0].subject_id == "dwi"
+
+    def test_each_folder_is_named_on_its_own_terms(self, tmp_path):
+        """
+        Runs from different folders are grouped, so a mixed list is named the
+        way each folder would have been named alone: the single-run folder by
+        its path, the two-run folder by its stems.
+        """
+        solo = tmp_path / "10_1003"
+        _make_dwi_set(str(solo), "DTI64")
+        pair = tmp_path / "10_1005"
+        _make_dwi_set(str(pair), "DTI64_b1300")
+        _make_dwi_set(str(pair), "DTI64_b2600")
+
+        runs = SubjectDiscovery(str(solo)).discover_files()
+        runs += SubjectDiscovery(str(pair)).discover_files()
+        assign_subject_ids(runs, 1)
+
+        assert sorted(r.subject_id for r in runs) == [
+            "10_1003",
+            "DTI64_b1300",
+            "DTI64_b2600",
+        ]
+
+    def test_dropping_a_run_renames_the_survivor_to_its_folder(self, tmp_path):
+        """
+        The documented consequence of ids being a function of the *current*
+        list: a folder left holding one run is again named after the folder,
+        because a single-run folder is the subject.
+        """
+        subject_dir = tmp_path / "10_1003"
+        _make_dwi_set(str(subject_dir), "DTI64_b1300")
+        _make_dwi_set(str(subject_dir), "DTI64_b2600")
+        runs = SubjectDiscovery(str(subject_dir)).discover_files()
+
+        survivors = [runs[0]]
+        assign_subject_ids(survivors, 1)
+
+        assert survivors[0].subject_id == "10_1003"
+
+    def test_reassigning_matches_discovery_at_the_same_depth(self, tmp_path):
+        """The two paths to an id must not drift; discovery delegates here."""
+        cohort = tmp_path / "cohort"
+        for sid in ("sub-01", "sub-02"):
+            _make_dwi_set(str(cohort / sid), "dwi")
+
+        at_depth_one = discover_with_subdir_fallback(str(cohort))
+        assign_subject_ids(at_depth_one, 3)
+        discovered_at_three = discover_with_subdir_fallback(str(cohort), id_depth=3)
+
+        assert [r.subject_id for r in at_depth_one] == [r.subject_id for r in discovered_at_three]
 
 
 class TestSubjectIdCollisionGuard:
