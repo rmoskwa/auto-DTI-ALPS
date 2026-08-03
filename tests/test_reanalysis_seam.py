@@ -17,6 +17,8 @@ any non-zero handling are asserted from ``fake.calls`` before that, which is whe
 the seam lives.
 """
 
+from pathlib import Path
+
 import nibabel as nib
 import numpy as np
 import pytest
@@ -71,7 +73,7 @@ def _reanalyze(subject_dir, fake):
         subject_id="sub-01",
         subject_dir=subject_dir,
         roi_shape=ROIShape(shape_type="sphere", sphere_radius=3.0),
-        enable_adaptive=False,
+        adaptive=False,
         alps_method="ALPS-LAB",
         fa_threshold=0.2,
         runner=fake,
@@ -171,6 +173,97 @@ def test_run_reanalysis_without_runner_defaults_to_real(tmp_path, monkeypatch):
     assert isinstance(captured["runner"], SubprocessToolRunner)
 
 
+# --- The tri-state ROI method expands into placement passes -----------------
+
+
+def _spy_passes(monkeypatch, tmp_path, subject_ids=("sub-01",)):
+    """Record (subject_id, adaptive) per reanalyze_subject call and each CSV written."""
+    monkeypatch.setattr(
+        reanalysis,
+        "discover_processed_subjects",
+        lambda _d: [(s, tmp_path / s) for s in subject_ids],
+    )
+    csvs: list[str] = []
+    monkeypatch.setattr(
+        reanalysis, "_write_reanalysis_csv", lambda path, *a, **k: csvs.append(Path(path).name)
+    )
+
+    calls: list[tuple[str, bool]] = []
+
+    def spy(*args, **kwargs):
+        calls.append((kwargs["subject_id"], kwargs["adaptive"]))
+        return ReanalysisResult(
+            subject_id=kwargs["subject_id"], status="completed", adaptive=kwargs["adaptive"]
+        )
+
+    monkeypatch.setattr(reanalysis, "reanalyze_subject", spy)
+    return calls, csvs
+
+
+@pytest.mark.parametrize(
+    ("roi_method", "expected"),
+    [("Standard", [False]), ("Adaptive", [True]), ("Both", [False, True])],
+)
+def test_roi_method_expands_to_placement_passes(tmp_path, monkeypatch, roi_method, expected):
+    calls, _ = _spy_passes(monkeypatch, tmp_path)
+
+    run_reanalysis(
+        output_dir=str(tmp_path),
+        roi_shape=ROIShape(shape_type="sphere", sphere_radius=3.0),
+        roi_method=roi_method,
+        alps_method="ALPS-LAB",
+    )
+
+    assert [adaptive for _sid, adaptive in calls] == expected
+
+
+def test_both_writes_one_csv_per_pass(tmp_path, monkeypatch):
+    """A merged table would silently drop a pass: the writer keys rows by subject id."""
+    _, csvs = _spy_passes(monkeypatch, tmp_path, subject_ids=("sub-01", "sub-02"))
+
+    run_reanalysis(
+        output_dir=str(tmp_path),
+        roi_shape=ROIShape(shape_type="squarev9"),
+        roi_method="Both",
+        alps_method="ALPS-LAB",
+    )
+
+    assert csvs == ["alps_results_squarev9.csv", "alps_results_squarev9_adaptive.csv"]
+
+
+def test_both_results_are_distinguishable_by_pass(tmp_path, monkeypatch):
+    """Each subject appears twice; ``adaptive`` says which pass produced which."""
+    _spy_passes(monkeypatch, tmp_path, subject_ids=("sub-01", "sub-02"))
+
+    results = run_reanalysis(
+        output_dir=str(tmp_path),
+        roi_shape=ROIShape(shape_type="sphere", sphere_radius=3.0),
+        roi_method="Both",
+        alps_method="ALPS-LAB",
+    )
+
+    assert [(r.subject_id, r.adaptive) for r in results] == [
+        ("sub-01", False),
+        ("sub-02", False),
+        ("sub-01", True),
+        ("sub-02", True),
+    ]
+
+
+def test_unknown_roi_method_raises_before_touching_a_subject(tmp_path, monkeypatch):
+    calls, _ = _spy_passes(monkeypatch, tmp_path)
+
+    with pytest.raises(ValueError, match="Unknown ROI placement method"):
+        run_reanalysis(
+            output_dir=str(tmp_path),
+            roi_shape=ROIShape(shape_type="sphere", sphere_radius=3.0),
+            roi_method="adaptive",  # lower-case: not in the closed vocabulary
+            alps_method="ALPS-LAB",
+        )
+
+    assert calls == []
+
+
 # --- CLI flags: parse, validation, defaults ---------------------------------
 
 
@@ -235,7 +328,7 @@ def test_reanalyze_subject_forwards_search_to_placement(tmp_path, monkeypatch):
         subject_id="sub-01",
         subject_dir=subject_dir,
         roi_shape=ROIShape(shape_type="sphere", sphere_radius=3.0),
-        enable_adaptive=True,
+        adaptive=True,
         alps_method="ALPS-LAB",
         fa_threshold=0.2,
         search=envelope,

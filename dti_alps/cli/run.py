@@ -300,7 +300,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--roi-method",
         choices=ROI_METHOD_OPTIONS,
         default=None,
-        help="ROI placement method (reanalyze spells this as the boolean --adaptive)",
+        help="ROI placement method (reanalyze takes the same flag)",
     )
     search_suffix = f"(±voxels, {SEARCH_MIN}-{SEARCH_MAX}; inert unless Adaptive placement runs)"
     for flag, dest_help in (

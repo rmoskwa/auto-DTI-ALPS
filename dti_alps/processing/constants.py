@@ -55,6 +55,31 @@ DEFAULT_ALPS_METHOD = "Both"
 ROI_METHOD_OPTIONS = ["Adaptive", "Standard", "Both"]
 DEFAULT_ROI_METHOD = "Both"
 
+
+def placement_modes(roi_method: str) -> tuple[bool, ...]:
+    """
+    Expand an ``adaptive_roi_placement`` value into the passes it names.
+
+    The one translation from the tri-state vocabulary to the ``adaptive`` boolean
+    the placement leaf actually takes: "Both" means run *both* passes (Standard
+    first, so the adaptive results land second and the run order matches the
+    on-disk suffixes). It lives beside the vocabulary it decodes so the pipeline
+    and reanalysis cannot disagree about what "Both" means -- they did, because
+    reanalysis had no expansion at all and simply could not express it.
+
+    Raises on an unknown value rather than falling back to Standard: this is a
+    closed vocabulary, and a silent fallback would quietly run a *different*
+    analysis from the one asked for.
+    """
+    if roi_method not in ROI_METHOD_OPTIONS:
+        raise ValueError(
+            f"Unknown ROI placement method {roi_method!r}; expected one of {ROI_METHOD_OPTIONS}"
+        )
+    if roi_method == "Both":
+        return (False, True)
+    return (roi_method == "Adaptive",)
+
+
 # ROI sphere radius validation range (mm)
 ROI_SPHERE_RADIUS_RANGE = (1.0, 4.0)
 

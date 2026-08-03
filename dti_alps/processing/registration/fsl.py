@@ -23,6 +23,7 @@ from ..b0_extraction import (
     create_brain_mask_from_dwi,
     validate_b0_exists,
 )
+from ..constants import placement_modes
 from ..native_placement import ROIPlacementError, place_rois_in_native
 from ..tool_runner import SubprocessToolRunner, ToolRunner
 from .results import (
@@ -438,14 +439,7 @@ class FSLRegistration:
             roi_shapes = [{"type": "sphere", "radius": 3.0}]
 
         # Determine which placement modes to run
-        adaptive_setting = getattr(state, "adaptive_roi_placement", "Adaptive")
-        # Support legacy bool values
-        if isinstance(adaptive_setting, bool):
-            adaptive_modes = [adaptive_setting]
-        elif adaptive_setting == "Both":
-            adaptive_modes = [False, True]
-        else:
-            adaptive_modes = [adaptive_setting == "Adaptive"]
+        adaptive_modes = placement_modes(state.adaptive_roi_placement)
 
         # Process each ROI shape × placement mode
         all_results = {}

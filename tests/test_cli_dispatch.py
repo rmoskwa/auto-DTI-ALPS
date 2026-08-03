@@ -104,7 +104,7 @@ class TestHelp:
 
         out = capsys.readouterr().out
         assert "--sphere" in out
-        assert "--adaptive" in out
+        assert "--roi-method" in out
 
 
 class TestValidators:

@@ -12,7 +12,9 @@ import argparse
 from ..processing.constants import (
     ALPS_METHODS,
     DEFAULT_ALPS_METHOD,
+    DEFAULT_ROI_METHOD,
     FA_THRESHOLD,
+    ROI_METHOD_OPTIONS,
     AdaptiveSearchConfig,
 )
 from .validators import (
@@ -26,8 +28,9 @@ from .validators import (
 
 EPILOG = """
 Output naming:
-  Without --adaptive: rois_{shape}/ and alps_results_{shape}.csv
-  With --adaptive:    rois_{shape}_adaptive/ and alps_results_{shape}_adaptive.csv
+  Standard placement: rois_{shape}/ and alps_results_{shape}.csv
+  Adaptive placement: rois_{shape}_adaptive/ and alps_results_{shape}_adaptive.csv
+  --roi-method Both writes both pairs, one per pass.
   The default 3 mm sphere collapses to the bare rois/ and alps_results.csv.
 
 Examples:
@@ -40,8 +43,8 @@ Examples:
   %(prog)s /path/to/output --squarev4
       Reanalyze with 2x2 voxel square ROIs (4 voxels, V1-optimized)
 
-  %(prog)s /path/to/output --sphere 2.5 --adaptive
-      Reanalyze with 2.5mm spheres and adaptive ROI placement enabled
+  %(prog)s /path/to/output --sphere 2.5 --roi-method Adaptive
+      Reanalyze with 2.5mm spheres, adaptive placement only
 
   %(prog)s /path/to/output --sphere 2,3,4
       Reanalyze with 2mm, 3mm, and 4mm spheres in one run
@@ -49,8 +52,8 @@ Examples:
   %(prog)s /path/to/output --sphere 3 --squarev4
       Reanalyze with both 3mm sphere and 2x2 square ROIs
 
-  %(prog)s /path/to/output --squarev9 --adaptive --method ALPS-LAB
-      Reanalyze with square ROIs, adaptive placement, and only ALPS-LAB
+  %(prog)s /path/to/output --squarev9 --roi-method Standard --method ALPS-LAB
+      Reanalyze with square ROIs, standard placement, and only ALPS-LAB
 """
 
 
@@ -87,15 +90,21 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--adaptive",
-        action="store_true",
-        help="Enable adaptive ROI placement based on fiber orientation",
+        "--roi-method",
+        choices=ROI_METHOD_OPTIONS,
+        default=DEFAULT_ROI_METHOD,
+        help=(
+            f"ROI placement method; Both runs each pass and writes a CSV per pass "
+            f"(default: {DEFAULT_ROI_METHOD}). The run verb takes the same flag."
+        ),
     )
 
     # Adaptive search envelope. Each is validated to the shared 1-4 range and
-    # defaults to the historical value; all are inert without --adaptive
-    # (Standard placement runs no search).
-    search_help_suffix = f"(±voxels, {SEARCH_MIN}-{SEARCH_MAX}, only with --adaptive)"
+    # defaults to the historical value; all are inert on the Standard pass,
+    # which runs no search.
+    search_help_suffix = (
+        f"(±voxels, {SEARCH_MIN}-{SEARCH_MAX}; inert unless Adaptive placement runs)"
+    )
     parser.add_argument(
         "--search-x",
         type=validate_search_value,
@@ -154,7 +163,7 @@ def execute(args: argparse.Namespace) -> int:
 
     # Assemble the envelope from the (validated, defaulted) flags. The 1-4 guard
     # already fired during parse; this construction cannot raise. Inert unless
-    # --adaptive is set.
+    # an Adaptive pass runs.
     search = AdaptiveSearchConfig(
         search_x=args.search_x,
         search_y=args.search_y,
@@ -189,7 +198,7 @@ def execute(args: argparse.Namespace) -> int:
         run_reanalysis(
             output_dir=args.output_dir,
             roi_shape=roi_shape,
-            enable_adaptive=args.adaptive,
+            roi_method=args.roi_method,
             alps_method=args.method,
             fa_threshold=args.fa_threshold,
             search=search,

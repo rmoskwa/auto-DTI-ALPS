@@ -374,6 +374,17 @@ is its own module, **native placement** (below) — no longer copied into each c
   constraint** that keeps both ROIs on the same X-direction pathway. A degenerate
   neighbourhood (all out of bounds, or every candidate scoring ≤ 0) keeps the
   original centroids and returns score `−1`.
+- **ROI placement method** — the closed tri-state vocabulary `adaptive_roi_placement`
+  is drawn from (`ROI_METHOD_OPTIONS` in `constants.py`): **Standard**, **Adaptive**,
+  or **Both**. Spelled identically wherever it is set — `run --roi-method`,
+  `reanalyze --roi-method`, the GUI combo — because a second spelling is how the two
+  drift apart.
+  - **Placement mode** — one *pass*: the `adaptive` boolean the placement leaf takes.
+    `placement_modes(method)` is the single expansion of the method into its passes,
+    and lives beside the vocabulary it decodes so the pipeline and reanalysis cannot
+    disagree about what "Both" means. Standard runs first, so a "Both" run's outputs
+    land in the same order as their on-disk suffixes. An unknown value **raises** —
+    falling back to Standard would silently run a different analysis than asked for.
 - **Adaptive search envelope** (`AdaptiveSearchConfig`, in `constants.py`) — the
   five-integer tuning of the joint pair-refinement, all user-settable ±1–4: the
   **search window** `search_x / search_y / search_z` (how far each ROI may

@@ -251,7 +251,7 @@ class TestRoiFlags:
         assert run_verb.build_config(_args()).roi_shapes == BatchConfig().roi_shapes
 
     def test_roi_method_is_tri_state(self):
-        """`run` needs three values; `reanalyze`'s boolean --adaptive cannot express Both."""
+        """Three values, spelled identically by both verbs."""
         assert run_verb.build_config(_args(roi_method="Standard")).adaptive_roi_placement == (
             "Standard"
         )

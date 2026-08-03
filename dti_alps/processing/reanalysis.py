@@ -6,9 +6,9 @@ already-processed data with different ROI shapes, without repeating
 the preprocessing and registration steps.
 
 Usage:
-    python -m dti_alps --reanalyze /path/to/output --sphere 3.0
-    python -m dti_alps --reanalyze /path/to/output --squarev9
-    python -m dti_alps --reanalyze /path/to/output --sphere 2.5 --adaptive
+    dti-alps reanalyze /path/to/output --sphere 3.0
+    dti-alps reanalyze /path/to/output --squarev9
+    dti-alps reanalyze /path/to/output --sphere 2.5 --roi-method Adaptive
 """
 
 import os
@@ -26,7 +26,12 @@ from .alps_calculation import (
     load_pas_components,
     load_roi_masks,
 )
-from .constants import FA_THRESHOLD, AdaptiveSearchConfig
+from .constants import (
+    DEFAULT_ROI_METHOD,
+    FA_THRESHOLD,
+    AdaptiveSearchConfig,
+    placement_modes,
+)
 from .native_placement import place_rois_in_native
 from .registration.results import get_roi_template_paths
 from .tool_runner import SubprocessToolRunner, ToolRunner
@@ -52,10 +57,16 @@ class ROIShape:
 
 @dataclass
 class ReanalysisResult:
-    """Result of reanalysis for a single subject."""
+    """Result of reanalysis for a single subject, in one placement mode.
+
+    ``adaptive`` records *which* mode produced it. A "Both" run reanalyzes each
+    subject twice, so without it the two results for one subject would be
+    indistinguishable to a caller reading the returned list.
+    """
 
     subject_id: str
     status: str  # "completed", "failed", "skipped"
+    adaptive: bool = False
     alps_lab_left: float | None = None
     alps_lab_right: float | None = None
     alps_lab_bilateral: float | None = None
@@ -140,7 +151,7 @@ def reanalyze_subject(
     subject_id: str,
     subject_dir: Path,
     roi_shape: ROIShape,
-    enable_adaptive: bool,
+    adaptive: bool,
     alps_method: str,
     fa_threshold: float,
     search: AdaptiveSearchConfig | None = None,
@@ -148,7 +159,12 @@ def reanalyze_subject(
     runner: ToolRunner | None = None,
 ) -> ReanalysisResult:
     """
-    Reanalyze a single subject with new ROI shape.
+    Reanalyze a single subject with new ROI shape, in one placement mode.
+
+    Deliberately below the tri-state vocabulary: one subject, one pass. The
+    "Both" expansion belongs to :func:`run_reanalysis`, which calls this once per
+    mode -- so this signature matches ``place_rois_in_native``'s ``adaptive``
+    argument, which is all it forwards it to.
 
     Parameters
     ----------
@@ -158,15 +174,15 @@ def reanalyze_subject(
         Path to subject output directory
     roi_shape : ROIShape
         ROI shape configuration
-    enable_adaptive : bool
-        Whether to enable adaptive ROI placement
+    adaptive : bool
+        Whether this pass places ROIs adaptively
     alps_method : str
         ALPS calculation method ("ALPS-LAB", "ALPS-PAS", or "Both")
     fa_threshold : float
         FA threshold for filtering CSF voxels
     search : AdaptiveSearchConfig | None
         Adaptive search envelope forwarded to placement. ``None`` builds a fresh
-        default; inert when ``enable_adaptive`` is False (Standard runs no search).
+        default; inert when ``adaptive`` is False (Standard runs no search).
     log_callback : callable, optional
         Callback for log messages
     runner : ToolRunner | None
@@ -180,7 +196,7 @@ def reanalyze_subject(
     """
     log = log_callback or (lambda x: None)
     runner = runner or SubprocessToolRunner()
-    result = ReanalysisResult(subject_id=subject_id, status="running")
+    result = ReanalysisResult(subject_id=subject_id, status="running", adaptive=adaptive)
 
     try:
         # Find required files
@@ -249,13 +265,13 @@ def reanalyze_subject(
         # Load FA data for ALPS calculation
         fa_data = nib.load(fa_path).get_fdata()
 
-        # Create output directory for new ROIs
-        # Include _adaptive suffix if adaptive placement is enabled
-        roi_suffix = f"{roi_shape.name}_adaptive" if enable_adaptive else roi_shape.name
-        roi_dir = subject_dir / results_layout.roi_dir_name(roi_suffix)
+        # Create output directory for new ROIs. The _adaptive suffix is the
+        # layout contract's to add, not ours.
+        dir_name = results_layout.roi_dir_name(roi_shape.name, adaptive=adaptive)
+        roi_dir = subject_dir / dir_name
         roi_dir.mkdir(parents=True, exist_ok=True)
 
-        log(f"  Creating {roi_suffix} ROIs...")
+        log(f"  Creating {dir_name} ROIs...")
 
         # Transform templates and build the masks through the shared shell
         # (same body the pipeline uses; a raised ROIPlacementError is caught by
@@ -271,7 +287,7 @@ def reanalyze_subject(
             prefix=subject_id,
             shape_type=roi_shape.shape_type,
             sphere_radius=roi_shape.sphere_radius,
-            adaptive=enable_adaptive,
+            adaptive=adaptive,
             search=search,
             v1_path=str(v1_path) if v1_path else None,
             l2_path=str(l2_path) if l2_path else None,
@@ -337,7 +353,7 @@ def reanalyze_subject(
 def run_reanalysis(
     output_dir: str,
     roi_shape: ROIShape,
-    enable_adaptive: bool = False,
+    roi_method: str = DEFAULT_ROI_METHOD,
     alps_method: str = "Both",
     fa_threshold: float = FA_THRESHOLD,
     search: AdaptiveSearchConfig | None = None,
@@ -353,15 +369,19 @@ def run_reanalysis(
         Path to the batch output directory
     roi_shape : ROIShape
         ROI shape configuration
-    enable_adaptive : bool
-        Whether to enable adaptive ROI placement
+    roi_method : str
+        ROI placement method, from the same closed vocabulary the pipeline uses
+        (``ROI_METHOD_OPTIONS``): "Standard", "Adaptive", or "Both". "Both"
+        reanalyzes every subject twice and writes a CSV per pass -- the *reason*
+        this is a tri-state rather than the bool it used to be, which could not
+        express it at all.
     alps_method : str
         ALPS calculation method ("ALPS-LAB", "ALPS-PAS", or "Both")
     fa_threshold : float
         FA threshold for filtering CSF voxels
     search : AdaptiveSearchConfig | None
         Adaptive search envelope threaded into every subject. ``None`` defaults
-        downstream; inert when ``enable_adaptive`` is False.
+        downstream; inert on the Standard pass, which runs no search.
     log_callback : callable, optional
         Callback for log messages
     runner : ToolRunner | None
@@ -372,10 +392,15 @@ def run_reanalysis(
     Returns
     -------
     list of ReanalysisResult
-        Results for each subject
+        Every subject's result, all passes concatenated in run order. Under
+        "Both" each subject appears twice; ``ReanalysisResult.adaptive`` says
+        which pass produced which.
     """
     log = log_callback or print
     runner = runner or SubprocessToolRunner()
+
+    # Raises on an unknown method before any subject is touched.
+    modes = placement_modes(roi_method)
 
     log(f"Discovering processed subjects in {output_dir}...")
     subjects = discover_processed_subjects(output_dir)
@@ -386,50 +411,55 @@ def run_reanalysis(
 
     log(f"Found {len(subjects)} processed subjects")
     log(f"ROI shape: {roi_shape.name}")
-    log(f"Adaptive placement: {'enabled' if enable_adaptive else 'disabled'}")
+    log(f"ROI placement: {roi_method}")
     log(f"ALPS method: {alps_method}")
     log("")
 
-    results = []
-    for i, (subject_id, subject_dir) in enumerate(subjects):
-        log(f"[{i + 1}/{len(subjects)}] Processing {subject_id}...")
+    all_results: list[ReanalysisResult] = []
+    for adaptive in modes:
+        if len(modes) > 1:
+            log(f"--- {'Adaptive' if adaptive else 'Standard'} placement ---")
 
-        result = reanalyze_subject(
-            subject_id=subject_id,
-            subject_dir=subject_dir,
-            roi_shape=roi_shape,
-            enable_adaptive=enable_adaptive,
-            alps_method=alps_method,
-            fa_threshold=fa_threshold,
-            search=search,
-            log_callback=log,
-            runner=runner,
-        )
-        results.append(result)
+        results = []
+        for i, (subject_id, subject_dir) in enumerate(subjects):
+            log(f"[{i + 1}/{len(subjects)}] Processing {subject_id}...")
 
-        if result.status == "completed":
-            if result.alps_lab_bilateral is not None:
-                log(f"    ALPS-LAB: {result.alps_lab_bilateral:.4f}")
-            if result.alps_pas_bilateral is not None:
-                log(f"    ALPS-PAS: {result.alps_pas_bilateral:.4f}")
-        else:
-            log(f"    FAILED: {result.error_message}")
+            result = reanalyze_subject(
+                subject_id=subject_id,
+                subject_dir=subject_dir,
+                roi_shape=roi_shape,
+                adaptive=adaptive,
+                alps_method=alps_method,
+                fa_threshold=fa_threshold,
+                search=search,
+                log_callback=log,
+                runner=runner,
+            )
+            results.append(result)
 
-    # Write CSV results
-    # Include _adaptive suffix if adaptive placement is enabled
-    roi_suffix = f"{roi_shape.name}_adaptive" if enable_adaptive else roi_shape.name
-    csv_filename = results_layout.alps_csv_name(roi_suffix)
-    csv_path = os.path.join(output_dir, csv_filename)
+            if result.status == "completed":
+                if result.alps_lab_bilateral is not None:
+                    log(f"    ALPS-LAB: {result.alps_lab_bilateral:.4f}")
+                if result.alps_pas_bilateral is not None:
+                    log(f"    ALPS-PAS: {result.alps_pas_bilateral:.4f}")
+            else:
+                log(f"    FAILED: {result.error_message}")
 
-    log(f"\nWriting results to {csv_path}...")
-    _write_reanalysis_csv(csv_path, results, alps_method)
+        # One CSV per pass. It cannot be hoisted out of the loop: the writer keys
+        # rows by subject id, so a merged table would silently drop one pass.
+        csv_filename = results_layout.alps_csv_name(roi_shape.name, adaptive=adaptive)
+        csv_path = os.path.join(output_dir, csv_filename)
+
+        log(f"\nWriting results to {csv_path}...")
+        _write_reanalysis_csv(csv_path, results, alps_method)
+        all_results.extend(results)
 
     # Summary
-    completed = sum(1 for r in results if r.status == "completed")
-    failed = sum(1 for r in results if r.status == "failed")
+    completed = sum(1 for r in all_results if r.status == "completed")
+    failed = sum(1 for r in all_results if r.status == "failed")
     log(f"\nReanalysis complete: {completed} succeeded, {failed} failed")
 
-    return results
+    return all_results
 
 
 def _write_reanalysis_csv(
