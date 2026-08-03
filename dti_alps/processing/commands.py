@@ -334,9 +334,65 @@ def build_tensor2metric_alps_pas_cmds(state: "PipelineState") -> list[list[str]]
     ]
 
 
-def check_mrtrix3_available() -> tuple:
+# --- Preflight --------------------------------------------------------------
+# What the engine actually invokes, so a missing tool surfaces in the first
+# second rather than three hours into stage 7. The lists below are the commands
+# this codebase issues *directly* -- not the ones a wrapper calls internally --
+# because those are what must resolve on PATH for our own subprocess calls.
+
+# MRtrix3 commands issued by pipeline.py, b0_extraction.py, and the registration
+# backend, on the standard (dwifslpreproc) route.
+_MRTRIX_COMMANDS = [
+    "dwidenoise",
+    "mrdegibbs",
+    "dwifslpreproc",
+    "dwi2tensor",
+    "tensor2metric",
+    "dwi2mask",
+    "dwiextract",
+    "mrmath",
+    "mrconvert",
+]
+
+# On the synB0 route the user has already run synB0-DISCO externally, so
+# dwifslpreproc is never invoked -- `eddy` is called directly instead.
+_MRTRIX_ONLY_STANDARD = {"dwifslpreproc"}
+
+# FSL commands this codebase invokes directly: registration (FLIRT/FNIRT/INVWARP/
+# APPLYWARP) and the FA masking step. `eddy`/`topup`/`applytopup` are *not* here
+# on the standard route -- dwifslpreproc calls those itself, and requiring them
+# would fail a perfectly good install where dwifslpreproc finds them by its own
+# means.
+_FSL_COMMANDS = ["flirt", "fnirt", "invwarp", "applywarp", "fslmaths"]
+
+# On the synB0 route the pipeline runs `eddy` itself, so it must resolve for us.
+_FSL_SYNB0_EXTRA = ["eddy"]
+
+# Naming variants a single FSL command may legitimately have on PATH. Each entry
+# is a template applied to the command name -- crucially *per command*, so a
+# variant of one command can never satisfy another. (The previous list included
+# the literal "eddy_openmp" for every command, which reported `topup` and
+# `applytopup` present whenever `eddy_openmp` was installed.)
+_FSL_VARIANT_TEMPLATES = ["{cmd}", "fsl{cmd}", "{cmd}_cuda", "{cmd}_openmp"]
+
+
+def _find_any(variants: list[str]) -> bool:
+    """True if any of ``variants`` resolves on PATH."""
+    import shutil
+
+    return any(shutil.which(variant) is not None for variant in variants)
+
+
+def check_mrtrix3_available(use_synb0: bool = False) -> tuple[bool, list[str]]:
     """
-    Check if MRtrix3 commands are available in PATH.
+    Check that the MRtrix3 commands this engine invokes are on PATH.
+
+    Parameters
+    ----------
+    use_synb0 : bool
+        When True, check the synB0 route's requirements: ``dwifslpreproc`` is
+        not invoked, because the user supplies synB0-DISCO's topup outputs and
+        the pipeline runs ``eddy`` directly.
 
     Returns
     -------
@@ -345,39 +401,35 @@ def check_mrtrix3_available() -> tuple:
     """
     import shutil
 
-    required_commands = ["dwidenoise", "mrdegibbs", "dwifslpreproc", "dwi2tensor", "tensor2metric"]
-    missing = []
-
-    for cmd in required_commands:
-        if shutil.which(cmd) is None:
-            missing.append(cmd)
-
+    required = [cmd for cmd in _MRTRIX_COMMANDS if not (use_synb0 and cmd in _MRTRIX_ONLY_STANDARD)]
+    missing = [cmd for cmd in required if shutil.which(cmd) is None]
     return (len(missing) == 0, missing)
 
 
-def check_fsl_available() -> tuple:
+def check_fsl_available(use_synb0: bool = False) -> tuple[bool, list[str]]:
     """
-    Check if FSL commands required by dwifslpreproc are available.
+    Check that the FSL commands this engine invokes are on PATH.
+
+    Only commands issued *directly* are checked. ``topup`` and ``applytopup``
+    are deliberately absent from the standard route: ``dwifslpreproc`` invokes
+    those itself, and demanding them here would fail an install that works.
+
+    Parameters
+    ----------
+    use_synb0 : bool
+        When True, ``eddy`` is added -- on the synB0 route the pipeline runs it
+        rather than delegating to ``dwifslpreproc``.
 
     Returns
     -------
     tuple of (bool, list)
         (all_available, list of missing commands)
     """
-    import shutil
+    required = _FSL_COMMANDS + (_FSL_SYNB0_EXTRA if use_synb0 else [])
 
-    # FSL commands used by dwifslpreproc
-    required_commands = ["eddy", "topup", "applytopup"]
-    missing = []
-
-    for cmd in required_commands:
-        # FSL commands might have different names
-        found = False
-        for variant in [cmd, f"fsl{cmd}", f"{cmd}_cuda", "eddy_openmp"]:
-            if shutil.which(variant) is not None:
-                found = True
-                break
-        if not found:
-            missing.append(cmd)
-
+    missing = [
+        cmd
+        for cmd in required
+        if not _find_any([tpl.format(cmd=cmd) for tpl in _FSL_VARIANT_TEMPLATES])
+    ]
     return (len(missing) == 0, missing)
