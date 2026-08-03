@@ -1,12 +1,9 @@
 name: Publish to PyPI
 
-# Publishes the sdist + wheel to PyPI when a version tag is pushed -- the same
-# v<version> tag that triggers the AppImage release (see release.yml), so one
-# `git push origin vX.Y.Z` cuts both the GitHub Release and the PyPI release.
+# Publishes the sdist + wheel to PyPI when a version tag is pushed.
 #
-# Authentication uses PyPI Trusted Publishing (OIDC): no API token or secret is
-# stored in the repo. One-time setup on PyPI (https://pypi.org/manage/account/publishing/):
-#   Owner: rmoskwa   Repository: auto-DTI-ALPS
+# Authentication uses PyPI Trusted Publishing (OIDC).
+#   Owner: rmoskwa   Repository: Automated-ALPS-App
 #   Workflow: publish.yml   Environment: pypi
 on:
   push:
